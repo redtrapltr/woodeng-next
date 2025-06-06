@@ -1,0 +1,33 @@
+{
+    "name": "Sprint Beat",
+    "symbol": "WC12",
+    "description": "Vinny is a beatmaker with 5+ years in Southside-style beats, teaming up with Woodeng to launch CryptoEggz NFTs in the Web3 space. Each NFT unlocks a unique track with full rights, blending music and digital art for collectors.",
+    "seller_fee_basis_points": 1000,
+    "image": "https://arweave.net/xljvZxZLM263CHKHvvwTmMs3-dB1GGJ5dtZPAqO8tio",  
+    "animation_url": "https://arweave.net/wSZR3it0sP1R8GwfA-3Ify0Hf3mqsf9PikladS12vnA",
+    "external_url": "https://woodengsol.com",
+    "attributes": [
+      { "trait_type": "Collection", "value": "Woodeng CryptoEggz" },
+      { "trait_type": "Genre", "value": "HipHop" },
+      { "trait_type": "Artist", "value": "Vice Vinny" },
+      { "trait_type": "Album", "value": "CryptoEggz" },
+      { "trait_type": "ReleaseDate", "value": "2025" },
+      { "trait_type": "TrackName", "value": "Sprint Beat" },
+      { "trait_type": "TrackNumber", "value": "12" },
+      { "trait_type": "Rarity", "value": "Uncommon" }
+    ],
+    "collection": {
+      "name": "Woodeng CryptoEggz",
+      "family": "Woodeng CryptoEggz"
+    },
+    "properties": {
+      "files": [
+        {
+          "uri": "https://arweave.net/nZVXvXK_5y6r5WAC7oQ3f0eU0a-i8R0ePBN1UtxwUb0",
+          "type": "video/mp4"
+        }
+      ],
+      "category": "video"
+    }
+  }
+  

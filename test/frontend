@@ -1,0 +1,298 @@
+"use client";
+
+import React, { useState, ChangeEvent } from "react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { Metaplex, walletAdapterIdentity } from "@metaplex-foundation/js";
+import { Connection } from "@solana/web3.js";
+import { Music4, Upload, Image, Video } from "lucide-react";
+
+const UploadYourMusic: React.FC = () => {
+  const wallet = useWallet();
+  const { publicKey, connected } = wallet;
+
+  const [minting, setMinting] = useState(false);
+  const [mintAddresses, setMintAddresses] = useState<string[]>([]);
+  const [formData, setFormData] = useState({
+    name: "",
+    symbol: "",
+    description: "",
+    genre: "",
+    artist: "",
+    album: "",
+    releaseDate: "",
+    trackNumber: "",
+    mintQuantity: "1",
+  });
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [animationFile, setAnimationFile] = useState<File | null>(null);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  };
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>, setter: (file: File | null) => void) => {
+    if (e.target.files && e.target.files[0]) {
+      setter(e.target.files[0]);
+    }
+  };
+
+  const mintNFT = async () => {
+    if (!connected || !publicKey) {
+      alert("Please connect your wallet first!");
+      return;
+    }
+    if (!imageFile || !animationFile) {
+      alert("Please select both an image and a video file!");
+      return;
+    }
+    setMinting(true);
+    setMintAddresses([]);
+    try {
+      const payload = new FormData();
+      Object.entries(formData).forEach(([key, value]) => {
+        payload.append(key, value);
+      });
+      payload.append("imageFile", imageFile);
+      payload.append("animationFile", animationFile);
+
+      const response = await fetch("/api/uploadMetadata", {
+        method: "POST",
+        body: payload,
+      });
+      const json = await response.json();
+      if (!json.success) {
+        throw new Error("Metadata upload error: " + json.error);
+      }
+      const metadataUri = json.metadataUri;
+
+      const connection = new Connection(
+        "https://misty-smart-panorama.solana-mainnet.quiknode.pro/8bec11e1812457246ec8670f36ef6f54924fc725/",
+        "confirmed"
+      );
+      const metaplex = Metaplex.make(connection).use(walletAdapterIdentity(wallet));
+      const quantity = parseInt(formData.mintQuantity) || 1;
+      const mintedAddresses: string[] = [];
+
+      for (let i = 0; i < quantity; i++) {
+        const { nft } = await metaplex.nfts().create(
+          {
+            uri: metadataUri,
+            name: formData.name,
+            symbol: formData.symbol,
+            sellerFeeBasisPoints: 1000,
+            creators: [
+              {
+                address: publicKey,
+                share: 100,
+              },
+            ],
+          },
+          { commitment: "confirmed" }
+        );
+        mintedAddresses.push(nft.address.toBase58());
+      }
+      setMintAddresses(mintedAddresses);
+      alert("NFT minted successfully! Mint addresses: " + mintedAddresses.join(", "));
+    } catch (error: any) {
+      console.error("Error minting NFT:", error);
+      alert("Error minting NFT: " + error.message);
+    } finally {
+      setMinting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white p-8">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center justify-between mb-12">
+          <div className="flex items-center gap-3">
+            <Music4 className="w-8 h-8 text-purple-500" />
+            <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
+              Mint Your Musical NFT
+            </h1>
+          </div>
+          <WalletMultiButton />
+        </div>
+
+        <form className="space-y-8" onSubmit={(e) => e.preventDefault()}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium mb-2">Song Name</label>
+                <input
+                  type="text"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleChange}
+                  required
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Symbol</label>
+                <input
+                  type="text"
+                  name="symbol"
+                  value={formData.symbol}
+                  onChange={handleChange}
+                  required
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Description</label>
+                <textarea
+                  name="description"
+                  value={formData.description}
+                  onChange={handleChange}
+                  required
+                  rows={4}
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium mb-2">Genre</label>
+                <input
+                  type="text"
+                  name="genre"
+                  value={formData.genre}
+                  onChange={handleChange}
+                  required
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Artist</label>
+                <input
+                  type="text"
+                  name="artist"
+                  value={formData.artist}
+                  onChange={handleChange}
+                  required
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Album</label>
+                <input
+                  type="text"
+                  name="album"
+                  value={formData.album}
+                  onChange={handleChange}
+                  required
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div>
+              <label className="block text-sm font-medium mb-2">Release Date</label>
+              <input
+                type="date"
+                name="releaseDate"
+                value={formData.releaseDate}
+                onChange={handleChange}
+                required
+                className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Track Number</label>
+              <input
+                type="number"
+                name="trackNumber"
+                value={formData.trackNumber}
+                onChange={handleChange}
+                required
+                className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Mint Quantity</label>
+              <input
+                type="number"
+                name="mintQuantity"
+                value={formData.mintQuantity}
+                onChange={handleChange}
+                required
+                min="1"
+                className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium mb-2 flex items-center gap-2">
+                <Image className="w-4 h-4" /> Cover Image
+              </label>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleFileChange(e, setImageFile)}
+                  required
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-500 file:text-white hover:file:bg-purple-600"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2 flex items-center gap-2">
+                <Video className="w-4 h-4" /> Music File
+              </label>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept="audio/*,video/*"
+                  onChange={(e) => handleFileChange(e, setAnimationFile)}
+                  required
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-500 file:text-white hover:file:bg-purple-600"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={mintNFT}
+              disabled={minting}
+              className="flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full text-white font-semibold hover:from-purple-600 hover:to-pink-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Upload className="w-5 h-5" />
+              {minting ? "Minting NFT(s)..." : "Mint NFT(s)"}
+            </button>
+          </div>
+        </form>
+
+        {mintAddresses.length > 0 && (
+          <div className="mt-12 p-6 bg-gray-800 rounded-lg">
+            <h2 className="text-xl font-semibold mb-4">Minted NFT Addresses</h2>
+            <ul className="space-y-2">
+              {mintAddresses.map((addr) => (
+                <li key={addr} className="font-mono text-sm text-gray-300 break-all">
+                  {addr}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default UploadYourMusic;

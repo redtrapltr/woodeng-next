@@ -1,0 +1,33 @@
+{
+    "name": "Southside 4 Beat",
+    "symbol": "WC102",
+    "description": "Vinny is a beatmaker with 5+ years in Southside-style beats, teaming up with Woodeng to launch CryptoEggz NFTs in the Web3 space. Each NFT unlocks a unique track with full rights, blending music and digital art for collectors.",
+    "seller_fee_basis_points": 1000,
+    "image": "https://arweave.net/piUPzmJp29btM6F4H5_qMp4sO-oRforlDwKvaBOlmxA",  
+    "animation_url": "https://arweave.net/or0J5AwU3e4K5RJEqeKBOQQOZSE0SddEoMsLUK4EUW0",
+    "external_url": "https://woodengsol.com",
+    "attributes": [
+      { "trait_type": "Collection", "value": "Woodeng CryptoEggz" },
+      { "trait_type": "Genre", "value": "HipHop" },
+      { "trait_type": "Artist", "value": "Vice Vinny" },
+      { "trait_type": "Album", "value": "CryptoEggz" },
+      { "trait_type": "ReleaseDate", "value": "2025" },
+      { "trait_type": "TrackName", "value": "Southside 4 Beat" },
+      { "trait_type": "TrackNumber", "value": "102" },
+      { "trait_type": "Rarity", "value": "Legendary" }
+    ],
+    "collection": {
+      "name": "Woodeng CryptoEggz",
+      "family": "Woodeng CryptoEggz"
+    },
+    "properties": {
+      "files": [
+        {
+          "uri": "https://arweave.net/nZVXvXK_5y6r5WAC7oQ3f0eU0a-i8R0ePBN1UtxwUb0",
+          "type": "video/mp4"
+        }
+      ],
+      "category": "video"
+    }
+  }
+  
