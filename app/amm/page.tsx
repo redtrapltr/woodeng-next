@@ -435,7 +435,7 @@ export default function AMMPage() {
       PROGRAM_ID
     );
     const buyerTokenAta  = await getAssociatedTokenAddress(WOODENG_MINT, publicKey);
-    const buyerNftAta    = await getAssociatedTokenAddress(firstMint!, publicKey);
+    const buyerNftAta = await ensureAta(program.provider.connection,publicKey,firstMint!);
     const sellerTokenAta = await getAssociatedTokenAddress(WOODENG_MINT, o.account.seller);
 
     await program.methods.fillOrder()
