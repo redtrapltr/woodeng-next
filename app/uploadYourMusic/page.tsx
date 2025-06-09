@@ -26,7 +26,52 @@ import { CheckCircle2 as CheckIcon } from 'lucide-react'
 const PROGRAM_ID   = new PublicKey('FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS')
 const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad')
 
-// ensure an ATA exists, creating it if necessary
+/** 
+ * Direct‐to‐Pinata upload helper.
+ * Fetches a scoped JWT from /api/pinata-token then posts straight to Pinata.
+ */
+async function pinFile(file: File): Promise<string> {
+  // 1) get your short‐lived JWT
+  const { jwt } = await fetch('/api/pinata-token')
+    .then(r => {
+      if (!r.ok) throw new Error('Could not fetch Pinata token')
+      return r.json() as Promise<{ jwt: string }>
+    })
+
+  // 2) build form
+  const form = new FormData()
+  form.append('file', file, file.name)
+
+  // 3) post to Pinata
+  const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+    method:  'POST',
+    headers: { Authorization: `Bearer ${jwt}` },
+    body:    form,
+  })
+
+  // ——— DEBUG LOGGING ———
+  const text = await res.text()
+  console.log('🔴 Pinata returned status', res.status, 'and body:', text)
+
+  // try JSON.parse so we can see parse errors clearly
+  let body
+  try {
+    body = JSON.parse(text)
+  } catch (err) {
+    throw new Error(`Pinata JSON parse error—raw body:\n${text}`)
+  }
+  // ————— end debug —————
+
+  if (!res.ok) {
+    // Pinata will sometimes return a JSON error object
+    throw new Error(body.error || body.message || 'Pinata upload failed')
+  }
+
+  return body.IpfsHash as string
+}
+
+
+/** make sure an ATA exists (creates it if missing) */
 async function ensureAta(
   conn:   Connection,
   owner:  PublicKey,
@@ -50,10 +95,10 @@ export default function UploadYourMusic() {
   const wallet                   = useWallet()
   const { publicKey, connected } = wallet
 
-  // wizard steps
+  // wizard state
   const [step, setStep] = useState(1)
-  const next = () => setStep((s) => Math.min(s + 1, 4))
-  const prev = () => setStep((s) => Math.max(s - 1, 1))
+  const next = () => setStep(s => Math.min(s+1, 4))
+  const prev = () => setStep(s => Math.max(s-1, 1))
 
   const [isBundle, setIsBundle]   = useState(false)
   const [numTracks, setNumTracks] = useState(1)
@@ -74,12 +119,18 @@ export default function UploadYourMusic() {
     }
   }
   const blankTrack: Track = {
-    cover: null, video: null,
+    cover: null,
+    video: null,
     audio: { mp3: null },
     metadata: {
-      artist:'', songName:'', albumName:'',
-      style:'', year:'', trackNumber:'',
-      description:'', collection:'',
+      artist: '',
+      songName: '',
+      albumName: '',
+      style: '',
+      year: '',
+      trackNumber: '',
+      description: '',
+      collection: '',
     },
   }
   const [tracks, setTracks] = useState<Track[]>([{ ...blankTrack }])
@@ -92,10 +143,12 @@ export default function UploadYourMusic() {
   const [poolAddr, setPoolAddr]       = useState<string | null>(null)
 
   const updateTrack = (i: number, data: Partial<Track>) =>
-    setTracks((t) => {
-      const c = [...t]; c[i] = { ...c[i], ...data }; return c
+    setTracks(ts => {
+      const copy = [...ts]
+      copy[i] = { ...copy[i], ...data }
+      return copy
     })
-  const updateMeta  = (i: number, k: keyof Track['metadata'], v: string) =>
+  const updateMeta = (i: number, k: keyof Track['metadata'], v: string) =>
     updateTrack(i, { metadata: { ...tracks[i].metadata, [k]: v } })
 
   async function mintNFT() {
@@ -103,8 +156,7 @@ export default function UploadYourMusic() {
       alert('Please connect your wallet')
       return
     }
-    // must have cover+video for each
-    if (tracks.some((t) => !t.cover || !t.video)) {
+    if (tracks.some(t => !t.cover || !t.video)) {
       alert('Each track needs a cover & video')
       return
     }
@@ -114,28 +166,22 @@ export default function UploadYourMusic() {
     setPoolAddr(null)
 
     try {
-      // 1️⃣ pin all raw assets + metadata via your /api/pinata route
+      // ─── 1) Pin raw assets & metadata ─────────────────────────
       const uris: string[] = []
       for (let i = 0; i < tracks.length; i++) {
         const t = tracks[i]
-        async function pinFile(file: File): Promise<string> {
-          const form = new FormData()
-          form.set('file', file, file.name)
-          const res  = await fetch('/api/pinata', { method: 'POST', body: form })
-          const json = await res.json()
-          if (!json.success) throw new Error(json.error || 'Pinata failed')
-          return json.cid
-        }
 
-        const coverCid = await pinFile(t.cover!), imageURI = `ipfs://${coverCid}`
-        const videoCid = await pinFile(t.video!), animationURI = `ipfs://${videoCid}`
+        const coverCid     = await pinFile(t.cover!)
+        const imageURI     = `ipfs://${coverCid}`
+        const videoCid     = await pinFile(t.video!)
+        const animationURI = `ipfs://${videoCid}`
         let audioURI = ''
         if (t.audio.mp3) {
           const audioCid = await pinFile(t.audio.mp3)
           audioURI = `ipfs://${audioCid}`
         }
 
-        const metadata = {
+        const meta = {
           name:          t.metadata.songName,
           symbol:        'MUSIC',
           description:   t.metadata.description,
@@ -143,15 +189,16 @@ export default function UploadYourMusic() {
           animation_url: animationURI,
           properties:    { audio: audioURI, ...t.metadata },
         }
-        const blob     = new Blob([JSON.stringify(metadata)], { type: 'application/json' })
+        const blob     = new Blob([JSON.stringify(meta)], { type: 'application/json' })
         const fileJson = new File([blob], `meta-${i}.json`, { type: 'application/json' })
         const metaCid  = await pinFile(fileJson)
         uris.push(`ipfs://${metaCid}`)
       }
 
-      // 2️⃣ mint NFT/SFT via Metaplex
-      const mx      = Metaplex.make(new Connection(clusterApiUrl('devnet'), 'finalized'))
-                            .use(walletAdapterIdentity(wallet))
+      // ─── 2) Mint via Metaplex ─────────────────────────────────
+      const mx      = Metaplex
+                        .make(new Connection(clusterApiUrl('devnet'), 'finalized'))
+                        .use(walletAdapterIdentity(wallet))
       const nCopies = Math.max(1, parseInt(copies, 10))
       const minted: PublicKey[] = []
 
@@ -159,37 +206,42 @@ export default function UploadYourMusic() {
         for (let c = 0; c < nCopies; c++) {
           for (let i = 0; i < uris.length; i++) {
             const { nft } = await mx.nfts().create({
-              uri: uris[i],
-              name: `${tracks[i].metadata.songName} #${c+1}`,
-              symbol: 'MUSIC',
+              uri:                  uris[i],
+              name:                 `${tracks[i].metadata.songName} #${c+1}`,
+              symbol:               'MUSIC',
               sellerFeeBasisPoints: 0,
-              creators: [{ address: publicKey!, share: 100 }],
-              tokenOwner: publicKey!,
+              creators:             [{ address: publicKey, share: 100 }],
+              tokenOwner:           publicKey,
             })
             minted.push(nft.address)
           }
         }
       } else {
         const { sft } = await mx.nfts().createSft({
-          uri:              uris[0],
-          name:             tracks[0].metadata.songName,
-          symbol:           'MUSIC',
+          uri:                  uris[0],
+          name:                 tracks[0].metadata.songName,
+          symbol:               'MUSIC',
           sellerFeeBasisPoints: 0,
-          creators:         [{ address: publicKey!, share: 100 }],
-          decimals:         0,
-          tokenOwner:       publicKey!,
-          tokenAmount:      token(1, 0),
+          creators:             [{ address: publicKey, share: 100 }],
+          decimals:             0,
+          tokenOwner:           publicKey,
+          tokenAmount:          token(1, 0),
         })
         minted.push(sft.address)
-        // mint extras into ATA
-        const extra = Math.max(0, nCopies-1)
+
+        // mint extra copies into your ATA
+        const extra = Math.max(0, nCopies - 1)
         if (extra > 0) {
-          const ata = await ensureAta(mx.connection, publicKey!, sft.address, wallet)
-          await mx.tokens().mint({ mintAddress: sft.address, amount: token(extra,0), toToken: ata })
+          const ata = await ensureAta(mx.connection, publicKey, sft.address, wallet)
+          await mx.tokens().mint({
+            mintAddress: sft.address,
+            amount:      token(extra, 0),
+            toToken:     ata,
+          })
         }
       }
 
-      setMintedAddrs(minted.map((pk)=>pk.toBase58()))
+      setMintedAddrs(minted.map(pk => pk.toBase58()))
 
       // 3️⃣ create & seed AMM pool on-chain via Anchor
       if (!skipDeposit) {
