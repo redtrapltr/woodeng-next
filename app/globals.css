@@ -2,26 +2,221 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---- DARK UI COLOR VARIABLES ---- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0c0d12;         /* Main background (almost black, not blue-ish) */
+  --surface: #181926;            /* Cards, inputs, modals (darker) */
+  --card: #181926;
+  --muted: #181926;
+  --border: #232433;             /* Thin border, softer than background */
+  --foreground: #d6daf6;         /* Main text color */
+  --muted-foreground: #a6adc8;   /* Secondary text */
+  --primary: #8d7dc3;            /* Soft purple for primary actions */
+  --primary-hover: #b8a3ff;      /* Lighter purple for hover */
+  --primary-foreground: #fff; /* Text on primary */
+  --destructive: #f38ba8;        /* Error color */
+  --success: #a6e3a1;            /* Success color */
+  --accent: #cba6f7;             /* Highlight purple */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* --- Always force dark mode for site --- */
+html, body {
+  background: var(--background) !important;
+  color: var(--foreground) !important;
+  font-family: 'Inter', Arial, Helvetica, sans-serif;
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+/* --- Utility classes for reuse --- */
+.bg-surface      { background-color: var(--surface) !important; }
+.bg-card         { background-color: var(--card) !important; }
+.bg-primary      { background-color: var(--primary) !important; }
+.text-foreground { color: var(--foreground) !important; }
+.text-muted      { color: var(--muted-foreground) !important; }
+.text-primary    { color: var(--primary) !important; }
+.text-danger     { color: var(--destructive) !important; }
+.text-success    { color: var(--success) !important; }
+.border-default  { border-color: var(--border) !important; }
+.border-primary  { border-color: var(--primary) !important; }
+
+/* --- Card & Panel Styles --- */
+.bg-muted,
+.bg-panel,
+.bg-card,
+.bg-muted\/50 {
+  background: var(--card) !important;
+  border: 1px solid var(--border) !important;
 }
 
+/* --- Inputs --- */
+input, textarea, select {
+  background: var(--card) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.5rem 1rem;
+  transition: border 0.2s, box-shadow 0.2s;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary)33;
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--muted-foreground);
+  opacity: 1;
+}
+
+/* --- Buttons --- */
+button {
+  font-family: inherit;
+}
+
+button,
+.btn {
+  border: none;
+  outline: none;
+  font-size: 1rem;
+  font-weight: 500;
+  padding: 0.65rem 1.8rem;
+  border-radius: 0.7rem;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+/* Purple (Next) button: FLAT */
+button.bg-primary,
+.bg-primary {
+  background: var(--primary) !important;
+  color: var(--primary-foreground) !important;
+  border: none;
+}
+button.bg-primary:hover,
+.bg-primary:hover {
+  background: var(--primary-hover) !important;
+}
+
+/* "Previous" button: OUTLINED, soft surface, no border, white text */
+button.bg-muted,
+.bg-muted {
+  background: var(--surface) !important;
+  color: var(--foreground) !important;
+  border: none;
+}
+button.bg-muted:hover,
+.bg-muted:hover {
+  background: #232433 !important; /* Subtle hover */
+}
+
+/* --- Download/gradient button effect --- */
 .download-button:hover {
   background: linear-gradient(90deg, #a855f7, #9333ea);
   transform: translateY(-4px);
   box-shadow: 0px 10px 20px rgba(123, 58, 237, 0.7);
 }
+
+/* --- Stepper States --- */
+.stepper-active {
+  border-color: var(--primary) !important;
+  background: var(--primary) !important;
+  color: var(--primary-foreground) !important;
+}
+.stepper-completed {
+  border-color: var(--primary) !important;
+  background: var(--primary)22 !important;
+  color: var(--primary) !important;
+}
+.stepper-inactive {
+  border-color: var(--border) !important;
+  background: var(--background) !important;
+  color: var(--muted-foreground) !important;
+}
+
+/* --- Miscellaneous UI Tweaks --- */
+a, .link {
+  color: var(--primary);
+  text-decoration: none;
+}
+a:hover, .link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* --- Scrollbar for dark mode --- */
+::-webkit-scrollbar {
+  width: 8px;
+  background: var(--surface);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+}
+
+/* --- Small shadow for cards/panels --- */
+.bg-card, .bg-surface, .bg-panel {
+  box-shadow: 0 4px 32px 0 #0000002d;
+}
+
+/* --- Optional: Adjust stepper/progress bar color for more contrast --- */
+.progress-bar,
+.bg-stepper-bar {
+  background: var(--border) !important;
+}
+.progress-bar-active {
+  background: var(--primary) !important;
+}
+
+/* --- Optional: Fix 'Next' button alignment (for flex row) --- */
+.justify-end > .bg-primary {
+  min-width: 140px;
+}
+
+.wave-char {
+  animation: wave-bounce 0.8s cubic-bezier(.68,-0.55,.27,1.55) infinite alternate;
+  display: inline-block;
+}
+
+@keyframes wave-bounce {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-0.4em) scale(1.1); }
+  100% { transform: translateY(0); }
+}
+
+@keyframes wave {
+  0%, 100% { transform: translateY(0); }
+  20% { transform: translateY(-10%); }
+  40% { transform: translateY(15%); }
+  60% { transform: translateY(-10%); }
+  80% { transform: translateY(8%); }
+}
+
+.wave-char {
+  animation: wave 1.3s infinite;
+  display: inline-block;
+}
+.wave-char:nth-child(1) { animation-delay: 0s; }
+.wave-char:nth-child(2) { animation-delay: 0.1s; }
+.wave-char:nth-child(3) { animation-delay: 0.2s; }
+/* ... continue up to at least .nth-child(8) for "Sound Money" */
+
+@keyframes logo-glow {
+  0%, 100% { opacity: 0.5; transform: scale(1);}
+  50% { opacity: 1; transform: scale(1.12);}
+}
+
+@keyframes fade-in-out {
+  0%, 100% { opacity: 0.18; }
+  50% { opacity: 0.42; }
+}
+@keyframes fade-in-out2 {
+  0%, 100% { opacity: 0.22; }
+  50% { opacity: 0.52; }
+}
+@keyframes fade-in-out3 {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 0.42; }
+}
+
+
+

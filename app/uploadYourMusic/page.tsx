@@ -1,9 +1,9 @@
-// app/uploadYourMusic/page.tsx
 'use client'
 
 import React, { useState } from 'react'
+import Link from 'next/link'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
-import { useWallet }       from '@solana/wallet-adapter-react'
+import { useWallet } from '@solana/wallet-adapter-react'
 import { Metaplex, walletAdapterIdentity, token } from '@metaplex-foundation/js'
 import {
   Connection,
@@ -21,127 +21,195 @@ import {
 } from '@solana/spl-token'
 import { AnchorProvider, Program, BN } from '@project-serum/anchor'
 import idl from '../../idl/idl.json'
-import { CheckCircle2 as CheckIcon } from 'lucide-react'
+import { CheckCircle2, AlertCircle, ArrowLeft, Plus, Minus, Coins, Info, Loader2, ArrowRight } from 'lucide-react'
+import cn from 'classnames'
 
-const PROGRAM_ID   = new PublicKey('FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS')
+// -- CONSTANTS --
+const PROGRAM_ID = new PublicKey('FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS')
 const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad')
 
-/** 
- * Direct‐to‐Pinata upload helper.
- * Fetches a scoped JWT from /api/pinata-token then posts straight to Pinata.
- */
+// -- HELPERS --
 async function pinFile(file: File): Promise<string> {
-  // 1) get your short‐lived JWT
   const { jwt } = await fetch('/api/pinata-token')
     .then(r => {
       if (!r.ok) throw new Error('Could not fetch Pinata token')
       return r.json() as Promise<{ jwt: string }>
     })
-
-  // 2) build form
   const form = new FormData()
   form.append('file', file, file.name)
-
-  // 3) post to Pinata
   const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
-    method:  'POST',
+    method: 'POST',
     headers: { Authorization: `Bearer ${jwt}` },
-    body:    form,
+    body: form,
   })
-
-  // ——— DEBUG LOGGING ———
   const text = await res.text()
-  console.log('🔴 Pinata returned status', res.status, 'and body:', text)
-
-  // try JSON.parse so we can see parse errors clearly
   let body
   try {
     body = JSON.parse(text)
   } catch (err) {
     throw new Error(`Pinata JSON parse error—raw body:\n${text}`)
   }
-  // ————— end debug —————
-
-  if (!res.ok) {
-    // Pinata will sometimes return a JSON error object
-    throw new Error(body.error || body.message || 'Pinata upload failed')
-  }
-
+  if (!res.ok) throw new Error(body.error || body.message || 'Pinata upload failed')
   return body.IpfsHash as string
 }
-
-
-/** make sure an ATA exists (creates it if missing) */
 async function ensureAta(
-  conn:   Connection,
-  owner:  PublicKey,
-  mint:   PublicKey,
+  conn: Connection,
+  owner: PublicKey,
+  mint: PublicKey,
   wallet: ReturnType<typeof useWallet>
 ): Promise<PublicKey> {
   const ata = await getAssociatedTokenAddress(mint, owner)
   if (!(await conn.getAccountInfo(ata))) {
     const ix = createAssociatedTokenAccountInstruction(owner, ata, owner, mint)
     const tx = new Transaction().add(ix)
-    tx.feePayer        = owner
+    tx.feePayer = owner
     tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash
     const signed = await wallet.signTransaction!(tx)
-    const sig    = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false })
+    const sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false })
     await conn.confirmTransaction(sig, 'confirmed')
   }
   return ata
 }
 
+// -- COMPONENTS --
+function FileDrop({ value, onChange, accept = '', label, required, previewType }: {
+  value: File | null, onChange: (file: File | null) => void, accept?: string, label?: string, required?: boolean, previewType?: 'audio' | 'image' | 'video'
+}) {
+  const [dragActive, setDragActive] = useState(false)
+  return (
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-4 transition-colors relative cursor-pointer",
+        dragActive ? "border-primary bg-primary/5" : "border-border bg-muted/50",
+      )}
+      onDragOver={e => { e.preventDefault(); setDragActive(true) }}
+      onDragLeave={e => { e.preventDefault(); setDragActive(false) }}
+      onDrop={e => {
+        e.preventDefault()
+        setDragActive(false)
+        if (e.dataTransfer.files.length) onChange(e.dataTransfer.files[0])
+      }}
+      onClick={() => {
+        (document.getElementById(label + '_input') as HTMLInputElement)?.click()
+      }}
+      style={{ minHeight: 100 }}
+    >
+      <input
+        id={label + '_input'}
+        type="file"
+        accept={accept}
+        required={required}
+        style={{ display: 'none' }}
+        onChange={e => onChange(e.target.files?.[0] || null)}
+      />
+      {!value && (
+        <div className="flex flex-col items-center gap-2">
+          <span className="text-2xl"><Plus /></span>
+          <span className="text-sm text-muted-foreground">Drop file here or click to select</span>
+          {accept.includes('audio') && (
+            <span className="text-xs text-muted-foreground">MP3, MP4, WAV, FLAC, AIFF (max 100MB)</span>
+          )}
+          {accept.includes('image') && (
+            <span className="text-xs text-muted-foreground">JPG, PNG (max 50MB)</span>
+          )}
+        </div>
+      )}
+      {value && (
+        <div className="w-full">
+          <div className="flex justify-between items-center">
+            <span className="truncate text-sm">{value.name}</span>
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); onChange(null) }}
+              className="text-destructive hover:bg-destructive/10 p-1 rounded-full ml-2"
+            ><Minus className="w-4 h-4" /></button>
+          </div>
+          {previewType === 'image' && (
+            <img src={URL.createObjectURL(value)} className="mt-2 w-full rounded-lg object-cover max-h-40" alt="preview" />
+          )}
+          {previewType === 'audio' && (
+            <audio controls src={URL.createObjectURL(value)} className="mt-2 w-full" />
+          )}
+          {previewType === 'video' && (
+            <video controls src={URL.createObjectURL(value)} className="mt-2 w-full max-h-40" />
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const mintSteps = [
+  { title: 'Upload Files', description: 'Upload your artwork files in the required formats' },
+  { title: 'NFT Details', description: 'Add title, description, and other metadata' },
+  { title: 'Seed & Copies', description: 'Configure your Seed Pool' },
+  { title: 'Preview', description: 'Review your NFT before minting' },
+]
+
+type Track = {
+  cover: File | null
+  video: File | null
+  audio: { mp3: File | null }
+  metadata: {
+    artist: string
+    songName: string
+    albumName: string
+    style: string
+    year: string
+    trackNumber: string
+    description: string
+    collection: string
+  }
+  copies: number
+  trackImage?: File | null // for bundles
+}
+
+const blankTrack: Track = {
+  cover: null,
+  video: null,
+  audio: { mp3: null },
+  copies: 1,
+  metadata: {
+    artist: '',
+    songName: '',
+    albumName: '',
+    style: '',
+    year: '',
+    trackNumber: '',
+    description: '',
+    collection: '',
+  },
+}
+
 export default function UploadYourMusic() {
-  const wallet                   = useWallet()
+  const wallet = useWallet()
   const { publicKey, connected } = wallet
 
   // wizard state
-  const [step, setStep] = useState(1)
-  const next = () => setStep(s => Math.min(s+1, 4))
-  const prev = () => setStep(s => Math.max(s-1, 1))
-
-  const [isBundle, setIsBundle]   = useState(false)
+  const [currentStep, setCurrentStep] = useState(0)
+  const [isBundle, setIsBundle] = useState(false)
   const [numTracks, setNumTracks] = useState(1)
-
-  type Track = {
-    cover: File | null
-    video: File | null
-    audio: { mp3: File | null }
-    metadata: {
-      artist: string
-      songName: string
-      albumName: string
-      style: string
-      year: string
-      trackNumber: string
-      description: string
-      collection: string
-    }
-  }
-  const blankTrack: Track = {
-    cover: null,
-    video: null,
-    audio: { mp3: null },
-    metadata: {
-      artist: '',
-      songName: '',
-      albumName: '',
-      style: '',
-      year: '',
-      trackNumber: '',
-      description: '',
-      collection: '',
-    },
-  }
   const [tracks, setTracks] = useState<Track[]>([{ ...blankTrack }])
-  const [skipDeposit, setSkipDeposit]       = useState(false)
+  const [skipDeposit, setSkipDeposit] = useState(false)
   const [depositWoodeng, setDepositWoodeng] = useState('0')
-  const [copies, setCopies]                 = useState('1')
-
-  const [minting, setMinting]         = useState(false)
+  const [tokenType, setTokenType] = useState<'woodeng' | 'sol'>('woodeng')
+  const [copies, setCopies] = useState('1')
+  const [royalties, setRoyalties] = useState('5')
+  const [minting, setMinting] = useState(false)
   const [mintedAddrs, setMintedAddrs] = useState<string[]>([])
-  const [poolAddr, setPoolAddr]       = useState<string | null>(null)
+  const [poolAddr, setPoolAddr] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [albumMeta, setAlbumMeta] = useState({ albumName: '', year: '' })
 
+  // Checkbox terms
+  const [termsAccepted, setTermsAccepted] = useState(false)
+  const [ownershipConfirmed, setOwnershipConfirmed] = useState(false)
+
+  // Stepper logic
+  const next = () => setCurrentStep(s => Math.min(s + 1, 3))
+  const prev = () => setCurrentStep(s => Math.max(s - 1, 0))
+
+  // Track management
   const updateTrack = (i: number, data: Partial<Track>) =>
     setTracks(ts => {
       const copy = [...ts]
@@ -151,54 +219,76 @@ export default function UploadYourMusic() {
   const updateMeta = (i: number, k: keyof Track['metadata'], v: string) =>
     updateTrack(i, { metadata: { ...tracks[i].metadata, [k]: v } })
 
-  async function mintNFT() {
-    if (!connected || !publicKey) {
-      alert('Please connect your wallet')
-      return
-    }
-    if (tracks.some(t => !t.cover || !t.video)) {
-      alert('Each track needs a cover & video')
-      return
-    }
+  const addTrack = () => {
+    if (tracks.length >= 5) return
+    setTracks([...tracks, { ...blankTrack }])
+  }
+  const removeTrack = (i: number) => {
+    if (tracks.length > 1) setTracks(tracks.filter((_, idx) => idx !== i))
+  }
 
+  // --- Main Mint Logic ---
+  async function mintNFT() {
+    setFormError(null)
+    if (!connected || !publicKey) {
+      setFormError('Please connect your wallet')
+      return
+    }
+    if (tracks.some(t => !t.cover || !t.audio?.mp3)) {
+      setFormError('Each track needs a cover & video')
+      return
+    }
+    if (!ownershipConfirmed || !termsAccepted) {
+      setFormError('Please accept the terms and confirm ownership')
+      return
+    }
     setMinting(true)
     setMintedAddrs([])
     setPoolAddr(null)
 
     try {
-      // ─── 1) Pin raw assets & metadata ─────────────────────────
+      // 1) Pin raw assets & metadata
       const uris: string[] = []
       for (let i = 0; i < tracks.length; i++) {
         const t = tracks[i]
+        // Bundle uses .trackImage, otherwise use .cover
+        const coverFile = isBundle ? t.trackImage : t.cover
+        if (!coverFile) throw new Error(`Missing cover/track image for track ${i + 1}`)
+        const coverCid = await pinFile(coverFile)
+        const imageURI = `ipfs://${coverCid}`
 
-        const coverCid     = await pinFile(t.cover!)
-        const imageURI     = `ipfs://${coverCid}`
-        const videoCid     = await pinFile(t.video!)
-        const animationURI = `ipfs://${videoCid}`
-        let audioURI = ''
-        if (t.audio.mp3) {
-          const audioCid = await pinFile(t.audio.mp3)
-          audioURI = `ipfs://${audioCid}`
-        }
+        let animationURI = ''
+if (t.video) {
+  const videoCid = await pinFile(t.video)
+  animationURI = `ipfs://${videoCid}`
+}
 
-        const meta = {
-          name:          t.metadata.songName,
-          symbol:        'MUSIC',
-          description:   t.metadata.description,
-          image:         imageURI,
-          animation_url: animationURI,
-          properties:    { audio: audioURI, ...t.metadata },
-        }
-        const blob     = new Blob([JSON.stringify(meta)], { type: 'application/json' })
+let audioURI = ''
+if (t.audio.mp3) {
+  const audioCid = await pinFile(t.audio.mp3)
+  audioURI = `ipfs://${audioCid}`
+}
+const meta: any = {
+  name: t.metadata.songName,
+  symbol: 'MUSIC',
+  description: t.metadata.description,
+  image: imageURI,
+  properties: { audio: audioURI, ...t.metadata },
+}
+if (animationURI) {
+  meta.animation_url = animationURI
+}
+
+        const blob = new Blob([JSON.stringify(meta)], { type: 'application/json' })
         const fileJson = new File([blob], `meta-${i}.json`, { type: 'application/json' })
-        const metaCid  = await pinFile(fileJson)
+        const metaCid = await pinFile(fileJson)
         uris.push(`ipfs://${metaCid}`)
       }
 
-      // ─── 2) Mint via Metaplex ─────────────────────────────────
-      const mx      = Metaplex
-                        .make(new Connection(clusterApiUrl('devnet'), 'finalized'))
-                        .use(walletAdapterIdentity(wallet))
+      // 2) Mint via Metaplex
+      const mx = Metaplex
+        .make(new Connection(clusterApiUrl('devnet'), 'finalized'))
+        .use(walletAdapterIdentity(wallet))
       const nCopies = Math.max(1, parseInt(copies, 10))
       const minted: PublicKey[] = []
 
@@ -206,56 +296,52 @@ export default function UploadYourMusic() {
         for (let c = 0; c < nCopies; c++) {
           for (let i = 0; i < uris.length; i++) {
             const { nft } = await mx.nfts().create({
-              uri:                  uris[i],
-              name:                 `${tracks[i].metadata.songName} #${c+1}`,
-              symbol:               'MUSIC',
+              uri: uris[i],
+              name: `${tracks[i].metadata.songName} #${c + 1}`,
+              symbol: 'MUSIC',
               sellerFeeBasisPoints: 0,
-              creators:             [{ address: publicKey, share: 100 }],
-              tokenOwner:           publicKey,
+              creators: [{ address: publicKey, share: 100 }],
+              tokenOwner: publicKey,
             })
             minted.push(nft.address)
           }
         }
       } else {
         const { sft } = await mx.nfts().createSft({
-          uri:                  uris[0],
-          name:                 tracks[0].metadata.songName,
-          symbol:               'MUSIC',
+          uri: uris[0],
+          name: tracks[0].metadata.songName,
+          symbol: 'MUSIC',
           sellerFeeBasisPoints: 0,
-          creators:             [{ address: publicKey, share: 100 }],
-          decimals:             0,
-          tokenOwner:           publicKey,
-          tokenAmount:          token(1, 0),
+          creators: [{ address: publicKey, share: 100 }],
+          decimals: 0,
+          tokenOwner: publicKey,
+          tokenAmount: token(1, 0),
         })
         minted.push(sft.address)
-
         // mint extra copies into your ATA
         const extra = Math.max(0, nCopies - 1)
         if (extra > 0) {
           const ata = await ensureAta(mx.connection, publicKey, sft.address, wallet)
           await mx.tokens().mint({
             mintAddress: sft.address,
-            amount:      token(extra, 0),
-            toToken:     ata,
+            amount: token(extra, 0),
+            toToken: ata,
           })
         }
       }
 
       setMintedAddrs(minted.map(pk => pk.toBase58()))
 
-      // 3️⃣ create & seed AMM pool on-chain via Anchor
+      // 3) create & seed AMM pool on-chain via Anchor
       if (!skipDeposit) {
-        const conn2     = new Connection(clusterApiUrl('devnet'), 'confirmed')
+        const conn2 = new Connection(clusterApiUrl('devnet'), 'confirmed')
         const provider2 = new AnchorProvider(conn2, wallet as any, {})
-        const prog2     = new Program(idl as any, PROGRAM_ID, provider2)
-
+        const prog2 = new Program(idl as any, PROGRAM_ID, provider2)
         const userWoodAta = await ensureAta(conn2, publicKey!, WOODENG_MINT, wallet)
-        const depLam      = new BN(Math.floor(parseFloat(depositWoodeng)*1e9))
-
+        const depLam = new BN(Math.floor(parseFloat(depositWoodeng) * 1e9))
         if (isBundle) {
-          // bundle pool logic...
-          const bundleIdBn  = new BN(Date.now())
-          const idBuf       = Buffer.from(bundleIdBn.toArray('le',8))
+          const bundleIdBn = new BN(Date.now())
+          const idBuf = Buffer.from(bundleIdBn.toArray('le', 8))
           const [bundlePda, bundleBump] = PublicKey.findProgramAddressSync(
             [Buffer.from('bundle_config'), publicKey!.toBuffer(), idBuf],
             PROGRAM_ID
@@ -268,25 +354,22 @@ export default function UploadYourMusic() {
             [Buffer.from('bundle_token_vault'), bundlePda.toBuffer()],
             PROGRAM_ID
           )[0]
-
-          // init
           await prog2.methods
             .initializeBundle(bundleIdBn, new BN(1), new BN(1_000_000_000), depLam)
             .accounts({
               bundle: bundlePda,
               bundleSigner,
-              tokenVault:    tokenVaultPda,
+              tokenVault: tokenVaultPda,
               payerTokenAta: userWoodAta,
-              tokenMint:     WOODENG_MINT,
-              payer:         publicKey!,
+              tokenMint: WOODENG_MINT,
+              payer: publicKey!,
               systemProgram: SystemProgram.programId,
-              tokenProgram:  TOKEN_PROGRAM_ID,
-              rent:          SYSVAR_RENT_PUBKEY,
+              tokenProgram: TOKEN_PROGRAM_ID,
+              rent: SYSVAR_RENT_PUBKEY,
             })
             .rpc()
-
           // whitelist
-          for (let i = 0; i < minted.length && i < uris.length; i++){
+          for (let i = 0; i < minted.length && i < uris.length; i++) {
             const mint = minted[i]
             const [vaultPda] = PublicKey.findProgramAddressSync(
               [Buffer.from('nft_vault'), bundlePda.toBuffer(), mint.toBuffer()],
@@ -294,23 +377,21 @@ export default function UploadYourMusic() {
             )
             await prog2.methods.addToBundle()
               .accounts({
-                bundle:       bundlePda,
-                authority:    publicKey!,
+                bundle: bundlePda,
+                authority: publicKey!,
                 bundleSigner,
-                vault:        vaultPda,
+                vault: vaultPda,
                 mint,
-                payer:        publicKey!,
+                payer: publicKey!,
                 systemProgram: SystemProgram.programId,
-                tokenProgram:  TOKEN_PROGRAM_ID,
-                rent:          SYSVAR_RENT_PUBKEY,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                rent: SYSVAR_RENT_PUBKEY,
               })
               .rpc()
           }
-
           setPoolAddr(bundlePda.toBase58())
         } else {
-          // single-mint pool
-          const poolKP     = Keypair.generate()
+          const poolKP = Keypair.generate()
           const [poolSigner] = PublicKey.findProgramAddressSync(
             [Buffer.from('vault'), poolKP.publicKey.toBuffer()],
             PROGRAM_ID
@@ -323,219 +404,582 @@ export default function UploadYourMusic() {
             [Buffer.from('token_vault'), poolKP.publicKey.toBuffer()],
             PROGRAM_ID
           )
-
           await prog2.methods
             .createPool(new BN(1), new BN(1_000_000_000), depLam)
             .accounts({
-              pool:           poolKP.publicKey,
+              pool: poolKP.publicKey,
               poolSigner,
               nftVault,
               tokenVault,
-              payerTokenAta:  userWoodAta,
-              nftMint:        minted[0],
-              tokenMint:      WOODENG_MINT,
-              payer:          publicKey!,
-              systemProgram:  SystemProgram.programId,
-              tokenProgram:   TOKEN_PROGRAM_ID,
-              rent:           SYSVAR_RENT_PUBKEY,
+              payerTokenAta: userWoodAta,
+              nftMint: minted[0],
+              tokenMint: WOODENG_MINT,
+              payer: publicKey!,
+              systemProgram: SystemProgram.programId,
+              tokenProgram: TOKEN_PROGRAM_ID,
+              rent: SYSVAR_RENT_PUBKEY,
             })
             .signers([poolKP])
             .rpc()
-
           setPoolAddr(poolKP.publicKey.toBase58())
         }
       }
-
     } catch (err: any) {
       console.error('❌ mintNFT error:', err)
-      const msg = err instanceof Error ? err.message : JSON.stringify(err, null,2)
-      alert('Mint failed: ' + msg)
+      setFormError(err instanceof Error ? err.message : JSON.stringify(err, null, 2))
     } finally {
       setMinting(false)
     }
   }
 
-  return (
-    <div className="min-h-screen bg-gray-900 text-white p-8">
-      <div className="max-w-4xl mx-auto space-y-6">
-        <header className="flex justify-between items-center">
-          <h1 className="text-3xl font-bold">Create Your Music NFT</h1>
-          <WalletMultiButton />
-        </header>
-
-        {/* bundle toggle & #tracks */}
-        <div className="flex items-center space-x-4">
-          <label className="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              checked={isBundle}
-              onChange={()=>{
-                const nxt = !isBundle
-                setIsBundle(nxt)
-                setNumTracks(nxt?2:1)
-                setTracks(Array(nxt?2:1).fill(null).map(()=>({...blankTrack})))
-              }}
-            />
-            <span>Bundle (album)</span>
-          </label>
-          {isBundle && (
-            <label>
-              #Tracks:
-              <input
-                type="number"
-                min={1} max={5}
-                value={numTracks}
-                onChange={e=>{
-                  const n = Math.min(5,Math.max(1,+e.target.value))
-                  setNumTracks(n)
-                  setTracks(t=>{
-                    const c=[...t]
-                    while(c.length<n) c.push({...blankTrack})
-                    return c.slice(0,n)
-                  })
-                }}
-                className="ml-2 w-16 text-black"
-              />
-            </label>
-          )}
+  // -- MAIN UI --
+  if (!connected) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center gap-6 text-center">
+        <div className="space-y-4">
+          <h1 className="text-4xl font-bold gradient-text">Create Your NFT</h1>
+          <p className="text-xl text-muted-foreground max-w-lg">
+            Connect your wallet to start minting your unique music NFT
+          </p>
         </div>
+        <WalletMultiButton className="!bg-primary hover:!bg-primary/90 !px-8 !py-3 !text-lg" />
+      </div>
+    )
+  }
 
-        {/* steps */}
-        <div className="bg-gray-800 p-6 rounded space-y-6">
-          {step===1 && <>
-            <h2 className="text-xl font-semibold">Step 1: Upload Files</h2>
-            {tracks.map((t,i)=>(
-              <div key={i} className="border p-4 rounded space-y-4">
-                <h3 className="font-medium">Track #{i+1}</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label>Cover Image *</label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={e=>updateTrack(i,{cover:e.target.files?.[0]||null})}
-                      className="file:bg-purple-600 file:text-white file:rounded-full"
-                    />
-                  </div>
-                  <div>
-                    <label>Animation (Video) *</label>
-                    <input
-                      type="file"
-                      accept="video/*"
-                      onChange={e=>updateTrack(i,{video:e.target.files?.[0]||null})}
-                      className="file:bg-purple-600 file:text-white file:rounded-full"
-                    />
-                  </div>
+  return (
+    <div className="max-w-4xl mx-auto py-8">
+      {/* --- Back to Selection --- */}
+      <Link
+        href="/create"
+        className="flex items-center gap-2 text-muted-foreground hover:text-foreground mb-6"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back to selection
+      </Link>
+      {/* --- Header --- */}
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Create Musical NFT</h1>
+          <p className="text-muted-foreground">Create your unique music NFT with liquidity pool</p>
+        </div>
+        {/* --- Step Progression Bar --- */}
+        <div className="mb-12">
+          <div className="flex items-center justify-between relative">
+            {mintSteps.map((step, index) => (
+              <div
+                key={index}
+                className={cn(
+                  "flex flex-col items-center relative z-10 w-1/4 transition-colors duration-300"
+                )}
+              >
+                <div
+                  className={cn(
+                    "w-10 h-10 rounded-full flex items-center justify-center mb-2 border-2 transition-colors duration-300",
+                    index === currentStep
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : index < currentStep
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-muted-foreground bg-background text-muted-foreground"
+                  )}
+                >
+                  {index < currentStep ? (
+                    <CheckCircle2 className="w-5 h-5" />
+                  ) : (
+                    <span>{index + 1}</span>
+                  )}
                 </div>
-                <div>
-                  <label>Audio (MP3)</label>
-                  <input
-                    type="file"
-                    accept="audio/mp3"
-                    onChange={e=>updateTrack(i,{audio:{mp3:e.target.files?.[0]||null}})}
-                    className="file:bg-purple-600 file:text-white file:rounded-full"
-                  />
+                <div className="text-center">
+                  <p className={cn(
+                    "font-medium",
+                    index === currentStep ? "text-primary" : "text-muted-foreground"
+                  )}>
+                    {step.title}
+                  </p>
+                  <p className="text-xs text-muted-foreground hidden sm:block">
+                    {step.description}
+                  </p>
                 </div>
               </div>
             ))}
-          </>}
-          {step===2 && <>
-            <h2 className="text-xl font-semibold">Step 2: NFT Details</h2>
-            {tracks.map((t,i)=>(
-              <div key={i} className="border p-4 rounded">
-                <h3 className="font-medium">Track #{i+1}</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {Object.entries(t.metadata).map(([k,v])=>(
-                    <div key={k}>
-                      <label>{k}</label>
-                      {k==='description'
-                        ? <textarea
-                            value={v}
-                            onChange={e=>updateMeta(i,k as any,e.target.value)}
-                            className="w-full bg-gray-700 rounded p-2"
-                          />
-                        : <input
+            <div className="absolute top-5 left-0 right-0 h-[2px] bg-muted z-0">
+              <div
+                className="h-full bg-primary transition-all duration-300"
+                style={{ width: `${(currentStep / (mintSteps.length - 1)) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* --- Step Content --- */}
+        <div className="space-y-8">
+          {/* STEP 1: Upload Files */}
+          <div className={currentStep !== 0 ? 'hidden' : ''}>
+            <div className="space-y-6">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={isBundle}
+                  onChange={() => {
+                    const nxt = !isBundle
+                    setIsBundle(nxt)
+                    setNumTracks(nxt ? 2 : 1)
+                    setTracks(Array(nxt ? 2 : 1).fill(null).map(() => ({ ...blankTrack })))
+                  }}
+                  id="isBundle"
+                  className="w-4 h-4 rounded border-border accent-primary"
+                />
+                <label htmlFor="isBundle" className="text-sm font-medium">
+                  Create Album Bundle
+                </label>
+                {isBundle && (
+                  <button
+                    type="button"
+                    onClick={addTrack}
+                    className="ml-6 py-2 px-4 border-2 border-dashed border-border hover:border-primary rounded-lg flex items-center gap-2 transition-colors text-sm"
+                  >
+                    <Plus className="w-4 h-4" /> Add Track
+                  </button>
+                )}
+              </div>
+
+              {tracks.map((track, i) => (
+                <div key={i} className="border border-border rounded-lg p-4 space-y-4 mb-6 relative">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-medium">Track {i + 1}</h3>
+                    {isBundle && tracks.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeTrack(i)}
+                        className="p-2 text-destructive hover:bg-destructive/10 rounded-full transition-colors"
+                      >
+                        <Minus className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div>
+    <label className="block text-sm font-medium mb-1 text-foreground">Image</label>
+    <FileDrop
+      label="Image"
+      value={isBundle ? track.trackImage || null : track.cover}
+      onChange={file => isBundle ? updateTrack(i, { trackImage: file }) : updateTrack(i, { cover: file })}
+      accept="image/*"
+      required
+      previewType="image"
+    />
+  </div>
+  <div>
+    <label className="block text-sm font-medium mb-1 text-foreground">Audio</label>
+    <FileDrop
+      label="Audio"
+      value={track.audio.mp3}
+      onChange={file => updateTrack(i, { audio: { mp3: file } })}
+      accept="audio/mp3,audio/mpeg,audio/wav"
+      required
+      previewType="audio"
+    />
+  </div>
+</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* STEP 2: NFT Details */}
+          <div className={currentStep !== 1 ? 'hidden' : ''}>
+            <div className="space-y-4">
+              {tracks.map((track, i) => (
+                <div key={i} className="bg-muted/50 rounded-lg p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-medium text-muted-foreground">Track {i + 1}</h4>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Song Name</label>
+                      <input
+                        type="text"
+                        value={track.metadata.songName}
+                        onChange={e => updateMeta(i, 'songName', e.target.value)}
+                        className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Artist Name</label>
+                      <input
+                        type="text"
+                        value={track.metadata.artist}
+                        onChange={e => updateMeta(i, 'artist', e.target.value)}
+                        className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Style</label>
+                      <input
+                        type="text"
+                        value={track.metadata.style}
+                        onChange={e => updateMeta(i, 'style', e.target.value)}
+                        className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
+                        placeholder="e.g. Electronic, Hip Hop, Jazz"
+                        required
+                      />
+                    </div>
+                    {!isBundle && (
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Collection</label>
+                        <input
+                          type="text"
+                          value={track.metadata.collection}
+                          onChange={e => updateMeta(i, 'collection', e.target.value)}
+                          className="w-full px-3 py-1.5 bg-card border border-border rounded-lg focus:border-primary text-sm"
+                          placeholder="Enter collection name"
+                        />
+                      </div>
+                    )}
+                    {isBundle && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Album Name</label>
+                          <input
                             type="text"
-                            value={v}
-                            onChange={e=>updateMeta(i,k as any,e.target.value)}
-                            className="w-full bg-gray-700 rounded p-2"
+                            value={albumMeta.albumName}
+                            onChange={e => setAlbumMeta({ ...albumMeta, albumName: e.target.value })}
+                            className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
+                            required
                           />
-                      }
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Release Year</label>
+                          <input
+                            type="number"
+                            value={albumMeta.year}
+                            onChange={e => setAlbumMeta({ ...albumMeta, year: e.target.value })}
+                            className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Description</label>
+                    <textarea
+                      value={track.metadata.description}
+                      onChange={e => updateMeta(i, 'description', e.target.value)}
+                      rows={2}
+                      className="w-full px-3 py-1.5 bg-card border rounded-lg transition-colors resize-none text-sm"
+                      required
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* STEP 3: Seed & Copies */}
+          <div className={currentStep !== 2 ? 'hidden' : ''}>
+            <div className="space-y-6">
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium">Number of Copies</h3>
+                <div className="bg-muted/50 rounded-lg p-4">
+                  <input
+                    type="number"
+                    min="1"
+                    max="1000"
+                    value={copies}
+                    onChange={e => setCopies(e.target.value)}
+                    className="w-full px-4 py-2 bg-card border rounded-lg transition-colors"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">NFT Copies</p>
+                </div>
+              </div>
+              <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+                <h3 className="text-lg font-medium">Pool Token</h3>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      value="woodeng"
+                      checked={tokenType === 'woodeng'}
+                      onChange={() => setTokenType('woodeng')}
+                      className="w-4 h-4 accent-primary"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Coins className="w-5 h-5 text-primary" />
+                      <span>WOODENG</span>
+                    </div>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      value="sol"
+                      checked={tokenType === 'sol'}
+                      onChange={() => setTokenType('sol')}
+                      className="w-4 h-4 accent-primary"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Coins className="w-5 h-5 text-[#14F195]" />
+                      <span>SOL</span>
+                    </div>
+                  </label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Select the token you want to use for your liquidity pool
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Initial Deposit ({tokenType.toUpperCase()})
+                </label>
+                <input
+                  type="number"
+                  step="0.000001"
+                  value={depositWoodeng}
+                  onChange={e => setDepositWoodeng(e.target.value)}
+                  disabled={skipDeposit}
+                  className={cn(
+                    "w-full px-4 py-2 bg-card border rounded-lg transition-colors",
+                    skipDeposit && "opacity-50"
+                  )}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={skipDeposit}
+                  onChange={e => setSkipDeposit(e.target.checked)}
+                  id="skipDeposit"
+                  className="w-4 h-4 rounded border-border accent-primary"
+                />
+                <label htmlFor="skipDeposit" className="text-sm font-medium">
+                  Skip Deposit
+                </label>
+              </div>
+              {skipDeposit && (
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Royalties (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="15"
+                    step="0.1"
+                    value={royalties}
+                    onChange={e => setRoyalties(e.target.value)}
+                    className="w-full px-4 py-2 bg-card border rounded-lg transition-colors"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Set royalties up to 15% for secondary sales
+                  </p>
+                </div>
+              )}
+              {!skipDeposit && (
+                <div className="bg-muted/50 p-4 rounded-lg">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Info className="w-4 h-4 text-primary" />
+                    <p>
+                      NFTs minted with a pool do not have royalties. The pool provides liquidity and trading opportunities instead.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* STEP 4: Preview & Mint */}
+          <div className={currentStep !== 3 ? 'hidden' : ''}>
+            <div className="bg-card border border-border rounded-lg p-6">
+              <h3 className="text-xl font-semibold mb-6">Preview Your NFT</h3>
+              <div className="space-y-8">
+                {/* Album/Bundle Preview */}
+                {isBundle && (
+                  <div className="aspect-[3/1] relative rounded-lg overflow-hidden bg-muted/50">
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+                    <div className="absolute bottom-4 left-4">
+                      <h2 className="text-2xl font-bold text-white mb-2">{albumMeta.albumName}</h2>
+                      <p className="text-white/80">{albumMeta.year}</p>
+                    </div>
+                  </div>
+                )}
+                {/* Track Previews */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {tracks.map((track, index) => (
+                    <div key={index} className="bg-muted/50 rounded-lg overflow-hidden">
+                      <div className="aspect-square relative">
+                        {(isBundle ? track.trackImage : track.cover) && (
+                          <img
+                            src={URL.createObjectURL(isBundle ? (track.trackImage as File) : (track.cover as File))}
+                            alt={`Track ${index + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                        )}
+                      </div>
+                      <div className="p-4">
+                        <h4 className="font-semibold mb-1">{track.metadata.songName}</h4>
+                        <p className="text-sm text-muted-foreground mb-2">{track.metadata.artist}</p>
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+                            {track.metadata.style}
+                          </span>
+                          <span className="text-muted-foreground">
+                            {copies} copies
+                          </span>
+                        </div>
+                        {track.metadata.description && (
+                          <div className="mt-2 text-sm text-muted-foreground line-clamp-2">
+                            {track.metadata.description}
+                          </div>
+                        )}
+                        {track.metadata.collection && (
+                          <div className="mt-2 text-xs">
+                            <span className="text-muted-foreground">Collection: </span>
+                            <span className="font-medium">{track.metadata.collection}</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
+                {/* Pool Token Preview */}
+                <div className="bg-muted/50 rounded-lg p-4">
+                  <h4 className="text-sm font-medium text-muted-foreground mb-2">Pool Token</h4>
+                  <div className="flex items-center gap-2">
+                    <Coins className={cn("w-5 h-5", tokenType === 'woodeng' ? "text-primary" : "text-[#14F195]")} />
+                    <p className="text-xl font-semibold">{tokenType === 'woodeng' ? 'WOODENG' : 'SOL'}</p>
+                  </div>
+                </div>
+                {/* Deposit/Royalties */}
+                {!skipDeposit && (
+                  <div className="bg-muted/50 rounded-lg p-4">
+                    <h4 className="text-sm font-medium text-muted-foreground mb-2">Initial Deposit</h4>
+                    <p className="text-xl font-semibold">{depositWoodeng} {tokenType === 'woodeng' ? 'WOODENG' : 'SOL'}</p>
+                    <p className="text-sm text-muted-foreground mt-2">
+                      NFTs minted with a pool do not have royalties. The pool provides liquidity and trading opportunities instead.
+                    </p>
+                  </div>
+                )}
+                {skipDeposit && (
+                  <div className="bg-muted/50 rounded-lg p-4">
+                    <h4 className="text-sm font-medium text-muted-foreground mb-2">Royalties</h4>
+                    <p className="text-xl font-semibold">{royalties}%</p>
+                  </div>
+                )}
+                {/* Terms Checkboxes */}
+                <div className="space-y-4 border-t border-border pt-6">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={ownershipConfirmed}
+                      onChange={e => setOwnershipConfirmed(e.target.checked)}
+                      id="ownershipConfirmed"
+                      className="w-4 h-4 rounded border-border accent-primary"
+                    />
+                    <label htmlFor="ownershipConfirmed" className="text-sm">
+                      I confirm that I own this music/these tracks or have permission to upload them
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={termsAccepted}
+                      onChange={e => setTermsAccepted(e.target.checked)}
+                      id="termsAccepted"
+                      className="w-4 h-4 rounded border-border accent-primary"
+                    />
+                    <label htmlFor="termsAccepted" className="text-sm">
+                      I agree to the <a href="/terms" className="text-primary hover:underline" target="_blank">Terms of Service</a>
+                    </label>
+                  </div>
+                </div>
+                {/* Mint Success */}
+                {mintedAddrs.length > 0 && (
+                  <div className="space-y-4 bg-muted/50 rounded-lg p-6">
+                    <div className="flex items-center gap-2 text-green-500">
+                      <CheckCircle2 className="w-5 h-5" />
+                      <p className="font-medium">Successfully Minted:</p>
+                      <ul className="text-xs break-all">
+                        {mintedAddrs.map(a => <li key={a}>{a}</li>)}
+                      </ul>
+                    </div>
+                    {poolAddr && (
+                      <div className="flex items-center gap-2 text-green-500">
+                        <CheckCircle2 className="w-5 h-5" />
+                        <p className="font-medium">New AMM pool: {poolAddr}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            ))}
-          </>}
-          {step===3 && <>
-            <h2 className="text-xl font-semibold">Step 3: Seed & Copies</h2>
-            <label className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                checked={skipDeposit}
-                onChange={e=>setSkipDeposit(e.target.checked)}
-              />
-              <span>Skip deposit</span>
-            </label>
-            {!skipDeposit && (
-              <div>
-                <label>Initial WOODENG deposit</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={depositWoodeng}
-                  onChange={e=>setDepositWoodeng(e.target.value)}
-                  className="w-24 bg-gray-700 rounded p-1"
-                />
-              </div>
-            )}
-            <div>
-              <label>Copies per track</label>
-              <input
-                type="number"
-                min="1"
-                value={copies}
-                onChange={e=>setCopies(e.target.value)}
-                className="w-24 bg-gray-700 rounded p-1"
-              />
+              
             </div>
-          </>}
-          {step===4 && <>
-            <h2 className="text-xl font-semibold">Step 4: Preview & Mint</h2>
-            <button
-              onClick={mintNFT}
-              disabled={minting}
-              className="w-full py-2 bg-purple-600 rounded hover:bg-purple-500 disabled:opacity-50"
-            >
-              {minting ? 'Minting…' : 'Create & Seed Pool'}
-            </button>
-            {mintedAddrs.length>0 && (
-              <div className="bg-gray-700 p-4 rounded">
-                <CheckIcon className="inline-block mr-2 text-green-400" />
-                <span>Successfully minted:</span>
-                <ul className="text-sm break-all">
-                  {mintedAddrs.map(a=><li key={a}>{a}</li>)}
-                </ul>
-              </div>
-            )}
-            {poolAddr && (
-              <p className="text-green-400">
-                New AMM pool: <code>{poolAddr}</code>
-              </p>
-            )}
-          </>}
-          <div className="flex justify-between mt-4">
-            {step>1
-              ? <button onClick={prev} className="px-4 py-2 bg-gray-700 rounded">Previous</button>
-              : <div/>
-            }
-            {step<4 && (
-              <button onClick={next} className="px-4 py-2 bg-purple-600 rounded">Next</button>
-            )}
           </div>
         </div>
+        
+        {/* --- Error Message --- */}
+        {formError && (
+          <div className="p-4 bg-destructive/10 text-destructive rounded-lg flex items-center gap-2 mt-6">
+            <AlertCircle className="w-5 h-5" />
+            <p>{formError}</p>
+          </div>
+        )}
+
+        {/* --- Error Message --- */}
+{formError && (
+  <div className="p-4 bg-destructive/10 text-destructive rounded-lg flex items-center gap-2 mt-6">
+    <AlertCircle className="w-5 h-5" />
+    <p>{formError}</p>
+  </div>
+)}
+
+{/* --- Stepper Navigation + Mint Button --- */}
+<div className="flex justify-between items-center mt-8">
+  {/* Previous Button */}
+  <button
+    type="button"
+    onClick={prev}
+    className={cn(
+      "px-6 py-2 rounded-lg transition-colors",
+      currentStep === 0
+        ? "opacity-0 pointer-events-none"
+        : "bg-muted hover:bg-muted/80"
+    )}
+  >
+    Previous
+  </button>
+
+  {/* Next OR Mint Button */}
+  {currentStep < 3 ? (
+    <button
+      type="button"
+      onClick={next}
+      className="px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2 ml-4"
+    >
+      Next <ArrowRight className="w-4 h-4" />
+    </button>
+  ) : (
+    <button
+      onClick={mintNFT}
+      disabled={minting || !termsAccepted || !ownershipConfirmed}
+      className="px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 ml-4"
+      style={{ minWidth: 200 }}
+    >
+      {minting ? (
+        <>
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Minting...
+        </>
+      ) : (
+        <>
+          {skipDeposit ? 'Create' : `Create & Seed ${tokenType === 'woodeng' ? 'WOODENG' : 'SOL'} Pool`}
+          <ArrowRight className="w-4 h-4" />
+        </>
+      )}
+    </button>
+  )}
       </div>
-    </div>
-  )
-}
+    </div> 
+  </div>  
+)}
