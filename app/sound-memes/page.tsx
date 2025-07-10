@@ -1045,7 +1045,7 @@ if (!amount) {
       case '1m':
       case '5m':
       case '30m':
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+        date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       case '1H':
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       case '24H':

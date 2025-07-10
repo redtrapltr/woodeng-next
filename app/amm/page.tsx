@@ -737,19 +737,28 @@ export default function AMMPage() {
                       <XAxis dataKey="time" tickFormatter={formatTime} stroke="#bbb" fontSize={10} tick={{ fontSize: 10 }} />
                       <YAxis stroke="#bbb" fontSize={10} tick={{ fontSize: 10 }} domain={['auto', 'auto']} width={40} />
                       <Tooltip
-                        content={({ active, payload, label }) => {
-                          if (active && payload && payload.length) {
-                            return (
-                              <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 shadow-lg">
-                                <p className="text-xs font-medium">{formatTime(label)}</p>
-                                <p className="text-xs text-purple-400">Price: {payload[0].value.toFixed(2)} WOODENG</p>
-                              </div>
-                            );
-                          }
-                          return null;
-                        }}
-                        cursor={{ stroke: '#8b5cf6', strokeWidth: 1 }}
-                      />
+  content={({ active, payload, label }) => {
+    if (
+      active &&
+      payload &&
+      payload.length &&
+      payload[0] &&
+      typeof payload[0].value === "number"
+    ) {
+      return (
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 shadow-lg">
+          <p className="text-xs font-medium">{formatTime(label)}</p>
+          <p className="text-xs text-purple-400">
+            Price: {payload[0].value.toFixed(2)} WOODENG
+          </p>
+        </div>
+      );
+    }
+    return null;
+  }}
+  cursor={{ stroke: '#8b5cf6', strokeWidth: 1 }}
+/>
+
                       <Line
                         type="monotone"
                         dataKey="price"
