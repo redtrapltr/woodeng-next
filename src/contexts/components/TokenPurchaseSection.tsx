@@ -1,12 +1,33 @@
 // src/contexts/components/TokenPurchaseSection.tsx
 "use client";
 
-import React, { useState } from 'react';
-import { Coins, ArrowRight, Sparkles, TrendingUp, Rocket, Copy, Check } from 'lucide-react';
+import React, { useState } from "react";
+import { Container } from "./Container";
+import {
+  Coins,
+  ArrowRight,
+  Sparkles,
+  TrendingUp,
+  Rocket,
+  Copy,
+  Check,
+} from "lucide-react";
+
+// Custom pulse/fade keyframes for glows
+const extraGlowStyles = `
+@keyframes fadePulse {
+  0%,100% { opacity: .62; }
+  50%    { opacity: 1;   }
+}
+@keyframes fadePulseReverse {
+  0%,100% { opacity: .28; }
+  50%    { opacity: .48; }
+}
+`;
 
 export function TokenPurchaseSection() {
   const [copied, setCopied] = useState(false);
-  const contractAddress = "83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5";
+  const contractAddress = "83zcTaQRqL1s3PxBRdGVkee9PiGLVP6eAR5";
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(contractAddress);
@@ -15,94 +36,165 @@ export function TokenPurchaseSection() {
   };
 
   return (
-    <section className="relative py-16">
-      {/* pulsing background circles */}
-      <div className="absolute inset-0 bg-gradient-to-r from-primary/10 via-secondary/10 to-primary/10 rounded-3xl blur-xl opacity-70" />
+    <section className="relative py-6 md:py-8">
+      {/* Animate glows */}
+      <style>{extraGlowStyles}</style>
 
-      {/* match other sections’ width */}
-      <div className="relative w-full max-w-7xl mx-auto px-4 z-10 rounded-3xl border border-primary/20 backdrop-blur-sm overflow-hidden">
-        <div className="grid md:grid-cols-2 gap-8 items-center">
-          
-          {/* Left: mascot + animated blobs */}
-          <div className="relative h-64 md:h-80 flex items-center justify-center">
-            <div className="absolute top-1/4 left-1/4 w-12 md:w-32 h-12 md:h-32 bg-primary/20 rounded-full animate-pulse" style={{ animationDelay: '0.5s' }} />
-            <div className="absolute bottom-1/3 right-1/3 w-8 md:w-24 h-8 md:h-24 bg-secondary/20 rounded-full animate-pulse" style={{ animationDelay: '1s' }} />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="absolute inset-0 bg-gradient-to-r from-primary/40 to-secondary/40 rounded-full blur-xl opacity-70 animate-pulse" />
-              <img
-                src="https://i.postimg.cc/KzwCSxDx/Logo-WB.png"
-                alt="Woodeng Mascot"
-                className="relative z-10 h-24 md:h-64 object-contain"
-              />
-            </div>
-            <Coins className="absolute top-1/4 right-1/4 w-3 md:w-8 h-3 md:h-8 text-primary animate-bounce" style={{ animationDuration: '3s' }} />
-            <TrendingUp className="absolute bottom-1/4 left-1/4 w-2 md:w-6 h-2 md:h-6 text-secondary animate-bounce" style={{ animationDuration: '2.5s', animationDelay: '0.5s' }} />
-            <Sparkles className="absolute top-1/3 left-1/3 w-2 md:w-5 h-2 md:h-5 text-primary/80 animate-pulse" style={{ animationDuration: '4s' }} />
-          </div>
+      <Container>
+        {/* 1) Frame locked to Container’s max-width */}
+           <div className="
+            relative
+            overflow-hidden
+            bg-background
+            -mx-4 px-4
+            sm:-mx-6 sm:px-6
+            lg:-mx-16 lg:px-8
+            rounded-[2.2rem]
+            border-2 border-[#7a80fa]
+          ">
+          {/* 2) Blurred gradient background clipped inside the same rounding */}
+          <div
+            className="
+              absolute inset-0
+              bg-gradient-to-r from-[#8b5cf6]/15 via-[#4f8ef5]/15 to-[#8b5cf6]/15
+              rounded-[2.2rem]
+              blur-xl opacity-80 pointer-events-none
+            "
+          />
 
-          {/* Right: text, buttons, contract */}
-          <div className="space-y-6 p-4 md:p-8">
-            <div className="inline-flex items-center gap-2 px-4 py-1 bg-primary/10 rounded-full">
-              <Coins className="w-5 h-5 text-primary" />
-              <span className="text-sm font-medium whitespace-nowrap">$WOODENG Token</span>
-            </div>
-
-            <h2 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
-              Need Woodeng Tokens?
-            </h2>
-
-            <p className="text-sm md:text-lg text-muted-foreground">
-              Power your Music NFT transactions and SPL404 Sound Memes deployment with the native Woodeng token
-            </p>
-
-            <div className="flex flex-col sm:flex-row gap-4">
-              <a
-                href="https://raydium.io/swap/?inputMint=sol&outputMint=83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-gradient-to-r from-[#8b5cf6] to-[#4f8ef5] text-white font-semibold shadow-lg shadow-primary/20 transition-transform hover:-translate-y-1"
-              >
-                <Rocket className="w-5 h-5" />
-                Buy on Raydium
-              </a>
-              <a
-                href="/whitepaper#section-5"
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-card border border-primary/20 text-white transition-transform hover:-translate-y-1"
-              >
-                Learn More
-                <ArrowRight className="w-4 h-4" />
-              </a>
-            </div>
-
-            <div className="mt-4">
-              <p className="text-xs md:text-sm text-muted-foreground mb-1">Contract Address</p>
-              <div
-                className="flex items-center justify-between p-3 bg-background/50 rounded-lg cursor-pointer hover:bg-background/80 transition-colors"
-                onClick={copyToClipboard}
-              >
-                <span className="font-mono text-sm text-primary truncate">
-                  {contractAddress}
-                </span>
-                <button
-                  className="p-2 bg-primary/10 rounded-md hover:bg-primary/20 transition-colors"
-                  aria-label="Copy address"
-                >
-                  {copied ? (
-                    <Check className="w-5 h-5 text-green-500" />
-                  ) : (
-                    <Copy className="w-5 h-5 text-primary" />
-                  )}
-                </button>
+          {/* 3) Content wrapper (backdrop blur + padding) */}
+          <div className="relative backdrop-blur-sm px-4 sm:px-6 lg:px-8 py-4">
+            <div className="grid md:grid-cols-2 gap-6 items-center">
+              {/* Left: mascot + glows */}
+              <div className="relative h-full min-h-[120px] md:min-h-[210px] flex items-center">
+                <div
+                  className="absolute left-0 md:left-1/4 top-0 md:top-1/4 pointer-events-none"
+                  style={{
+                    width: "160px",
+                    height: "160px",
+                    borderRadius: "50%",
+                    background: "rgba(114,107,224,0.13)",
+                    animation: "fadePulseReverse 3.5s ease-in-out infinite",
+                    zIndex: 0,
+                  }}
+                />
+                <div
+                  className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+                  style={{
+                    width: "250px",
+                    height: "250px",
+                    background:
+                      "radial-gradient(circle at 50% 50%, #7a80fa 55%, #4567e9 90%)",
+                    filter: "blur(65px)",
+                    opacity: 0.75,
+                    borderRadius: "50%",
+                    animation: "fadePulse 2.6s ease-in-out infinite",
+                    zIndex: 1,
+                  }}
+                />
+                <div
+                  className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+                  style={{
+                    width: "135px",
+                    height: "135px",
+                    borderRadius: "50%",
+                    background: "rgba(139,92,246,0.22)",
+                    animation: "fadePulseReverse 2.7s ease-in-out infinite",
+                    zIndex: 2,
+                  }}
+                />
+                <div className="absolute inset-0 flex items-center justify-center z-10">
+                  <img
+                    src="https://i.postimg.cc/KzwCSxDx/Logo-WB.png"
+                    alt="Woodeng Mascot"
+                    className="h-20 md:h-60 object-contain"
+                  />
+                </div>
+                <Coins
+                  className="absolute top-1/4 right-1/4 w-3 md:w-8 h-3 md:h-8 text-primary animate-bounce z-20"
+                  style={{ animationDuration: "3s" }}
+                />
+                <TrendingUp
+                  className="absolute bottom-1/4 left-1/4 w-2 md:w-6 h-2 md:h-6 text-secondary animate-bounce z-20"
+                  style={{ animationDuration: "2.5s", animationDelay: "0.5s" }}
+                />
+                <Sparkles
+                  className="absolute top-1/3 left-1/4 w-2 md:w-5 h-2 md:h-5 text-primary/80 animate-pulse z-20"
+                  style={{ animationDuration: "4s" }}
+                />
               </div>
-              {copied && (
-                <p className="text-xs text-green-500 mt-1 text-right">
-                  Copied to clipboard!
-                </p>
-              )}
+
+              {/* Right: content */}
+              <div className="p-4 md:p-8 lg:p-12">
+                <div className="space-y-4 md:space-y-6">
+                  {/* Badge */}
+                  <div className="inline-flex items-center gap-2 px-4 py-2 bg-[#7d80be]/15 rounded-full">
+                    <Coins className="w-5 h-5 text-[#a892fc]" />
+                    <span className="text-base font-normal text-white">
+                      $WOODENG Token
+                    </span>
+                  </div>
+
+                  {/* Title */}
+                  <h2 className="text-2xl md:text-4xl font-bold bg-gradient-to-r from-[#6d85fa] to-[#906cff] bg-clip-text text-transparent">
+                    Need Woodeng Tokens?
+                  </h2>
+
+                  <p className="text-sm md:text-lg text-muted-foreground">
+                    Power your Music NFT transactions and SPL404 Sound Memes deployment
+                    with the native Woodeng token
+                  </p>
+
+                  {/* Buttons */}
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <a
+                      href="https://raydium.io/swap/?inputMint=sol&outputMint=83zcTaQRqL1s3PxBRdGVkee9PiGLVP6eAR5"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-6 py-3 bg-gradient-to-r from-[#7a5cff] to-[#8e7bfa] text-white rounded-full flex items-center gap-2 transition hover:scale-105 shadow-lg shadow-[#7a5cff]/30"
+                    >
+                      <Rocket className="w-5 h-5" />
+                      Buy on Raydium
+                    </a>
+                    <a
+                      href="/whitepaper#section-5"
+                      className="px-6 py-3 border border-primary/20 rounded-full text-white transition hover:-translate-y-0.5 flex items-center gap-2"
+                    >
+                      Learn More <ArrowRight className="w-5 h-5" />
+                    </a>
+                  </div>
+
+                  {/* Contract Address */}
+                  <div className="bg-[#17182a] border border-[#232446] rounded-2xl p-4 mt-4">
+                    <p className="text-base text-[#dbdbef] mb-2">Contract Address</p>
+                    <div className="flex items-center justify-between bg-[#101120] rounded-xl p-3">
+                      <span className="font-mono text-sm text-[#8176fa] break-all">
+                        {contractAddress}
+                      </span>
+                      <button
+                        className="p-2 bg-[#221a3f]/70 hover:bg-[#3d3260]/80 rounded-full transition"
+                        onClick={copyToClipboard}
+                        aria-label="Copy contract address"
+                      >
+                        {copied ? (
+                          <Check className="w-5 h-5 text-[#77ffbe]" />
+                        ) : (
+                          <Copy className="w-5 h-5 text-[#b39afc]" />
+                        )}
+                      </button>
+                    </div>
+                    {copied && (
+                      <p className="mt-2 text-sm text-[#77ffbe] text-right">
+                        Copied to clipboard!
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      </Container>
     </section>
   );
 }

@@ -4,7 +4,7 @@ import { Container } from "./Container"
 
 export function HeroSection() {
   return (
-    <section className="relative flex justify-center items-center py-32 bg-background">
+    <section className="relative flex justify-center items-center py-4 md:py-8 bg-background">
       {/* constrain everything into the same width */}
       <Container>
         {/* BACKGROUND FX (unchanged) */}

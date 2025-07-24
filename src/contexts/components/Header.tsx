@@ -7,6 +7,7 @@ import {
   Waves,
   Music,
   ShieldCheck,
+  User as UserIcon,
 } from "lucide-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -213,7 +214,27 @@ export default function Header() {
           </nav>
         </div>
         {/* Right: Create, WOODENG, Wallet */}
-        <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, flexShrink: 0 }}>
+          {/* Profile icon */}
+          <Link href="/profile" legacyBehavior>
+            <a
+              title="Your profile"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 36,
+                height: 36,
+                borderRadius: "50%",
+                background: "#181929",
+                color: "#e6e6ff",
+                border: "1px solid #232332",
+                transition: "background .18s",
+              }}
+            >
+              <UserIcon size={18} />
+            </a>
+          </Link>
           <Link href="/create" legacyBehavior>
             <a style={createButtonStyle}>+ Create</a>
           </Link>

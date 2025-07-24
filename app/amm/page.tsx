@@ -2,6 +2,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   PublicKey, Connection, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY, clusterApiUrl
 } from '@solana/web3.js';
@@ -43,7 +44,10 @@ export default function AMMPage() {
 
   // State
   const [program, setProgram] = useState<Program<Idl> | null>(null);
-  const [searchInput, setSearchInput] = useState('');
+  const searchParams = useSearchParams();
+  const initialAddr = (searchParams.get('addr') ?? '').trim();
+  const [searchInput, setSearchInput] = useState(initialAddr);
+
   const [poolPk, setPoolPk] = useState<PublicKey | null>(null);
   const [poolType, setPoolType] = useState<'single' | 'bundle' | null>(null);
   const [poolState, setPoolState] = useState<any | null>(null);
@@ -107,14 +111,22 @@ export default function AMMPage() {
     setProgram(new Program(idl as Idl, PROGRAM_ID, provider));
   }, [publicKey, signTransaction, signAllTransactions]);
 
+  useEffect(() => {
+  if (!program || !initialAddr) return;
+  handleSearchPool(initialAddr);          // ← auto-loads the pool
+}, [program, initialAddr]);
+
+
   // --- Search Pool
-  const handleSearchPool = async () => {
+  
+const handleSearchPool = async (addr?: string) => {
     setIsLoading(true);
     try {
       if (!program) return;
       let pk: PublicKey;
+      const addrStr = (addr ?? searchInput).trim();
       try {
-        pk = new PublicKey(searchInput.trim());
+        pk = new PublicKey(addrStr);
       } catch {
         alert('Invalid address');
         setIsLoading(false);
@@ -606,7 +618,7 @@ export default function AMMPage() {
                   />
                 </div>
                 <button
-                  onClick={handleSearchPool}
+                  onClick={() => handleSearchPool()}
                   disabled={isLoading}
                   className="px-6 py-3 bg-purple-600 rounded-lg text-lg font-semibold hover:bg-purple-700 transition-colors"
                 >

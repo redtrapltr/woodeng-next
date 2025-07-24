@@ -1,0 +1,127 @@
+'use client';
+
+import React from 'react';
+import { Play, Pause, Sparkles } from 'lucide-react';
+
+import type { NFT } from '@/types/nft';                 // <— global NFT type
+import { cn } from '@/lib/utils';
+import { Web3Image, useAudio } from '@/contexts/components/Web3Media';
+
+/* tiny helpers ---------------------------------------------------- */
+const mmss = (sec = 0) =>
+  `${Math.floor(sec / 60)}:${`${sec % 60}`.padStart(2, '0')}`;
+
+const Badge = ({ children }: { children: React.ReactNode }) => (
+  <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-black/60 text-white">
+    {children}
+  </span>
+);
+
+/* ------------------------------------------------------------------ */
+/*  Card component (shared: marketplace & profile)                    */
+/* ------------------------------------------------------------------ */
+export function NFTCard({
+  nft,
+  view,
+  onOpen,
+}: {
+  nft: NFT;
+  view: 'grid' | 'list';
+  onOpen: (n: NFT) => void;
+}) {
+  const { playing, play, stop } = useAudio(nft.audioUrl);
+
+  return (
+    <div
+      onClick={() => onOpen(nft)}
+      className={cn(
+        'group bg-card border border-border rounded-lg hover:border-primary/50 transition',
+        view === 'list' && 'flex',
+      )}
+    >
+      {/* -------- cover -------- */}
+      <div
+        className={cn(
+          'relative',
+          view === 'grid' ? 'aspect-square' : 'aspect-square sm:w-44',
+        )}
+      >
+        <Web3Image
+          src={nft.imageUrl}
+          alt={nft.title}
+          className="object-cover w-full h-full bg-muted animate-pulse"
+        />
+
+        {nft.audioUrl && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              playing ? stop() : play();
+            }}
+            className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition"
+          >
+            {playing ? (
+              <Pause className="w-7 h-7 text-white" />
+            ) : (
+              <Play className="w-7 h-7 text-white" />
+            )}
+          </button>
+        )}
+
+        {/* badges */}
+        <div className="absolute top-1 right-1 flex flex-wrap gap-1">
+          {nft.hasPool && <Badge>Pool</Badge>}
+          <Badge>{nft.type === 'bundle' ? 'Bundle' : 'Single'}</Badge>
+          <Badge>{nft.tokenType.toUpperCase()}</Badge>
+          {nft.status === 'listed' && <Badge>For Sale</Badge>}
+        </div>
+      </div>
+
+      {/* -------- info -------- */}
+      <div
+        className={cn(
+          'p-4 flex flex-col flex-1',
+          view === 'list' && 'min-w-0',
+        )}
+      >
+        <div className="flex justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="font-semibold truncate">{nft.title}</h3>
+            <span className="text-xs text-muted-foreground">
+              {nft.metadata.artist}
+              {nft.collection.verified && (
+                <Sparkles className="inline w-3 h-3 ml-1 text-primary" />
+              )}
+            </span>
+          </div>
+          <div className="text-right shrink-0">
+            <div className="text-primary font-medium text-sm">
+              {nft.price[nft.tokenType]} {nft.tokenType.toUpperCase()}
+            </div>
+            <div className="text-[10px] text-muted-foreground">≈ ${nft.price.usd}</div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-1 mt-2 text-[11px]">
+          <span className="bg-muted px-1.5 rounded">{nft.metadata.genre}</span>
+          <span className="bg-muted px-1.5 rounded">{mmss(nft.metadata.duration)}</span>
+          {nft.metadata.style && (
+            <span className="bg-muted px-1.5 rounded">{nft.metadata.style}</span>
+          )}
+        </div>
+
+        <div className="mt-auto pt-3">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen(nft);
+            }}
+            className="w-full py-2 text-xs bg-primary rounded text-white hover:bg-primary/90"
+          >
+            {nft.hasPool ? 'View Pool' : nft.status === 'listed' ? 'Update Listing' : 'Buy Now'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

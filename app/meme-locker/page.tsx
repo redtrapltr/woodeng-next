@@ -23,6 +23,7 @@ import { Siren as Fire, Info, Coins } from 'lucide-react'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { LiquidChargeButton } from "../../src/contexts/components/LiquidChargeButton"
+import { useRouter } from 'next/navigation'
 
 
 
@@ -315,6 +316,17 @@ export default function MemeLockerFactory() {
   const [agreedTOS, setAgreedTOS] = useState(false)
   const [agreedOwn, setAgreedOwn] = useState(false)
 
+  // success dialog
+const [tradeModal, setTradeModal] = useState<{
+  open: boolean
+  memeMint?: PublicKey
+  configPda?: PublicKey
+}>(() => ({ open: false }))
+
+
+const router = useRouter()
+
+
   // ========== CREATION STEPS ==========
   async function handleCreateAll() {
     try {
@@ -447,8 +459,19 @@ await poolProgram.methods
 
 
 
-      setStepModal({ open: true, step: "✅ Sound Meme & Pool Created! Pool: " + configPda.toBase58() })
-      setStatus("Sound Meme & Pool Created! Pool: " + configPda.toBase58())
+      // ─── close the progress modal ───
+setStepModal({ open: false, step: "" })
+
+// ─── open the success / trade pop-up ───
+setTradeModal({
+  open: true,
+  memeMint: memeMintKey,
+  configPda,              // handy if you need it later
+})
+
+// (optional) still keep a plain-text status if you like
+setStatus("Sound Meme & Pool Created!")
+
     } catch (e: unknown) {
       setStepModal({ open: true, step: "❌ Error: " + (e instanceof Error ? e.message : String(e)) })
       setStatus("Error: " + (e instanceof Error ? e.message : String(e)))
@@ -547,6 +570,45 @@ await poolProgram.methods
   return (
     <div className="bg-[#181920] text-white min-h-screen py-12 px-2 flex flex-col items-center">
       <StepModal open={stepModal.open} step={stepModal.step} onClose={() => setStepModal({ open: false, step: "" })} />
+      {tradeModal.open && tradeModal.memeMint && (
+  <div
+    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
+    onClick={() => setTradeModal({ open: false })}
+  >
+    <div
+      className="relative bg-[#1b1c20] rounded-xl p-8 w-full max-w-sm text-center"
+      onClick={e => e.stopPropagation()}   // block inner clicks
+    >
+      <button
+        className="absolute top-4 right-4"
+        onClick={() => setTradeModal({ open: false })}
+      >
+        ✕
+      </button>
+
+      <h2 className="text-2xl font-bold mb-4">Sound Meme Created!</h2>
+
+      <p className="break-all text-sm bg-[#23252b] rounded p-3 mb-6">
+        {tradeModal.memeMint.toBase58()}
+      </p>
+
+      <button
+        className="w-full py-3 rounded bg-[#ffc371] text-black font-bold hover:bg-[#ffb24d]"
+        onClick={async () => {
+  setTradeModal({ open: false });
+  // make sure this is client-side
+  if (typeof window !== 'object') return;
+  await router.push(`/sound-memes?mint=${tradeModal.memeMint!.toBase58()}`);
+  window.scrollTo(0, 0);
+}}
+
+      >
+        Trade your Sound Meme
+      </button>
+    </div>
+  </div>
+)}
+
 
       {/* Back to selection */}
       <div className="w-full max-w-2xl mx-auto mb-4">

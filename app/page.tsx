@@ -10,6 +10,8 @@ import { TokenPurchaseSection } from "../src/contexts/components/TokenPurchaseSe
 import { LogoAnimation } from "../src/contexts/components/LogoAnimation";
 import { Footer } from "../src/contexts/components/Footer";
 import { Music2, Sparkles, Coins } from "lucide-react";
+import { SoundMemeSection } from "../src/contexts/components/SoundMemeSection";
+
 
 // inline PasswordModal
 const PasswordModal: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
@@ -106,17 +108,9 @@ export default function Home() {
 
           {/* SOUND MEMES */}
           <Container>
-            <section className="my-16">
-              <h2 className="text-3xl font-bold mb-6 text-white">
-                Sound Memes
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-card p-6 rounded-2xl min-h-[200px]">Card</div>
-                <div className="bg-card p-6 rounded-2xl min-h-[200px]">Card</div>
-                <div className="bg-card p-6 rounded-2xl min-h-[200px]">Card</div>
-              </div>
-            </section>
-          </Container>
+  <SoundMemeSection />
+</Container>
+
 
           {/* READY TO GET STARTED */}
           <Container>
@@ -132,43 +126,54 @@ export default function Home() {
           </Container>
 
           {/* FEATURES GRID */}
-          <Container>
-            <section className="grid grid-cols-1 md:grid-cols-3 gap-6 my-16">
-              {[
-                {
-                  icon: Music2,
-                  title: "Music NFTs",
-                  description:
-                    "Transform your music into unique digital assets. Set your own terms, earn royalties, and build direct relationships with fans.",
-                },
-                {
-                  icon: Sparkles,
-                  title: "Sound Memes",
-                  description:
-                    "Create viral sound memes as SPL404 NFTs. Leverage the power of social sharing while maintaining ownership and earning potential.",
-                },
-                {
-                  icon: Coins,
-                  title: "Woodeng Token",
-                  description:
-                    "Access exclusive features, participate in governance, and earn rewards through our native token ecosystem.",
-                },
-              ].map((feat, i) => (
-                <div
-                  key={i}
-                  className="bg-card border border-border rounded-xl p-6 hover:border-primary/50 transition"
-                >
-                  <feat.icon className="w-6 h-6 text-primary mb-4" />
-                  <h3 className="text-lg font-bold mb-2 text-white">
-                    {feat.title}
-                  </h3>
-                  <p className="text-sm text-muted-foreground">
-                    {feat.description}
-                  </p>
-                </div>
-              ))}
-            </section>
-          </Container>
+<Container>
+  <section className="grid grid-cols-1 md:grid-cols-3 gap-6 my-16">
+    {[
+      {
+        icon: Music2,
+        title: "Music NFTs",
+        description:
+          "Transform your music into unique digital assets. Set your own terms, earn royalties, and build direct relationships with fans.",
+      },
+      {
+        icon: Sparkles,
+        title: "Sound Memes",
+        description:
+          "Create viral sound memes as SPL404 NFTs. Leverage the power of social sharing while maintaining ownership and earning potential.",
+      },
+      {
+        icon: Coins,
+        title: "Woodeng Token",
+        description:
+          "Access exclusive features, participate in governance, and earn rewards through our native token ecosystem.",
+      },
+    ].map((feat, i) => (
+      <div
+  key={i}
+  className="
+    border
+    border-[#28283b]
+    hover:border-2
+    hover:border-purple-400
+    transition-all duration-200
+    rounded-xl
+    p-6
+    cursor-pointer
+    group
+  "
+>
+  <div className="p-2 md:p-3 bg-primary/10 rounded-lg w-fit mb-4 group-hover:bg-primary/20 transition-colors duration-200">
+    <feat.icon className="w-6 h-6 text-primary" />
+  </div>
+  <h3 className="text-lg font-bold mb-2 text-white">{feat.title}</h3>
+  <p className="text-sm text-muted-foreground">{feat.description}</p>
+</div>
+
+    ))}
+  </section>
+</Container>
+
+
 
           {/* PARTNER LOGO CAROUSEL */}
           <LogoAnimation />

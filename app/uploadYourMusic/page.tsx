@@ -205,6 +205,13 @@ export default function UploadYourMusic() {
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [ownershipConfirmed, setOwnershipConfirmed] = useState(false)
 
+  // success pop-up
+const [successModal, setSuccessModal] = useState<{
+  open: boolean
+  pool?: string
+}>(() => ({ open: false }))
+
+
   // Stepper logic
   const next = () => setCurrentStep(s => Math.min(s + 1, 3))
   const prev = () => setCurrentStep(s => Math.max(s - 1, 0))
@@ -234,10 +241,15 @@ export default function UploadYourMusic() {
       setFormError('Please connect your wallet')
       return
     }
-    if (tracks.some(t => !t.cover || !t.audio?.mp3)) {
-      setFormError('Each track needs a cover & video')
-      return
-    }
+     const missingFile = tracks.some(t => {
+   const hasImage = isBundle ? !!t.trackImage : !!t.cover;   // 👈 key line
+   return !hasImage || !t.audio?.mp3;        // add “|| !t.video” if video is mandatory
+ });
+
+ if (missingFile) {
+   setFormError('Each track needs an image and audio file'); // update wording
+   return;
+ }
     if (!ownershipConfirmed || !termsAccepted) {
       setFormError('Please accept the terms and confirm ownership')
       return
@@ -332,6 +344,12 @@ if (animationURI) {
 
       setMintedAddrs(minted.map(pk => pk.toBase58()))
 
+      // ─── open modal when user skipped the pool ───
+if (skipDeposit) {
+  setSuccessModal({ open: true });        // no pool address
+}
+
+
       // 3) create & seed AMM pool on-chain via Anchor
       if (!skipDeposit) {
         const conn2 = new Connection(clusterApiUrl('devnet'), 'confirmed')
@@ -390,6 +408,8 @@ if (animationURI) {
               .rpc()
           }
           setPoolAddr(bundlePda.toBase58())
+          setSuccessModal({ open: true, pool: bundlePda.toBase58() })
+
         } else {
           const poolKP = Keypair.generate()
           const [poolSigner] = PublicKey.findProgramAddressSync(
@@ -422,6 +442,8 @@ if (animationURI) {
             .signers([poolKP])
             .rpc()
           setPoolAddr(poolKP.publicKey.toBase58())
+          setSuccessModal({ open: true, pool: poolKP.publicKey.toBase58() })
+
         }
       }
     } catch (err: any) {
@@ -449,6 +471,73 @@ if (animationURI) {
 
   return (
     <div className="max-w-4xl mx-auto py-8">
+      {/* ─── Success pop-up ─── */}
+{successModal.open && (
+  <div
+    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
+    onClick={() => setSuccessModal({ open: false })}
+  >
+    <div
+      className="relative bg-[#1b1c20] rounded-xl p-8 w-full max-w-sm text-center"
+      onClick={e => e.stopPropagation()}
+    >
+      <button
+        className="absolute top-4 right-4 text-xl"
+        onClick={() => setSuccessModal({ open: false })}
+      >
+        ×
+      </button>
+
+      <h2 className="text-2xl font-bold mb-4">Musical&nbsp;NFT created!</h2>
+
+      {successModal.pool && (
+  <p className="break-all text-xs bg-[#23252b] rounded p-3 mb-6">
+    {successModal.pool}
+  </p>
+)}
+
+
+      <div className="space-y-3">
+        {skipDeposit ? (                                                      // 👈 user minted *without* pool
+  <Link
+    href={`/list-nft/${mintedAddrs[0]}`}                              // mint address → list page
+    className="block w-full py-3 rounded bg-[#ffc371] text-black font-bold hover:bg-[#ffb24d] text-center"
+    onClick={() => setSuccessModal({ open: false })}                  // close modal
+  >
+    List for Sale
+  </Link>
+) : (                                                                 // 👈 pool *was* created
+  <Link
+    href={`/amm?addr=${successModal.pool}`}                           // pool address → AMM page
+    className="block w-full py-3 rounded bg-[#ffc371] text-black font-bold hover:bg-[#ffb24d] text-center"
+    onClick={() => setSuccessModal({ open: false })}                  // close modal
+  >
+    Go to your pool
+  </Link>
+)}
+
+
+        <button
+          className="w-full py-3 rounded bg-muted text-muted-foreground hover:bg-muted/80"
+          onClick={() => {
+            /* reset wizard for a new mint */
+            setCurrentStep(0)
+            setTracks([{ ...blankTrack }])
+            setAlbumMeta({ albumName: '', year: '' })
+            setMintedAddrs([])
+            setPoolAddr(null)
+            setSuccessModal({ open: false })
+            setOwnershipConfirmed(false)
+            setTermsAccepted(false)
+          }}
+        >
+          Mint another
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
       {/* --- Back to Selection --- */}
       <Link
         href="/create"
@@ -561,7 +650,7 @@ if (animationURI) {
   <div>
     <label className="block text-sm font-medium mb-1 text-foreground">Image</label>
     <FileDrop
-      label="Image"
+      label={`track_${i}_image`} 
       value={isBundle ? track.trackImage || null : track.cover}
       onChange={file => isBundle ? updateTrack(i, { trackImage: file }) : updateTrack(i, { cover: file })}
       accept="image/*"
@@ -572,7 +661,7 @@ if (animationURI) {
   <div>
     <label className="block text-sm font-medium mb-1 text-foreground">Audio</label>
     <FileDrop
-      label="Audio"
+      label={`track_${i}_audio`} 
       value={track.audio.mp3}
       onChange={file => updateTrack(i, { audio: { mp3: file } })}
       accept="audio/mp3,audio/mpeg,audio/wav"

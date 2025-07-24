@@ -8,7 +8,6 @@ import {
   Connection, PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY, Keypair
 } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
-import dynamic from 'next/dynamic';
 import { Program, AnchorProvider, BN, Idl } from "@project-serum/anchor";
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createInitializeMintInstruction } from "@solana/spl-token";
 import {
@@ -19,10 +18,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Brush, Legend, ReferenceLine
 } from 'recharts';
 
-const WalletMultiButton = dynamic(
-  () => import('@solana/wallet-adapter-react-ui').then(mod => mod.WalletMultiButton),
-  { ssr: false }
-);
+
 
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 import { Metaplex } from "@metaplex-foundation/js";
@@ -32,7 +28,7 @@ import {
   getLockerPda,
   createMintWithUserFunds
 } from "@/lib/sound-memes";
-
+import { useSearchParams } from "next/navigation";
 
 
 
@@ -661,11 +657,33 @@ const [pools, setPools] = useState<any[]>([]);
 // one entry per memeMint base-58 string
 const [ownedCounts, setOwnedCounts] = useState<Record<string, number>>({});
 
+// ↕ somewhere around the other modal hooks
+const [buyFilled, setBuyFilled] = useState<{
+  open: boolean;
+  symbol: string;
+  amountMeme: number;      // UI units
+  priceWoodeng: number;    // UI units
+}>({ open: false, symbol: "", amountMeme: 0, priceWoodeng: 0 });
+
+// ↕ right below const [buyFilled, …]
+const [sellFilled, setSellFilled] = useState({
+  open:false, symbol:"", amountMeme:0, priceWoodeng:0
+});
+const [mintFilled, setMintFilled] = useState({
+  open:false, symbol:"", lockId:0
+});
+const [burnFilled, setBurnFilled] = useState({
+  open:false, symbol:"", amountUnlocked:0
+});
+
+
+
 
 // 2️⃣ leave the callback clean
 const refreshUserNfts = useCallback(async () => {
   if (!wallet.publicKey) {
     setUserPoolNfts({});
+    setOwnedCounts({});
     setNftsLoaded(true);
     return;
   }
@@ -675,6 +693,21 @@ const refreshUserNfts = useCallback(async () => {
     const mints = pools.map(p => p.memeMint);
     const nfts  = await getUserProtocolNfts(wallet.publicKey, mints);
     setUserPoolNfts(nfts);
+
+     /* ─── NEW: count only the NFTs that still exist ─── */
+    const counts: Record<string, number> = {};
+    await Promise.all(
+      Object.entries(nfts).map(async ([mintStr, lockers]) => {
+        const alive = await Promise.all(
+          Object.values(lockers).map(async ({ mint }) =>
+            (await stillOwnsNft(mint, wallet.publicKey!)) ? 1 : 0
+          )
+        );
+        counts[mintStr] = alive.reduce<number>((sum, v) => sum + v, 0);
+      })
+    );
+    setOwnedCounts(counts);          // <-- this drives “You own X”
+
   } finally {
     // even if getUserProtocolNfts throws we stop the loading state
     setNftsLoaded(true);
@@ -721,11 +754,19 @@ const [burnModal, setBurnModal] = useState<{
   open: boolean;
 }>({ pool: null, nfts: [], open: false });
 
+  const searchParams   = useSearchParams();
+  const deepLinkedMint = searchParams.get("mint");
 
   // 👇 REPLACE this whole arrow-function definition
 const handleMintNft = (pool: PoolType) =>
-  lockTokens(pool, setStatus, wallet, refreshUserNfts, (minted: MintedInfo) => {
+  lockTokens(pool, setStatus, wallet, refreshUserNfts, (minted) =>  {
     setUserPoolNfts(prev => {
+      setMintFilled({
+        open:true,
+        symbol: pool.symbol ?? '',
+        lockId:Number(minted.lockId)
+      });
+      refreshUserNfts();
       const key  = minted.memeMint;
       return {
         ...prev,
@@ -768,6 +809,8 @@ const handleMintNft = (pool: PoolType) =>
     .catch((e) => setStatus("Failed to load pools: " + e));
 }, [wallet.connected]);
 
+
+
 // place just after the other useEffect hooks
 useEffect(() => {
   // don't run until we know which meme mints to query
@@ -777,6 +820,21 @@ useEffect(() => {
   refreshUserNfts();             // will set nftsLoaded → true when done
 }, [wallet.publicKey, pools, refreshUserNfts]);
 
+  // --------------------------------------------
+  //  auto-open the Buy modal when we deep-link
+  // --------------------------------------------
+  const buyAutoOpened = useRef(false);
+
+  useEffect(() => {
+    if (buyAutoOpened.current) return;            // already opened once
+    if (!deepLinkedMint || pools.length === 0) return;
+
+    const pool = pools.find(p => p.memeMint.toBase58() === deepLinkedMint);
+    if (pool) {
+      handleOpenBuyModal(pool);
+      buyAutoOpened.current = true;
+    }
+  }, [deepLinkedMint, pools]);                     // ← deps
 
 
   const playDemo = (id: string, url?: string) => {
@@ -892,12 +950,20 @@ if (priceImpact > slippage) {
       if (!wallet.publicKey) throw new Error('Please connect your wallet!');
       if (!selectedPool || !modalTokensToBuy) throw new Error('Select amount to buy');
       const amountWoodengIn = getWoodengForMemeBuy(selectedPool, Number(modalTokensToBuy) * 10 ** MEME_DECIMALS);
-      const minMemeOut = Math.floor(Number(modalTokensToBuy) * 10 ** MEME_DECIMALS);
       const tx = await buySoundMeme({ pool: selectedPool, amountWoodengIn, minMemeOut, wallet });
 
       setTransactionStatus('success');
-      setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
-      setShowBuyModal(false);
+setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
+setShowBuyModal(false);                 // close the buy form
+
+// >>> open filled-order pop-up <<<
+setBuyFilled({
+  open: true,
+  symbol: selectedPool.symbol,
+  amountMeme: Number(modalTokensToBuy),
+  priceWoodeng: woodengUiNeeded,        // we computed this a few lines above
+});
+
     } catch (e: any) {
       setTransactionStatus('error');
       setTransactionMessage('Error: ' + (e.message || 'Unknown error'));
@@ -932,6 +998,12 @@ if (priceImpact > slippage) {
     setTransactionStatus('success');
     setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
     setShowSellModal(false);
+    setSellFilled({
+  open:true,
+  symbol:selectedPool.symbol,
+  amountMeme:Number(modalTokensToSell),
+  priceWoodeng:woodengUiOut
+});
   } catch (e: any) {
     setTransactionStatus('error');
     setTransactionMessage('Error: ' + (e.message || 'Unknown error'));
@@ -1064,10 +1136,7 @@ if (!amount) {
   return (
   <div className="min-h-screen bg-[#181920] text-white p-8">
     {/* Header */}
-    <div className="flex justify-between items-center mb-8">
-      <h1 className="text-3xl font-bold">Sound Meme Pools</h1>
-      <WalletMultiButton />
-    </div>
+    <h1 className="text-3xl font-bold mb-8">Sound Meme Pools</h1>
 
     {/* Status Banner */}
     {status && (
@@ -1230,9 +1299,21 @@ if (!amount) {
 
     {/* BUY MODAL */}
     {showBuyModal && selectedPool && (
-      <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center">
-        <div className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl flex flex-col items-center">
-          <button className="absolute top-5 right-5" onClick={() => setShowBuyModal(false)}><X /></button>
+  <div
+    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
+    onClick={() => setShowBuyModal(false)}          // 👈 overlay click
+  >
+    <div
+      className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl
+                 flex flex-col items-center relative"
+      onClick={e => e.stopPropagation()}            // 👈 block inner clicks
+    >
+      <button
+        className="absolute top-4 right-4"          // now inside the dialog
+        onClick={() => setShowBuyModal(false)}
+      >
+        <X />
+      </button>
           <h2 className="text-xl font-bold mb-2">Buy {selectedPool.symbol}</h2>
           <img src={selectedPool.imageUrl} className="w-24 h-24 rounded-xl mb-3" alt="meme" />
           <span className="text-[#c2c2c9] mb-3">{selectedPool.name}</span>
@@ -1276,9 +1357,21 @@ if (!amount) {
 
     {/* SELL MODAL */}
     {showSellModal && selectedPool && (
-      <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center">
-        <div className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl flex flex-col items-center">
-          <button className="absolute top-5 right-5" onClick={() => setShowSellModal(false)}><X /></button>
+  <div
+    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
+    onClick={() => setShowSellModal(false)}          // 👈 overlay click
+  >
+    <div
+      className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl
+                 flex flex-col items-center relative"
+      onClick={e => e.stopPropagation()}            // 👈 block inner clicks
+    >
+      <button
+        className="absolute top-4 right-4"          // now inside the dialog
+        onClick={() => setShowSellModal(false)}
+      >
+        <X />
+      </button>
           <h2 className="text-xl font-bold mb-2">Sell {selectedPool.symbol}</h2>
           <img src={selectedPool.imageUrl} className="w-24 h-24 rounded-xl mb-3" alt="meme" />
           <span className="text-[#c2c2c9] mb-3">{selectedPool.name}</span>
@@ -1320,37 +1413,172 @@ if (!amount) {
       </div>
     )}
 
-    {/* BURN MODAL */}
-    {burnModal.open && burnModal.pool && (
-      <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center">
-        <div className="bg-[#23232e] rounded-2xl p-6 w-full max-w-sm relative">
-          <button
-            className="absolute top-4 right-4"
-            onClick={() => setBurnModal(m => ({ ...m, open: false }))}
-          ><X /></button>
-          <h2 className="text-xl font-bold mb-4">Select NFT to Burn</h2>
-          <div className="flex flex-col gap-3">
-           {burnModal.nfts.map(({ lockId, mint }) => (
-  <button
-    key={lockId}
-    className="flex items-center gap-3 p-3 bg-[#181920] rounded-xl hover:bg-[#291a22]"
-    onClick={async () => {
-      setBurnModal(m => ({ ...m, open: false }));
-      await unlockTokens(burnModal.pool, mint, lockId, refreshUserNfts);
-    }}
-  >
-    <div className="w-10 h-10 rounded bg-[#2b2b37] flex items-center justify-center text-xs">
-      #{lockId}
+    {/* BUY-FILLED MODAL */}
+{buyFilled.open && (
+  <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center">
+    <div className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl text-center relative">
+      <button
+        className="absolute top-5 right-5"
+        onClick={() => setBuyFilled(b => ({ ...b, open: false }))}
+      >
+        <X />
+      </button>
+
+      <CheckCircle2 className="w-12 h-12 text-green-400 mx-auto mb-4" />
+      <h2 className="text-xl font-bold mb-2">Purchase confirmed!</h2>
+
+      <p className="text-[#c2c2c9] mb-4">
+        You bought&nbsp;
+        <span className="font-semibold">{buyFilled.amountMeme}</span>&nbsp;
+        {buyFilled.symbol}&nbsp;for&nbsp;
+        <span className="font-semibold">
+          {buyFilled.priceWoodeng.toFixed(5)} WOODENG
+        </span>.
+      </p>
+
+      <button
+        onClick={() => setBuyFilled(b => ({ ...b, open: false }))}
+        className="bg-[#ffc371] w-full py-2 rounded text-black font-bold"
+      >
+        Close
+      </button>
     </div>
-    <div className="break-all text-xs text-[#adadff]">{mint.toBase58()}</div>
-  </button>
-))}
+  </div>
+)}
 
 
-          </div>
-        </div>
+{sellFilled.open && (
+  <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center">
+    <div className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl text-center relative">
+      <button className="absolute top-5 right-5" onClick={() => setSellFilled(s => ({...s,open:false}))}><X/></button>
+      <CheckCircle2 className="w-12 h-12 text-green-400 mx-auto mb-4"/>
+      <h2 className="text-xl font-bold mb-2">Sale confirmed!</h2>
+      <p className="text-[#c2c2c9] mb-4">
+        You sold&nbsp;
+        <span className="font-semibold">{sellFilled.amountMeme}</span>&nbsp;
+        {sellFilled.symbol}&nbsp;for&nbsp;
+        <span className="font-semibold">
+          {sellFilled.priceWoodeng.toFixed(5)} WOODENG
+        </span>.
+      </p>
+      <button className="bg-[#ffc371] w-full py-2 rounded text-black font-bold"
+              onClick={() => setSellFilled(s => ({...s,open:false}))}>
+        Close
+      </button>
+    </div>
+  </div>
+)}
+
+{mintFilled.open && (
+  <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center">
+    <div className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl text-center relative">
+      <button
+        className="absolute top-5 right-5"
+        onClick={() => setMintFilled(m => ({ ...m, open: false }))}>
+        <X />
+      </button>
+
+      <CheckCircle2 className="w-12 h-12 text-green-400 mx-auto mb-4" />
+      <h2 className="text-xl font-bold mb-2">NFT minted!</h2>
+
+      <p className="text-[#c2c2c9] mb-4">
+        Your&nbsp;
+        <span className="font-semibold">{mintFilled.symbol}</span>
+        &nbsp;locker&nbsp;#
+        <span className="font-semibold">{mintFilled.lockId}</span>
+        &nbsp;is now live.
+      </p>
+
+      <button
+        className="bg-[#ffc371] w-full py-2 rounded text-black font-bold"
+        onClick={() => setMintFilled(m => ({ ...m, open: false }))}>
+        Close
+      </button>
+    </div>
+  </div>
+)}
+
+
+{burnFilled.open && (
+  <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center">
+    <div className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl text-center relative">
+      <button
+        className="absolute top-5 right-5"
+        onClick={() => setBurnFilled(b => ({ ...b, open: false }))}>
+        <X />
+      </button>
+
+      <CheckCircle2 className="w-12 h-12 text-green-400 mx-auto mb-4" />
+      <h2 className="text-xl font-bold mb-2">Tokens unlocked!</h2>
+
+      <p className="text-[#c2c2c9] mb-4">
+        You burned an&nbsp;
+        <span className="font-semibold">{burnFilled.symbol}</span>
+        &nbsp;NFT and received&nbsp;
+        <span className="font-semibold">
+          {burnFilled.amountUnlocked.toLocaleString()}
+        </span>
+        &nbsp;{burnFilled.symbol} back.
+      </p>
+
+      <button
+        className="bg-[#ffc371] w-full py-2 rounded text-black font-bold"
+        onClick={() => setBurnFilled(b => ({ ...b, open: false }))}>
+        Close
+      </button>
+    </div>
+  </div>
+)}
+
+
+
+
+
+    {/* BURN MODAL */}
+{burnModal.open && burnModal.pool && (
+  <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center">
+    <div className="bg-[#23232e] rounded-2xl p-6 w-full max-w-sm relative">
+      <button
+        className="absolute top-4 right-4"
+        onClick={() => setBurnModal(m => ({ ...m, open: false }))}>
+        <X />
+      </button>
+
+      <h2 className="text-xl font-bold mb-4">Select NFT to Burn</h2>
+
+      <div className="flex flex-col gap-3">
+        {burnModal.nfts.map(({ lockId, mint }) => (
+          <button
+            key={lockId}
+            className="flex items-center gap-3 p-3 bg-[#181920] rounded-xl hover:bg-[#291a22]"
+            onClick={async () => {
+              // close picker
+              setBurnModal(m => ({ ...m, open: false }));
+              // burn & unlock
+              await unlockTokens(
+                burnModal.pool!,
+                mint,
+                lockId,
+                refreshUserNfts
+              );
+              // show toast
+              setBurnFilled({
+                open: true,
+                symbol: burnModal.pool!.symbol ?? '',
+                amountUnlocked: getMintThreshold(burnModal.pool!)
+              });
+            }}>
+            <div className="w-10 h-10 rounded bg-[#2b2b37] flex items-center justify-center text-xs">
+              #{lockId}
+            </div>
+            <div className="break-all text-xs text-[#adadff]">{mint.toBase58()}</div>
+          </button>
+        ))}
       </div>
-    )}
+    </div>
+  </div>
+)}
+
 
     {/* Pool Detail Modal */}
     {showDetail && detailPool && (

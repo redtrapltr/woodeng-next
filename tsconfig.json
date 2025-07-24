@@ -1,27 +1,56 @@
 {
   "compilerOptions": {
+    /* ────────────────────────────────
+       baseline settings (unchanged)
+    ──────────────────────────────────*/
     "target": "ES2020",
     "lib": ["ES2020", "DOM"],
+
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
     "esModuleInterop": true,
+
     "module": "esnext",
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
     "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
+
+    /* Next.js plug-in  */
+    "plugins": [{ "name": "next" }],
+
+    /* ────────────────────────────────
+       path aliases  
+       (match the files that are still
+       under src/contexts/components/)
+    ──────────────────────────────────*/
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*":                   ["./src/*"],
+      "@/lib/*":               ["./src/lib/*"],
+      "@/idl/*":               ["./idl/*"],
+      "@/models/*":            ["./src/models/*"],
+      "@/utils/*": ["./src/utils/*"],     //  ← NEW
+
+      /* new — UI & profile components */
+      "@/components/*":        ["./src/contexts/components/*"],
+      "@/components/ui/*":     ["./src/contexts/components/ui/*"],
+      "@/components/profile/*":["./src/contexts/components/profile/*"],
+
+      /* store(s) used by profile feature */
+      "@/stores/*":            ["./src/stores/*"]
     }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx","**/*.json", ".next/types/**/*.ts"],
+
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.json",
+    ".next/types/**/*.ts"
+  ],
   "exclude": ["node_modules"]
 }
