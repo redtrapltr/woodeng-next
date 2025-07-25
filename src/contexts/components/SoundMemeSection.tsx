@@ -24,7 +24,7 @@ export function SoundMemeSection() {
         const provider = new AnchorProvider(connection, dummyWallet, {});
         const program = new Program(idl as Idl, POOL_PROGRAM_ID, provider);
 
-        const pools = await fetchSoundMemePoolsWithMetadata(program);
+        const pools = await fetchSoundMemePoolsWithMetadata();
 
         const sorted = pools
           .filter(
