@@ -1,5 +1,5 @@
 'use client'
-
+export const dynamic = 'force-dynamic'; 
 import poolIdlJson from '../../idl/my_sound_meme_pool.json';
 import lockerIdlJson from '../../idl/hybrid_meme_coin_nft_locker.json';
 import { createSetAuthorityInstruction, AuthorityType } from '@solana/spl-token';
