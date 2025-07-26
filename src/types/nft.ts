@@ -23,6 +23,9 @@ export type NFT = {
   price:  { sol: number; woodeng: number; usd: number };
   status: 'available' | 'sold' | 'auction' | 'listed';
 
+  /** Wallet publicKey du vendeur pour les listings directs */
+  seller?: string;                // ← ajout
+
   /* ───── filters  ─────── */
   type:      'single' | 'bundle';   // single NFT vs bundle-vault
   tokenType: 'woodeng' | 'sol';     // quote currency

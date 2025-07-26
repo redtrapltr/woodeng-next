@@ -32,6 +32,7 @@ export type NFT = {
   audioUrl: string;
   price: { sol: number; woodeng: number; usd: number };
   status: 'available' | 'sold' | 'auction' | 'listed';
+  seller?: string;            // ← NEW
   type: 'single' | 'bundle';
   tokenType: 'woodeng' | 'sol';
   nftType: 'music' | 'soundmeme';
@@ -182,9 +183,16 @@ export default function MarketplacePage() {
                 : 'space-y-4'
             }
           >
-            {pageNfts.map((n) => (
-              <NFTCard key={`${n.id}-${n.hasPool}`} nft={n} view={view} onOpen={openCard} />
-            ))}
+            {pageNfts.map(n => (
+  <NFTCard
+    key={`${n.id}-${n.hasPool}`}
+    nft={n}
+    view={view}
+    onOpen={openCard}
+    userPubkey={publicKey?.toBase58()} 
+  />
+))}
+
           </div>
 
           {busy && (
