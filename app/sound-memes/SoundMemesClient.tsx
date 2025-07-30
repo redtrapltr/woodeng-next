@@ -6,14 +6,14 @@
 export const dynamic = 'force-dynamic'; 
 import poolIdlJson from '../../idl/my_sound_meme_pool.json';
 import lockerIdlJson from '../../idl/hybrid_meme_coin_nft_locker.json';
-import { createSetAuthorityInstruction, AuthorityType } from '@solana/spl-token';
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   Connection, PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY, Keypair
 } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { Program, AnchorProvider, BN, Idl } from "@project-serum/anchor";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createInitializeMintInstruction } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress,
+         createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 import {
   Play, Pause, Loader2, ArrowUpRight, ArrowDownRight,
   CheckCircle2, AlertCircle, Info, X, Pickaxe
@@ -44,6 +44,30 @@ type UserPoolNfts = Record<
 function assertWallet(wallet: WalletContextState): asserts wallet is WalletContextState & { publicKey: PublicKey } {
   if (!wallet.publicKey) throw new Error("Wallet not connected");
 }
+
+
+
+function StepModal({ step, total, message }:{
+  step:number; total:number; message:string;
+}) {
+  return (
+    <div className="fixed inset-0 z-[1000] pointer-events-none">
+      {/* centred card */}
+      <div className="
+        absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2
+        w-72 rounded-2xl bg-[#23232e]/90 backdrop-blur-sm
+        shadow-2xl p-6 text-center text-white pointer-events-auto
+      ">
+        <h2 className="text-lg font-bold mb-1">
+          Step {step} of {total}
+        </h2>
+        <p className="text-sm opacity-90">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+
 
 // Anchor expects a Wallet object, not WalletContextState, so we create an adapter
 function getAnchorWallet(wallet: WalletContextState): {
@@ -97,6 +121,7 @@ function getMintThreshold(pool: PoolType): number {
 
 const POOL_PROGRAM_ID = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV');
 const LOCKER_PROGRAM_ID = new PublicKey('cJcMJ8YWacxRPMG5r1E8GmVgxnS9KogUe6m7sN2TaHS');
+const METADATA_PROGRAM_ID   = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"); // ← NEW
 const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad');
 const PROJECT_WALLET = new PublicKey('34JBFxZnw7f6Ye9dsHpeLTnDjA1cU3HnJL1ABFVpjBMb');
 const connection = new Connection("https://api.devnet.solana.com", "confirmed");
@@ -270,82 +295,69 @@ type MintedInfo = {
 };
 
 // ----- MINT LOGIC (USE THIS FOR NFT MINTING, CALL IN YOUR HANDLER) -----
+// ──────────────────────────────────────────────────────────────────
+//  REPLACE your current lockTokens(...) with the block below
+// ──────────────────────────────────────────────────────────────────
 async function lockTokens(
   pool: PoolType,
   setStatus: (msg: string) => void,
   wallet: WalletContextState,
   refresh: () => Promise<void>,
-  onMintSuccess?: (info: MintedInfo) => void       // <— new
+  onMintSuccess?: (info: MintedInfo) => void
 ) {
-  setStatus("Locking tokens & minting NFT...");
+    /* — NEW — show progress pop-up */
   try {
-    if (!wallet.publicKey) throw new Error("Connect wallet");
-    const memeMint = pool.memeMint;
+    if (!wallet.publicKey) throw new Error("Connect wallet first");
 
-    // 1. Generate Keypair for NFT mint
+    const memeMint    = pool.memeMint;
     const mintKeypair = Keypair.generate();
-    const nftMint = mintKeypair.publicKey;
+    const nftMint     = mintKeypair.publicKey;
 
-    // 2. Derive counter PDA and get lockId
+    /* ── STEP 1 ─────────────────────────────────── */
+    setTxStep({ step: 1, total: 4, message: "Creating counter / mint…" });
+
     const [counterPda] = await PublicKey.findProgramAddress(
-      [Buffer.from('counter'), memeMint.toBuffer(), wallet.publicKey.toBuffer()],
+      [Buffer.from("counter"), memeMint.toBuffer(), wallet.publicKey.toBuffer()],
       LOCKER_PROGRAM_ID
     );
-    const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
+    const provider      = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
     const lockerProgram = new Program(lockerIdl, LOCKER_PROGRAM_ID, provider);
 
-    let counterAccount;
-    try {
-      counterAccount = await lockerProgram.account.lockCounter.fetch(counterPda);
-    } catch (e) {
-      // Counter not created yet, create it
+    // initialise counter if missing
+    if (!(await connection.getAccountInfo(counterPda))) {
       await lockerProgram.methods.initializeCounter().accounts({
         user: wallet.publicKey,
         counter: counterPda,
         memeMint,
-        systemProgram: SystemProgram.programId,
+        systemProgram: SystemProgram.programId
       }).rpc();
-      counterAccount = await lockerProgram.account.lockCounter.fetch(counterPda);
     }
-    const lockId = typeof counterAccount.count === "number"
-      ? counterAccount.count
-      : Number(counterAccount.count);
+    const { count } = await lockerProgram.account.lockCounter.fetch(counterPda);
+    const lockId = Number(count);
 
-    // 3. Derive locker PDA using memeMint, user pubkey, lockId
+    /* ── STEP 2 ─────────────────────────────────── */
+    setTxStep({ step: 2, total: 4, message: "Creating on-chain accounts…\nYou’ll see 3 wallet pop-ups – approve each" });
+
     const [lockerPda] = await getLockerPda(memeMint, wallet.publicKey, lockId);
-
-    // 4. Create the mint with lockerPda as authority
     await createMintWithPdaAuthority(connection, wallet, lockerPda, [mintKeypair]);
 
-    // 5. Ensure user's meme ATA exists
-    const userMemeAta = await createAtaIfNotExists(connection, wallet, memeMint, wallet.publicKey);
+    const userMemeAta   = await createAtaIfNotExists(connection, wallet, memeMint, wallet.publicKey);
+    const userNftAta    = await createAtaIfNotExists(connection, wallet, nftMint,  wallet.publicKey);
+    const lockerMemeAta = await getAta(lockerPda, memeMint, true);
 
-    // 6. Create user's NFT ATA for the new mint
-    const userNftAccount = await createAtaIfNotExists(connection, wallet, nftMint, wallet.publicKey);
+    await ensureLockerInitialized({ ...pool, nftMint }, wallet);
 
-    // 7. Locker meme account (PDA-owned ATA for meme tokens)
-    const lockerMemeAccount = await getAta(lockerPda, memeMint, true);
+    /* ── STEP 3 ─────────────────────────────────── */
+    setTxStep({ step: 3, total: 4, message: "Uploading metadata to IPFS…" });
 
-    // 8. Ensure locker is initialized for this new mint!
-    await ensureLockerInitialized({
-      ...pool,
-      nftMint: nftMint,
-    }, wallet);
+    const imageUrl = pool.imageFile instanceof File
+      ? `ipfs://${await pinFile(pool.imageFile)}`
+      : pool.imageUrl ?? "";
+    const audioUrl = pool.audioFile instanceof File
+      ? `ipfs://${await pinFile(pool.audioFile)}`
+      : pool.audioUrl ?? "";
 
-    // 9. Upload image/audio to Pinata if needed
-    let imageUrl = pool.imageUrl;
-    let audioUrl = pool.audioUrl;
-    if (pool.imageFile instanceof File) {
-      const imageCID = await pinFile(pool.imageFile);
-      imageUrl = `ipfs://${imageCID}`;
-    }
-    if (pool.audioFile instanceof File) {
-      const audioCID = await pinFile(pool.audioFile);
-      audioUrl = `ipfs://${audioCID}`;
-    }
-
-    // 10. Upload metadata.json to Pinata
-    const metadata = {
+    const meta = {
       name: pool.name,
       symbol: pool.symbol,
       description: pool.description,
@@ -354,62 +366,57 @@ async function lockTokens(
       attributes: [
         ...(pool.attributes || []),
         { trait_type: "MemeMint", value: memeMint.toBase58() },
-        { trait_type: "LockId", value: lockId.toString() }
+        { trait_type: "LockId",   value: lockId.toString() }
       ],
-      properties: {
-        files: [
-          { uri: imageUrl, type: "image/png" },
-          { uri: audioUrl, type: "audio/mpeg" }
-        ]
-      }
+      properties: { files: [
+        { uri: imageUrl, type: "image/png" },
+        { uri: audioUrl, type: "audio/mpeg" }
+      ]}
     };
-    const metadataBlob = new Blob([JSON.stringify(metadata)], { type: "application/json" });
-    const metadataFile = new File([metadataBlob], "metadata.json");
-    const metaCID = await pinFile(metadataFile);
-    const metadataUri =   `https://gateway.pinata.cloud/ipfs/${metaCID}`;
-    // ----> ADD THIS:
-console.log('Mint NFT Metadata:', metadata, 'URI:', metadataUri);
-// <----
 
-    // 11. Mint via on-chain contract
+    const cid = await pinFile(
+      new File([new Blob([JSON.stringify(meta)], { type: "application/json" })], "metadata.json")
+    );
+    const metaUri = `https://gateway.pinata.cloud/ipfs/${cid}`;
+
+    /* ── STEP 4 ─────────────────────────────────── */
+    setTxStep({ step: 4, total: 4, message: "Signing final mint transaction…" });
+
     await lockerProgram.methods.lockTokensAndMintNft(
       pool.name,
       pool.symbol,
-      metadataUri
+      metaUri
     ).accounts({
       user: wallet.publicKey,
-      userMemeAccount: userMemeAta,
-      locker: lockerPda,
-      lockerMemeAccount,
-      nftMint: nftMint,
-      userNftAccount,
+      userMemeAccount:   userMemeAta,
+      locker:            lockerPda,
+      lockerMemeAccount: lockerMemeAta,
+      nftMint,
+      userNftAccount:    userNftAta,
       metadata: (
         await PublicKey.findProgramAddress(
-          [
-            Buffer.from("metadata"),
-            new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s").toBuffer(),
-            nftMint.toBuffer()
-          ],
-          new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s")
+          [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), nftMint.toBuffer()],
+          METADATA_PROGRAM_ID
         )
       )[0],
-      tokenMetadataProgram: new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"),
+      tokenMetadataProgram: METADATA_PROGRAM_ID,
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
       rent: SYSVAR_RENT_PUBKEY,
     }).rpc();
 
-    setStatus("NFT minted!");
-    onMintSuccess?.({
-  mint: nftMint,               // <- pass it up
-  memeMint: memeMint.toBase58(),
-  lockId
-});
-await refresh(); // make new NFT visible after TX finality
-  } catch (e: any) {
-    setStatus("NFT mint failed: " + (e.message || e.toString()));
+    /* ── SUCCESS ────────────────────────────────── */
+    setTxStep(null);
+    onMintSuccess?.({ mint: nftMint, memeMint: memeMint.toBase58(), lockId });
+    await refresh();
+  } catch (err: any) {
+    setStatus("NFT mint failed: " + (err.message ?? err.toString()));
+    throw err;
+  } finally {
+    setTxStep(null);   // always hide modal
   }
 }
+
 
 
 
@@ -608,8 +615,21 @@ const buyerMemeAta = await getAssociatedTokenAddress(pool.memeMint, wallet.publi
     const ataTx = new Transaction().add(...instructions);
     ataTx.feePayer = wallet.publicKey;
     ataTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-    const signed = await wallet.signTransaction!(ataTx);
-    await connection.sendRawTransaction(signed.serialize());
+    try {
+  const signed = await wallet.signTransaction!(ataTx);
+  const txSig = await connection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+  });
+  await connection.confirmTransaction(txSig, 'confirmed');
+} catch (e: any) {
+  if (e.message?.includes('already been processed')) {
+    console.warn('Ignoring duplicate transaction');
+  } else {
+    throw e;
+  }
+}
+
   }
 
 
@@ -734,6 +754,8 @@ const refreshUserNfts = useCallback(async () => {
   const [modalTokensToSell, setModalTokensToSell] = useState('');
   const [slippage, setSlippage] = useState(1); // default 1%
   const [status, setStatus] = useState<string | null>(null);
+  const [txStep, setTxStep] = useState<{ step: number, total: number, message: string } | null>(null);
+
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
@@ -761,17 +783,19 @@ const [burnModal, setBurnModal] = useState<{
   const searchParams   = useSearchParams();
   const deepLinkedMint = searchParams.get("mint");
 
-  // 👇 REPLACE this whole arrow-function definition
-const handleMintNft = (pool: PoolType) =>
-  lockTokens(pool, setStatus, wallet, refreshUserNfts, (minted) =>  {
+const handleMintNft = (pool: PoolType) => {
+  // prevent a second click while the modal is open
+  if (txStep) return;
+
+  lockTokens(pool, setStatus, wallet, refreshUserNfts, minted => {
     setUserPoolNfts(prev => {
       setMintFilled({
-        open:true,
+        open:  true,
         symbol: pool.symbol ?? '',
-        lockId:Number(minted.lockId)
+        lockId: Number(minted.lockId),
       });
-      refreshUserNfts();
-      const key  = minted.memeMint;
+
+      const key = minted.memeMint;
       return {
         ...prev,
         [key]: {
@@ -781,15 +805,17 @@ const handleMintNft = (pool: PoolType) =>
             json: {
               attributes: [
                 { trait_type: 'MemeMint', value: key },
-                { trait_type: 'LockId',   value: String(minted.lockId) }
-              ]
-            }
-          }
-        }
+                { trait_type: 'LockId',   value: String(minted.lockId) },
+              ],
+            },
+          },
+        },
       };
     });
-    refreshUserNfts(); // Call this separately, not as part of setUserPoolNfts!
+
+    refreshUserNfts();          // refresh list after TX finality
   });
+};
 
 
 
@@ -884,8 +910,21 @@ const buyerMemeAta = await getAssociatedTokenAddress(pool.memeMint, wallet.publi
       const ataTx = new Transaction().add(...instructions);
       ataTx.feePayer = wallet.publicKey;
       ataTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      const signed = await wallet.signTransaction!(ataTx);
-      await connection.sendRawTransaction(signed.serialize());
+      try {
+  const signed = await wallet.signTransaction!(ataTx);
+  const txSig = await connection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+  });
+  await connection.confirmTransaction(txSig, 'confirmed');
+} catch (e: any) {
+  if (e.message?.includes('already been processed')) {
+    console.warn('Ignoring duplicate transaction');
+  } else {
+    throw e;
+  }
+}
+
     }
 
     // Anchor setup
@@ -1020,60 +1059,67 @@ setBuyFilled({
 
 
 async function unlockTokens(
-  pool: any,
+  pool: PoolType,
   nftMint: PublicKey,
   lockId: number | bigint,
-  refresh: () => Promise<void>           // 👈 NEW
+  refresh: () => Promise<void>
 ) {
-  setStatus("Burning NFT & unlocking tokens...");
+  /* ➊ — show one-step progress modal */
+  setTxStep({
+    step : 1,
+    total: 1,
+    message: "Burning NFT & unlocking tokens…"
+  });
+
   try {
-    if (!wallet.publicKey) throw new Error("Connect wallet");
-    if (!nftMint) {
-      setStatus("No NFT to burn for this pool!");
-      return;
-    }
+    if (!wallet.publicKey) throw new Error("Connect wallet first");
+    if (!nftMint) throw new Error("No NFT mint provided");
 
-    // 1. Derive locker PDA using memeMint, user, lockId
-    const [lockerPda] = await getLockerPda(pool.memeMint, wallet.publicKey!, BigInt(lockId));
-
-    // 2. All the account PDAs
-    const userMemeAta = await getAta(wallet.publicKey, pool.memeMint);
-    const lockerMemeAccount = await getAta(lockerPda, pool.memeMint, true);
+    /* —— guard: is the NFT account still there? —— */
     const userNftAccount = await getAta(wallet.publicKey, nftMint);
-    const info = await connection.getAccountInfo(userNftAccount);
-if (!info) {
-  setStatus("That NFT account was never created – are you sure you minted from this wallet?");
-  return;
-}
-    const amount = (await connection.getTokenAccountBalance(userNftAccount))
-               .value.uiAmount;
-if (!amount) {
-  setStatus("This NFT is already burnt (balance = 0).");
-  await refresh();          // flush stale local state
-  return;
-}
+    const accInfo = await connection.getAccountInfo(userNftAccount);
+    if (!accInfo) throw new Error("NFT account not found – did you mint from this wallet?");
+    const bal = (await connection.getTokenAccountBalance(userNftAccount)).value.uiAmount;
+    if (!bal) throw new Error("This NFT is already burned (balance = 0).");
 
-    // 3. Anchor provider and program
-    const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
+    /* —— PDAs —— */
+    const [lockerPda]       = await getLockerPda(pool.memeMint, wallet.publicKey, BigInt(lockId));
+    const userMemeAta       = await getAta(wallet.publicKey, pool.memeMint);
+    const lockerMemeAccount = await getAta(lockerPda,      pool.memeMint, true);
+
+    /* —— Anchor call —— */
+    const provider      = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
     const lockerProgram = new Program(lockerIdl, LOCKER_PROGRAM_ID, provider);
 
-    // 4. Call the burn
-    await lockerProgram.methods.burnNftAndUnlockTokens().accounts({
-      user: wallet.publicKey,
-      userMemeAccount: userMemeAta,
-      locker: lockerPda,
-      lockerMemeAccount,
-      nftMint,
-      userNftAccount,
-      tokenProgram: TOKEN_PROGRAM_ID
-    }).rpc();
+    await lockerProgram.methods
+      .burnNftAndUnlockTokens()
+      .accounts({
+        user: wallet.publicKey,
+        userMemeAccount: userMemeAta,
+        locker: lockerPda,
+        lockerMemeAccount,
+        nftMint,
+        userNftAccount,
+        tokenProgram: TOKEN_PROGRAM_ID
+      })
+      .rpc();
 
-    setStatus("Tokens unlocked!");
-    await refreshUserNfts();
-  } catch (e: any) {
-    setStatus("Unlock failed: " + (e.message || e.toString()));
+    /* refresh local state & show success pop-up */
+    await refresh();
+    setBurnFilled({
+      open: true,
+      symbol: pool.symbol ?? "",
+      amountUnlocked: getMintThreshold(pool)
+    });
+  } catch (err: any) {
+    /* keep error banner behaviour */
+    setStatus("Unlock failed: " + (err.message ?? err.toString()));
+  } finally {
+    /* ➋ — always close the progress modal */
+    setTxStep(null);
   }
 }
+
 
 
 
@@ -1152,6 +1198,11 @@ if (!amount) {
       </div>
     )}
 
+
+    {/* Global step-progress modal */}
+    {txStep && <StepModal {...txStep} />}
+
+
     {/* Card Grid */}
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
       {pools.map((pool, i) => {
@@ -1176,6 +1227,8 @@ if (!amount) {
                   {pool.category && (
                     <span className="bg-blue-700/80 text-xs px-2 py-0.5 rounded-full text-white">{pool.category}</span>
                   )}
+                  
+
                 </div>
                 {/* Play Button Overlay */}
                 <button
@@ -1232,7 +1285,7 @@ if (!amount) {
   {/* ► MINT NFT -------------------------------------------------- */}
   <button
     className="h-10 rounded bg-[#907aff] text-white hover:bg-[#a593ff] transition disabled:opacity-40 flex items-center justify-center gap-1"
-    disabled={userMemeTokens(pool) < getMintThreshold(pool)}
+    disabled={!!txStep || userMemeTokens(pool) < getMintThreshold(pool)}
     onClick={e => { e.stopPropagation(); handleMintNft(pool); }}
   >
     <Pickaxe className="w-4 h-4" />
@@ -1482,15 +1535,16 @@ if (!amount) {
         <X />
       </button>
 
+      {/* ✔️ green tick */}
       <CheckCircle2 className="w-12 h-12 text-green-400 mx-auto mb-4" />
-      <h2 className="text-xl font-bold mb-2">NFT minted!</h2>
+
+      <h2 className="text-xl font-bold mb-2">Tokens locked!</h2>
 
       <p className="text-[#c2c2c9] mb-4">
-        Your&nbsp;
-        <span className="font-semibold">{mintFilled.symbol}</span>
-        &nbsp;locker&nbsp;#
-        <span className="font-semibold">{mintFilled.lockId}</span>
-        &nbsp;is now live.
+        You locked&nbsp;
+        <span className="font-semibold">{getMintThreshold(selectedPool ?? {})}</span>
+        &nbsp;{mintFilled.symbol} and minted locker&nbsp;#
+        <span className="font-semibold">{mintFilled.lockId}</span>.
       </p>
 
       <button
@@ -1501,6 +1555,7 @@ if (!amount) {
     </div>
   </div>
 )}
+
 
 
 {burnFilled.open && (

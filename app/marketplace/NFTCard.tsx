@@ -17,6 +17,9 @@ const Badge = ({ children }: { children: React.ReactNode }) => (
   </span>
 );
 
+
+
+
 /* ------------------------------------------------------------------ */
 /*  Card component (shared: marketplace & profile)                    */
 /* ------------------------------------------------------------------ */
@@ -24,12 +27,25 @@ export function NFTCard({
   nft,
   view,
   onOpen,
+  userPubkey,
 }: {
   nft: NFT;
   view: 'grid' | 'list';
   onOpen: (n: NFT) => void;
+  userPubkey?: string;
 }) {
   const { playing, play, stop } = useAudio(nft.audioUrl);
+
+  const isOwner = nft.seller && userPubkey
+  ? nft.seller.toLowerCase() === userPubkey.toLowerCase()
+  : false;
+
+const buttonLabel =
+  nft.hasPool
+    ? 'View Pool'
+    : nft.status === 'listed'
+      ? isOwner ? 'Update Listing' : 'Buy Listing'
+      : 'Buy Now';
 
   return (
     <div
@@ -49,7 +65,7 @@ export function NFTCard({
         <Web3Image
           src={nft.imageUrl}
           alt={nft.title}
-          className="object-cover w-full h-full bg-muted animate-pulse"
+          className="object-cover w-full h-full bg-muted"
         />
 
         {nft.audioUrl && (
@@ -116,9 +132,11 @@ export function NFTCard({
               e.stopPropagation();
               onOpen(nft);
             }}
-            className="w-full py-2 text-xs bg-primary rounded text-white hover:bg-primary/90"
+            className="w-full py-2 text-xs rounded text-white
+             bg-primary hover:bg-primary/90
+             disabled:bg-muted disabled:cursor-not-allowed"
           >
-            {nft.hasPool ? 'View Pool' : nft.status === 'listed' ? 'Update Listing' : 'Buy Now'}
+            {buttonLabel}
           </button>
         </div>
       </div>

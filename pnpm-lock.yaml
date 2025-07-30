@@ -68,6 +68,9 @@ importers:
       nft.storage:
         specifier: ^7.2.0
         version: 7.2.0(encoding@0.1.13)(node-fetch@2.7.0(encoding@0.1.13))
+      nodemailer:
+        specifier: ^7.0.5
+        version: 7.0.5
       p-limit:
         specifier: ^6.2.0
         version: 6.2.0
@@ -114,6 +117,9 @@ importers:
       '@types/node':
         specifier: ^20
         version: 20.19.9
+      '@types/nodemailer':
+        specifier: ^6.4.17
+        version: 6.4.17
       '@types/react':
         specifier: ^19
         version: 19.1.8
@@ -2171,6 +2177,9 @@ packages:
 
   '@types/node@20.19.9':
     resolution: {integrity: sha512-cuVNgarYWZqxRJDQHEB58GEONhOK79QVR/qYx4S7kcUObQvUwvFnYxJuuHUKm2aieN9X3yZB4LZsuYNU1Qphsw==}
+
+  '@types/nodemailer@6.4.17':
+    resolution: {integrity: sha512-I9CCaIp6DTldEg7vyUTZi8+9Vo0hi1/T8gv3C89yk1rSAAzoKQ8H8ki/jBYJSFoH/BisgLP8tkZMlQ91CIquww==}
 
   '@types/normalize-package-data@2.4.4':
     resolution: {integrity: sha512-37i+OaWTh9qeK4LSHPsyRC7NahnGotNuZvjLSgcPzblpHB3rrCJxAOgI5gCdKm7coonsaX1Of0ILiTcnZjbfxA==}
@@ -5158,6 +5167,10 @@ packages:
 
   node-releases@2.0.19:
     resolution: {integrity: sha512-xxOWJsBKtzAq7DY0J+DTzuz58K8e7sJbdgwkbMWQe8UYB6ekmsQ45q0M/tJDsGaZmbC+l7n57UV8Hl5tHxO9uw==}
+
+  nodemailer@7.0.5:
+    resolution: {integrity: sha512-nsrh2lO3j4GkLLXoeEksAMgAOqxOv6QumNRVQTJwKH4nuiww6iC2y7GyANs9kRAxCexg3+lTWM3PZ91iLlVjfg==}
+    engines: {node: '>=6.0.0'}
 
   normalize-package-data@2.5.0:
     resolution: {integrity: sha512-/5CMN3T0R4XTj4DcGaexo+roZSdSFW/0AOOTROrjxzCG1wrWXEsGbRKevjlIL+ZDE4sZlJr5ED4YW0yqmkK+eA==}
@@ -10252,6 +10265,10 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/nodemailer@6.4.17':
+    dependencies:
+      '@types/node': 20.19.9
+
   '@types/normalize-package-data@2.4.4': {}
 
   '@types/react-dom@19.1.6(@types/react@19.1.8)':
@@ -14341,6 +14358,8 @@ snapshots:
   node-mock-http@1.0.1: {}
 
   node-releases@2.0.19: {}
+
+  nodemailer@7.0.5: {}
 
   normalize-package-data@2.5.0:
     dependencies:

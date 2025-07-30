@@ -180,6 +180,7 @@ export async function loadMarketNfts(): Promise<NFT[]> {
       audioUrl:   toHttp(rawAudio),
       price:      { sol: 0, woodeng: order.price / 1e9, usd: 0 },
       status:     'listed',
+      seller : order.seller.toBase58(), 
       type:       'single',
       tokenType:  'woodeng',
       nftType:    'music',

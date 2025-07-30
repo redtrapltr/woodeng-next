@@ -109,7 +109,7 @@ export default function Header() {
     top: 0,
     zIndex: 20,
     left: 0,
-    overflow: "hidden",
+    overflow: "visible",
   };
 
   const contentWrapper: React.CSSProperties = {
@@ -215,26 +215,6 @@ export default function Header() {
         </div>
         {/* Right: Create, WOODENG, Wallet */}
         <div style={{ display: "flex", alignItems: "center", gap: 18, flexShrink: 0 }}>
-          {/* Profile icon */}
-          <Link href="/profile" legacyBehavior>
-            <a
-              title="Your profile"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 36,
-                height: 36,
-                borderRadius: "50%",
-                background: "#181929",
-                color: "#e6e6ff",
-                border: "1px solid #232332",
-                transition: "background .18s",
-              }}
-            >
-              <UserIcon size={18} />
-            </a>
-          </Link>
           <Link href="/create" legacyBehavior>
             <a style={createButtonStyle}>+ Create</a>
           </Link>
@@ -260,6 +240,26 @@ export default function Header() {
             <Waves size={18} style={{ color: "#a088fa" }} />
             {woodengBalance} WOODENG
           </div>
+          {/* Profile icon — now *after* the wallet button */}
+          <Link href="/profile" legacyBehavior>
+            <a
+              title="Your profile"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 36,
+                height: 36,
+                borderRadius: "50%",
+                background: "#181929",
+                color: "#e6e6ff",
+                border: "1px solid #232332",
+                transition: "background .18s",
+              }}
+            >
+              <UserIcon size={18} />
+            </a>
+          </Link>
           <WalletMultiButton
             style={{
               borderRadius: 16,
@@ -277,3 +277,4 @@ export default function Header() {
     </header>
   );
 }
+       

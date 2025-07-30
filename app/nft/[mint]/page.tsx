@@ -54,7 +54,10 @@ type FetchedNFT = {
   style?: string;
   copies?: number;
   royalties?: number;
-};
+  metadata?: any;          // ← NEW
+  year?: number | string;  // ← optional, if you store a year separately
+ };
+
 
 /* ---- resilient JSON fetch --------------------------------------- */
 async function fetchNftData(
@@ -90,6 +93,8 @@ async function fetchNftData(
     style:       meta.properties?.style,
     copies:      meta.properties?.copies,
     royalties:   nft.sellerFeeBasisPoints / 100,
+    metadata:    meta,                 // ← NEW
+    year:        meta.year,            // optional
   };
 }
 
@@ -336,11 +341,28 @@ if (!ataInfo) {
             <p className="text-muted-foreground">{nft.artist}</p>
             {nft.description && <p className="mt-4 text-sm">{nft.description}</p>}
 
+            {/* extra metadata as badges */}
+<div className="flex flex-wrap gap-2 mt-4">
+  {nft.style && (
+    <span className="bg-green-600/10 text-green-400 text-[11px] px-2 py-0.5 rounded-full">
+      {nft.style}
+    </span>
+  )}
+  {nft.royalties !== undefined && (
+    <span className="bg-green-600/10 text-green-400 text-[11px] px-2 py-0.5 rounded-full">
+      {nft.royalties}% royalties
+    </span>
+  )}
+</div>
+
+
             {/* summary */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6 mt-6">
               <SummaryCard
                 label="NFT ID"
-                value={`${nft.mint.toBase58().slice(0, 4)}…${nft.mint.toBase58().slice(-4)}`}
+                /* full address ▸ line-wrap if needed */
+                  value={`${nft.mint.toBase58().slice(0, 4)}…${nft.mint.toBase58().slice(-4)}`}
+                  full={nft.mint.toBase58()}
               />
               {order && (
                 <SummaryCard
@@ -397,12 +419,45 @@ const Centered: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 const SummaryCard: React.FC<{
-  label: string; value: string | number; helper?: string;
-}> = ({ label, value, helper }) => (
-  <div className="bg-muted/50 border border-border rounded-lg p-4">
-    <p className="text-xs text-muted-foreground">{label}</p>
-    <p className="text-2xl font-semibold leading-7 mt-1">{value}</p>
-    {helper && <p className="text-xs mt-1 text-muted-foreground">{helper}</p>}
+  label: string;
+  value: string | number; // what you display
+  full?: string;          // full text to copy (optional)
+  helper?: string;
+  long?: boolean;
+}> = ({ label, value, full, helper, long }) => (
+  <div className="relative bg-muted/50 border border-border rounded-lg p-4">
+    <p className="text-[11px] text-muted-foreground">{label}</p>
+    <p
+      /* smaller font + wrap long strings */
+      className={cn(
+        long ? 'text-sm break-all' : 'text-lg',
+        'font-medium mt-1'
+      )}
+    >
+      {value}
+    </p>
+    {helper && (
+      <p className="text-[11px] mt-1 text-muted-foreground">{helper}</p>
+    )}
+
+        {/* copy-to-clipboard button – only when `full` is provided */}
+    {full && (
+       <button
+   onClick={() => navigator.clipboard.writeText(full)}
+   title="Copy full ID"
+   /* push ~2 px closer to the edges & shrink SVG */
+   className="absolute top-1.5 right-1 text-muted-foreground hover:text-primary transition"
+ >
+   <svg
+     xmlns="http://www.w3.org/2000/svg"
+     width="12" height="12" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+   >
+     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+   </svg>
+ </button>
+    )}
   </div>
 );
 

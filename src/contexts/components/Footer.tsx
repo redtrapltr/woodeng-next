@@ -58,7 +58,7 @@ export function Footer() {
               Quick Links
             </h3>
             <div className="grid grid-cols-2 gap-2">
-              <Link href="#how-it-works" className="text-muted-foreground hover:text-white transition-colors text-sm py-1">
+              <Link href="/how-it-works" className="text-muted-foreground hover:text-white transition-colors text-sm py-1">
                 How It Works
               </Link>
               <Link href="/faq" className="text-muted-foreground hover:text-white transition-colors text-sm py-1">

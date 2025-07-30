@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import {
   Connection, PublicKey, SystemProgram, Transaction, Keypair, SYSVAR_RENT_PUBKEY,
 } from '@solana/web3.js'
@@ -309,8 +309,16 @@ export default function MemeLockerFactory() {
 
   // Pool Settings
   const [poolType, setPoolType] = useState<'bonding' | 'amm'>('bonding')
+  
+
+
   const [initialMemeLiquidity, setInitialMemeLiquidity] = useState(10000)
   const [initialWoodengLiquidity, setInitialWoodengLiquidity] = useState(10000)
+
+    /* ── si on repasse sur Bonding on force la liq. meme à 0 ── */
+useEffect(() => {
+  if (poolType === 'bonding') setInitialMemeLiquidity(0)
+}, [poolType])
 
   // Internals
   const [agreedTOS, setAgreedTOS] = useState(false)
@@ -698,18 +706,45 @@ setStatus("Sound Meme & Pool Created!")
                     <span className="ml-1">AMM (XYK)</span>
                   </label>
                 </div>
-                <div className="grid grid-cols-2 gap-6">
-                  <div>
-                    <label className="block mb-1 font-medium">Initial Meme Liquidity</label>
-                    <input type="number" value={initialMemeLiquidity} onChange={e => setInitialMemeLiquidity(Number(e.target.value) || 0)} className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2" />
-                    <span className="text-xs text-[#aaa]">Amount of meme tokens for pool</span>
-                  </div>
-                  <div>
-                    <label className="block mb-1 font-medium">Initial WOODENG Liquidity</label>
-                    <input type="number" value={initialWoodengLiquidity} onChange={e => setInitialWoodengLiquidity(Number(e.target.value) || 0)} className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2" />
-                    <span className="text-xs text-[#aaa]">Amount of WOODENG for pool</span>
-                  </div>
-                </div>
+                {/* ─────────── Inputs de liquidité ─────────── */}
+<div
+  className={
+    poolType === 'bonding'
+      ? 'grid grid-cols-1 gap-6'   /* 1 colonne si Bonding  */
+      : 'grid grid-cols-2 gap-6'   /* 2 colonnes si AMM     */
+  }
+>
+  {/*   ► Affiché uniquement quand AMM ◄ */}
+  {poolType === 'amm' && (
+    <div>
+      <label className="block mb-1 font-medium">Initial Meme Liquidity</label>
+      <input
+        type="number"
+        value={initialMemeLiquidity}
+        onChange={e => setInitialMemeLiquidity(Number(e.target.value) || 0)}
+        className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
+      />
+      <span className="text-xs text-[#aaa]">
+        Amount of meme tokens for pool
+      </span>
+    </div>
+  )}
+
+  {/*   ► Toujours affiché ◄ */}
+  <div>
+    <label className="block mb-1 font-medium">Initial WOODENG Liquidity</label>
+    <input
+      type="number"
+      value={initialWoodengLiquidity}
+      onChange={e => setInitialWoodengLiquidity(Number(e.target.value) || 0)}
+      className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
+    />
+    <span className="text-xs text-[#aaa]">
+      Amount of WOODENG for pool
+    </span>
+  </div>
+</div>
+
               </div>
 
               {/* Terms Card */}

@@ -1,24 +1,14 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
-import {
-  Grid,
-  List,
-  Play,
-  Pause,
-  Sparkles,
-  ChevronDown,
-  Package,
-  Layers,
-  LineChart,
-} from 'lucide-react';
+
 
 import { loadMarketNfts } from '@/lib/loadMarketNfts';
 import { cn } from '@/lib/utils';
-import { Web3Image, useAudio } from '@/contexts/components/Web3Media';
 import { NFTCard } from './NFTCard';
+import { Grid, List, ChevronDown, Package, Layers, LineChart } from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
@@ -55,9 +45,7 @@ export type NFT = {
   };
 };
 
-/* helper */
-const mmss = (sec: number) =>
-  `${Math.floor(sec / 60)}:${`${sec % 60}`.padStart(2, '0')}`;
+
 
 /* ------------------------------------------------------------------ */
 export default function MarketplacePage() {
@@ -79,7 +67,7 @@ export default function MarketplacePage() {
     source: '' | 'amm' | 'direct';
   }>({ type: [], token: [], source: '' });
 
-  const [currencyOpen, setCurrencyOpen] = useState(false);
+ 
 
   /* -------------- fetch once ------------- */
   useEffect(() => {
@@ -159,12 +147,8 @@ export default function MarketplacePage() {
         <Header view={view} setView={setView} />
 
         {/* ---------- filters ---------- */}
-        <Filters
-          filters={filters}
-          setFilters={setFilters}
-          currencyOpen={currencyOpen}
-          setCurrencyOpen={setCurrencyOpen}
-        />
+        <Filters filters={filters} setFilters={setFilters} />
+
 
         {/* ---------- list area ---------- */}
         <div
@@ -244,87 +228,116 @@ const Header = ({
   </div>
 );
 
-function Filters({
-  filters,
-  setFilters,
-  currencyOpen,
-  setCurrencyOpen,
-}: any) {
+function Filters({ filters, setFilters }: any) {
+  /* local state --------------------------------------------------- */
+  const [currencyOpen, setCurrencyOpen] = useState(false);
+  const currencyRef = useRef<HTMLDivElement | null>(null);
+
+  /* click-outside to close ---------------------------------------- */
+  useEffect(() => {
+    if (!currencyOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (!currencyRef.current?.contains(e.target as Node)) {
+        setCurrencyOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [currencyOpen]);
+
+  /* --------------------------------------------------------------- */
   return (
-    <div className="container mx-auto px-6 mt-6 flex flex-wrap gap-3">
-      <FilterPill
-        active={filters.type.includes('single')}
-        onClick={() =>
-          setFilters((f: any) => ({
-            ...f,
-            type: f.type.includes('single')
-              ? f.type.filter((x: any) => x !== 'single')
-              : [...f.type, 'single'],
-          }))
-        }
-        icon={<Package className="w-4 h-4" />}
-      >
-        Single NFTs
-      </FilterPill>
+    <div className="container mx-auto px-6 mt-6 flex flex-wrap gap-3 relative z-40">
+        {/* -------------- SINGLE ---------------- */}
+    <FilterPill
+      active={filters.type.includes('single')}
+      onClick={() =>
+        setFilters((f: any) => ({
+          ...f,
+          type: f.type.includes('single')
+            ? f.type.filter((x: any) => x !== 'single')
+            : [...f.type, 'single'],
+        }))
+      }
+      icon={<Package className="w-4 h-4" />}
+    >
+      Single NFTs
+    </FilterPill>
 
-      <FilterPill
-        active={filters.type.includes('bundle')}
-        onClick={() =>
-          setFilters((f: any) => ({
-            ...f,
-            type: f.type.includes('bundle')
-              ? f.type.filter((x: any) => x !== 'bundle')
-              : [...f.type, 'bundle'],
-          }))
-        }
-        icon={<Layers className="w-4 h-4" />}
-      >
-        Bundles
-      </FilterPill>
+    {/* -------------- BUNDLE --------------- */}
+    <FilterPill
+      active={filters.type.includes('bundle')}
+      onClick={() =>
+        setFilters((f: any) => ({
+          ...f,
+          type: f.type.includes('bundle')
+            ? f.type.filter((x: any) => x !== 'bundle')
+            : [...f.type, 'bundle'],
+        }))
+      }
+      icon={<Layers className="w-4 h-4" />}
+    >
+      Bundles
+    </FilterPill>
 
-      <FilterPill
-        active={filters.source === 'amm'}
-        onClick={() =>
-          setFilters((f: any) => ({
-            ...f,
-            source: f.source === 'amm' ? '' : 'amm',
-          }))
-        }
-        icon={<LineChart className="w-4 h-4" />}
-      >
-        AMM Pools
-      </FilterPill>
+    {/* -------------- AMM POOLS ------------ */}
+    <FilterPill
+      active={filters.source === 'amm'}
+      onClick={() =>
+        setFilters((f: any) => ({
+          ...f,
+          source: f.source === 'amm' ? '' : 'amm',
+        }))
+      }
+      icon={<LineChart className="w-4 h-4" />}
+    >
+      AMM Pools
+    </FilterPill>
 
-      <FilterPill
-        active={filters.source === 'direct'}
-        onClick={() =>
-          setFilters((f: any) => ({
-            ...f,
-            source: f.source === 'direct' ? '' : 'direct',
-          }))
-        }
-        icon={<Package className="w-4 h-4" />}
-      >
-        Direct Listings
-      </FilterPill>
+    {/* -------------- DIRECT --------------- */}
+    <FilterPill
+      active={filters.source === 'direct'}
+      onClick={() =>
+        setFilters((f: any) => ({
+          ...f,
+          source: f.source === 'direct' ? '' : 'direct',
+        }))
+      }
+      icon={<Package className="w-4 h-4" />}
+    >
+      Direct Listings
+    </FilterPill>
 
-      {/* currency */}
-      <div
-        className="relative"
-        onMouseEnter={() => setCurrencyOpen(true)}
-        onMouseLeave={() => setCurrencyOpen(false)}
-      >
-        <FilterPill
-          active={!!filters.token.length}
-          onClick={() => setCurrencyOpen((o: boolean) => !o)}
-          icon={<ChevronDown className="w-4 h-4 -rotate-90" />}
+      {/* ───────── Currency pill + dropdown ───────── */}
+      <div ref={currencyRef} className="relative">
+        {/* the pill itself */}
+        <button
+          onClick={() => setCurrencyOpen(o => !o)}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition',
+            currencyOpen || filters.token.length
+              ? 'bg-[#232332] text-primary'        // solid grey when open / active
+              : 'bg-muted/10 hover:bg-muted/20'
+          )}
         >
           Currency
-        </FilterPill>
+          <ChevronDown
+            className={cn(
+              'w-4 h-4 transition-transform',
+              currencyOpen ? 'rotate-0' : '-rotate-90'
+            )}
+          />
+        </button>
 
+        {/* the dropdown */}
         {currencyOpen && (
-          <div className="absolute mt-2 left-0 min-w-[150px] bg-popover border border-border rounded-lg shadow-lg py-1">
-            {(['woodeng', 'sol'] as const).map((tok) => (
+          <div
+  className="absolute z-50 mt-2 left-0 min-w-[160px]
+             bg-[#2c2c33]           /* same grey as wallet menu */
+             rounded-lg shadow-lg py-1"
+>
+
+            {(['woodeng', 'sol'] as const).map(tok => (
               <div
                 key={tok}
                 onClick={() =>
@@ -339,11 +352,11 @@ function Filters({
                   'px-4 py-2 text-sm cursor-pointer flex items-center gap-2 select-none',
                   filters.token.includes(tok)
                     ? 'bg-primary/10 text-primary'
-                    : 'hover:bg-muted/20',
+                    : 'hover:bg-muted/20'
                 )}
               >
                 {tok.toUpperCase()}
-                {filters.token.includes(tok) && '✓'}
+                {filters.token.includes(tok)}
               </div>
             ))}
           </div>
@@ -352,6 +365,7 @@ function Filters({
     </div>
   );
 }
+
 
 /* ------------------------------------------------------------------ */
 /*  Tiny helpers                                                      */
@@ -381,10 +395,4 @@ function FilterPill({
   );
 }
 
-function Badge({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-black/60 text-white">
-      {children}
-    </span>
-  );
-}
+
