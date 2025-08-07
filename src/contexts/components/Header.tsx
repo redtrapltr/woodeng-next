@@ -163,10 +163,11 @@ export default function Header() {
         {/* Left: Logo, Search, Nav */}
         <div style={leftSection}>
           <img
-            src="/hippo-logo.png"
-            alt="Logo"
-            style={{ width: 42, height: 42, objectFit: "cover", flexShrink: 0 }}
-          />
+  src="https://i.postimg.cc/hPSvz1KS/Woo-logo1.png"   // 👈 new logo URL
+  alt="Woodeng logo"
+  style={{ height: 28, width: "auto", flexShrink: 0 }} // 28 px matches the design in screenshot #1
+/>
+
           {/* Search Bar */}
           <input
             type="text"

@@ -2,15 +2,20 @@
 
 import React, { useState, useCallback, useEffect } from 'react'
 import {
-  Connection, PublicKey, SystemProgram, Transaction, Keypair, SYSVAR_RENT_PUBKEY,
+  Connection, PublicKey, SystemProgram, Transaction, Keypair,
+  SYSVAR_RENT_PUBKEY,
 } from '@solana/web3.js'
+
+
 import {
   Program, AnchorProvider, BN, Idl,
 } from '@project-serum/anchor'
 import { useWallet, WalletContextState } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import {
-  TOKEN_PROGRAM_ID, getAssociatedTokenAddress,createAssociatedTokenAccountInstruction, ASSOCIATED_TOKEN_PROGRAM_ID, createInitializeAccountInstruction, createInitializeMintInstruction, createMintToInstruction, createSetAuthorityInstruction, AuthorityType,
+  TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction,
+  ASSOCIATED_TOKEN_PROGRAM_ID, createInitializeMintInstruction, createMintToInstruction,
+  createSetAuthorityInstruction, AuthorityType,
 } from '@solana/spl-token'
 import idlJson from '../../idl/hybrid_meme_coin_nft_locker.json'
 import poolIdlJson from '../../idl/my_sound_meme_pool.json'
@@ -31,6 +36,64 @@ const PROGRAM_ID = new PublicKey('cJcMJ8YWacxRPMG5r1E8GmVgxnS9KogUe6m7sN2TaHS')
 const POOL_PROGRAM_ID = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV')
 const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad')
 const connection = new Connection('https://api.devnet.solana.com', 'confirmed')
+const BONDING_SUPPLY = 444_000_000;
+
+
+
+// ──────────────────────────────────────────────────────────────
+//  sendTx - helper: signs, sends, retries duplicate gracefully
+// ──────────────────────────────────────────────────────────────
+// AFTER  (accepts any signer-capable wallet)
+// -----------------------------------------------------------
+// 1⃣  Relax the helper-wallet interface
+// -----------------------------------------------------------
+type SignerWallet = {
+  publicKey: PublicKey | null;
+  signTransaction?: (tx: Transaction) => Promise<Transaction>;
+  signAllTransactions?: (txs: Transaction[]) => Promise<Transaction[]>;
+};
+
+export async function sendTx(
+  connection: Connection,
+  wallet: SignerWallet,
+  tx: Transaction,
+  extraSigners: Keypair[] = []
+) {
+  if (!wallet.publicKey) throw new Error('Wallet has no public key');
+
+  /* 1️⃣  finalize the header BEFORE anyone signs */
+  const { blockhash, lastValidBlockHeight } =
+    await connection.getLatestBlockhash('finalized');
+
+  tx.feePayer        = wallet.publicKey;
+  tx.recentBlockhash = blockhash;
+
+  /* 2️⃣  wallet signs */
+  const signedByWallet =
+    wallet.signTransaction
+      ? await wallet.signTransaction(tx)
+      : (await wallet.signAllTransactions!([tx]))[0];
+
+  /* 3️⃣  extra keypairs (if any) sign AFTER the wallet */
+  if (extraSigners.length) signedByWallet.partialSign(...extraSigners);
+
+  /* 4️⃣  send + confirm */
+  const sig = await connection.sendRawTransaction(
+    signedByWallet.serialize(),
+    { skipPreflight: false }
+  );
+
+  await connection.confirmTransaction(
+    { signature: sig, blockhash, lastValidBlockHeight },
+    'confirmed'
+  );
+
+  return sig;
+}
+
+
+
+
 const WOODENG_DECIMALS = 9;
 const MEME_DECIMALS = 0;
 
@@ -58,7 +121,8 @@ async function ensureAtaExists(
   owner: PublicKey,
   mint: PublicKey,
   payer: PublicKey,
-  isPdaOwner: boolean = false
+  wallet: WalletContextState,        // 👈 add param
+  isPdaOwner = false
 ): Promise<PublicKey> {
   const ata = await getAssociatedTokenAddress(mint, owner, isPdaOwner)
   const info = await connection.getAccountInfo(ata)
@@ -73,10 +137,17 @@ async function ensureAtaExists(
 );
     const tx = new Transaction().add(ix)
     tx.feePayer = payer
-    tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
-    // @ts-ignore
-    const signed = await window['solana'].signTransaction(tx)
-    await connection.sendRawTransaction(signed.serialize())
+    // AFTER   — pass the WalletContextState you already have
+tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+// the wallet that called ensureAtaExists signs the tx
+  try {
+    await sendTx(connection, wallet, tx)
+  } catch (err: any) {
+    // RPC may return “address already in use” if another tx made the ATA first.
+    if (!/already in use/i.test(err?.message ?? '')) throw err
+  }
+
+    
   }
   return ata
 }
@@ -115,9 +186,7 @@ async function setNftMintAuthorityToLocker(
   tx.feePayer = wallet.publicKey!
   tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
   if (!wallet.signTransaction) throw new Error('Wallet does not support signTransaction')
-  const signed = await wallet.signTransaction(tx)
-  const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false })
-  return sig
+  return await sendTx(connection, wallet, tx)
 }
 
 async function pinFile(file: File): Promise<string> {
@@ -239,10 +308,13 @@ async function createMintWithProvider(
   )
   tx.feePayer = provider.wallet.publicKey!
   tx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash
-  tx.partialSign(mintKeypair)
-  if (!provider.wallet.signTransaction) throw new Error('Wallet does not support signTransaction')
-  const signed = await provider.wallet.signTransaction(tx)
-  await provider.connection.sendRawTransaction(signed.serialize(), { skipPreflight: false })
+   // 👉 wallet signs first, then we add the mint keypair
+ await sendTx(
+   provider.connection,
+   provider.wallet as WalletContextState,
+   tx,
+   [mintKeypair]           // ← extra signer goes here
+ )
   return mintKeypair.publicKey
 }
 
@@ -263,8 +335,7 @@ async function mintToWithProvider(
   tx.feePayer = provider.wallet.publicKey!
   tx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash
   if (!provider.wallet.signTransaction) throw new Error('Wallet does not support signTransaction')
-  const signed = await provider.wallet.signTransaction(tx)
-  await provider.connection.sendRawTransaction(signed.serialize(), { skipPreflight: false })
+  await sendTx(provider.connection, provider.wallet, tx)
 }
 
 function StepModal({ open, step, onClose }: StepModalProps) {
@@ -317,8 +388,19 @@ export default function MemeLockerFactory() {
 
     /* ── si on repasse sur Bonding on force la liq. meme à 0 ── */
 useEffect(() => {
-  if (poolType === 'bonding') setInitialMemeLiquidity(0)
-}, [poolType])
+  if (poolType === 'bonding') {
+    setInitialMemeLiquidity(0);
+    setInitialWoodengLiquidity(0);   // ← optional
+  }
+}, [poolType]);
+
+
+useEffect(() => {
+  if (poolType === 'bonding') {
+    setTotalSupply(444_000_000);
+  }
+}, [poolType]);
+
 
   // Internals
   const [agreedTOS, setAgreedTOS] = useState(false)
@@ -335,156 +417,195 @@ const [tradeModal, setTradeModal] = useState<{
 const router = useRouter()
 
 
-  // ========== CREATION STEPS ==========
-  async function handleCreateAll() {
-    try {
-      if (!wallet.connected || !wallet.publicKey) throw new Error("Connect your wallet first!")
-      if (!memeName.trim() || !memeSymbol.trim() || !audioUri.trim()) throw new Error("Fill all meme details and upload audio!")
-      if (!agreedTOS || !agreedOwn) throw new Error("You must accept the terms to proceed.")
-      setStepModal({ open: true, step: "Step 1/8: Creating meme coin mint..." })
+// ──────────────────────────────────────────────────────────────
+//  Tiny helper – writes on-chain token-metadata for the MEME mint
+// ──────────────────────────────────────────────────────────────
+async function writeTokenMetadata(
+  provider: AnchorProvider,
+  mint: PublicKey,
+  uri: string,
+  name: string,
+  symbol: string
+) {
+  const metadataPda = findMetadataPda(mint);
 
-      const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" })
-      // 1. Create meme coin mint
-      const memeMintKey = await createMintWithProvider(provider, 0, wallet.publicKey)
-      setStepModal({ open: true, step: "Step 2/8: Minting meme coins to wallet..." })
-      const ata = await ensureAtaExists(wallet.publicKey, memeMintKey, wallet.publicKey, false)
-      await mintToWithProvider(provider, memeMintKey, ata, totalSupply, wallet.publicKey)
-
-      // 2. Create NFT mint and set authority
-      setStepModal({ open: true, step: "Step 3/8: Creating NFT mint..." })
-      const nftMintKey = await createMintWithProvider(provider, 0, wallet.publicKey)
-      await setNftMintAuthorityToLocker(wallet, nftMintKey, memeMintKey)
-
-      // 3. Upload metadata to IPFS
-      setStepModal({ open: true, step: "Step 4/8: Uploading metadata to IPFS..." })
-      const metadata = {
-        name: memeName,
-        symbol: memeSymbol,
-        description: memeDescription,
-        image: coverImageUri || "",
-        animation_url: audioUri,
-        attributes: [
-          { trait_type: "Category", value: "Sound Meme" }
-        ]
-      }
-
-      const blob = new Blob([JSON.stringify(metadata)], { type: "application/json" })
-      const file = new File([blob], "metadata.json")
-      const uri = await pinFile(file)
-
-      // 4. Set on-chain metadata for meme coin
-      setStepModal({ open: true, step: "Step 5/8: Setting on-chain token metadata..." })
-      const metadataPda = findMetadataPda(memeMintKey)
-      const ix = createCreateMetadataAccountV3Instruction(
-        {
-          metadata: metadataPda,
-          mint: memeMintKey,
-          mintAuthority: wallet.publicKey!,
-          payer: wallet.publicKey!,
-          updateAuthority: wallet.publicKey!,
+  const ix = createCreateMetadataAccountV3Instruction(
+    {
+      metadata: metadataPda,
+      mint,
+      mintAuthority: provider.wallet.publicKey!,
+      payer:         provider.wallet.publicKey!,
+      updateAuthority: provider.wallet.publicKey!,
+    },
+    {
+      createMetadataAccountArgsV3: {
+        data: {
+          name,
+          symbol,
+          uri,
+          sellerFeeBasisPoints: 0,
+          creators:   null,
+          collection: null,
+          uses:       null,
         },
-        {
-          createMetadataAccountArgsV3: {
-            data: {
-              name: memeName,
-              symbol: memeSymbol,
-              uri,
-              sellerFeeBasisPoints: 0,
-              creators: null,
-              collection: null,
-              uses: null,
-            },
-            isMutable: true,
-            collectionDetails: null,
-          },
-        }
-      )
-      const tx = new Transaction().add(ix)
-      tx.feePayer = wallet.publicKey!
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
-      if (!wallet.signTransaction) throw new Error('Wallet does not support signTransaction')
-      const signed = await wallet.signTransaction(tx)
-      await connection.sendRawTransaction(signed.serialize())
+        isMutable: true,
+        collectionDetails: null,   // ← required in mpl-token-metadata ≥1.10
+      },
+    },
+  );
 
-      // 5. CREATE THE POOL & VAULTS (all PDAs)
-setStepModal({ open: true, step: "Step 6/8: Creating Pool and Vaults..." })
-
-const [configPda] = await getConfigPda(memeMintKey)        // <--- get config PDA FIRST
-const lpMintKey = await createMintWithProvider(provider, 0, configPda) // <--- mint authority is config PDA
-const [poolMemeVault] = await getPoolMemeVaultPda(memeMintKey)
-const [poolWoodengVault] = await getPoolWoodengVaultPda(memeMintKey)
-
-
-      
-
-
-      // 6. Call initializeSoundMemeAndPool
-      const poolProgram = new Program(poolIdlJson as Idl, POOL_PROGRAM_ID, provider)
-      await poolProgram.methods
-  .initializeSoundMemeAndPool(
-    new BN(totalSupply),
-    poolType === 'bonding' ? 0 : 1 // 0 for bonding, 1 for AMM
-  )
-  .accounts({
-    authority: wallet.publicKey,
-    config: configPda,
-    memeMint: memeMintKey,
-    poolMemeVault,
-    poolWoodengVault,
-    lpMint: lpMintKey,
-    woodengMint: WOODENG_MINT, // <-- don't forget!
-    systemProgram: SystemProgram.programId,
-    tokenProgram: TOKEN_PROGRAM_ID,
-    rent: SYSVAR_RENT_PUBKEY,
-  })
-  .rpc()
-
-
-      // ✅ New, add liquidity in one go after initialize_sound_meme_and_pool
-// Make sure you have:
-const userMemeAta = await ensureAtaExists(wallet.publicKey, memeMintKey, wallet.publicKey, false)
-const userWoodengAta = await ensureAtaExists(wallet.publicKey, WOODENG_MINT, wallet.publicKey, false)
-// You also need a user LP ATA (for the minted LP tokens):
-const userLpAta = await ensureAtaExists(wallet.publicKey, lpMintKey, wallet.publicKey, false)
-
-await poolProgram.methods
-  .addLiquidity(
-    new BN(initialMemeLiquidity * (10 ** MEME_DECIMALS)),
-    new BN(initialWoodengLiquidity * (10 ** WOODENG_DECIMALS))
-  )
-  .accounts({
-    config: configPda,
-    poolMemeVault,
-    poolWoodengVault,
-    user: wallet.publicKey,
-    userMemeAta,
-    userWoodengAta,
-    lpMint: lpMintKey,
-    userLpAta,
-    tokenProgram: TOKEN_PROGRAM_ID,
-  })
-  .rpc()
+  await sendTx(
+    provider.connection,
+    provider.wallet as WalletContextState,
+    new Transaction().add(ix)
+  );
+}
 
 
 
-      // ─── close the progress modal ───
-setStepModal({ open: false, step: "" })
 
-// ─── open the success / trade pop-up ───
-setTradeModal({
-  open: true,
-  memeMint: memeMintKey,
-  configPda,              // handy if you need it later
-})
+  // ========== CREATION STEPS ==========
+  // ──────────────────────────────────────────────────────────────
+//  FULL replacement for handleCreateAll()
+// ──────────────────────────────────────────────────────────────
+async function handleCreateAll() {
+  try {
+    // ---------- sanity checks ----------
+    if (!wallet.connected || !wallet.publicKey)
+      throw new Error("Connect your wallet first!");
+    if (!memeName.trim() || !memeSymbol.trim() || !audioUri.trim())
+      throw new Error("Fill all meme details and upload audio!");
+    if (!agreedTOS || !agreedOwn)
+      throw new Error("You must accept the terms to proceed.");
 
-// (optional) still keep a plain-text status if you like
-setStatus("Sound Meme & Pool Created!")
+    const provider    = new AnchorProvider(connection, wallet as any,
+                                           { preflightCommitment: "confirmed" });
+    const poolProgram = new Program(poolIdlJson as Idl,
+                                    POOL_PROGRAM_ID, provider);
 
-    } catch (e: unknown) {
-      setStepModal({ open: true, step: "❌ Error: " + (e instanceof Error ? e.message : String(e)) })
-      setStatus("Error: " + (e instanceof Error ? e.message : String(e)))
+    // ---------- STEP 1 – upload cover ----------
+    setStepModal({ open:true, step:"Step 1/7: Uploading cover image…" });
+    const imgCid = coverImageUri
+      ? coverImageUri                                // already uploaded
+      : await pinFile(new File([], "cover.png"));    // (should never trip)
+
+    // ---------- STEP 2 – upload audio ----------
+    setStepModal({ open:true, step:"Step 2/7: Uploading audio…" });
+    const audioCid = audioUri;                       // FileUploader did this
+
+    // ---------- STEP 3 – upload metadata.json ----------
+    setStepModal({ open:true, step:"Step 3/7: Uploading metadata…" });
+    const metaJson = {
+      name: memeName,
+      symbol: memeSymbol,
+      description: memeDescription,
+      image: imgCid,
+      animation_url: audioCid,
+      attributes: [{ trait_type:"Category", value:"Sound Meme" }],
+    };
+    const metaUri = await pinFile(
+      new File([JSON.stringify(metaJson)],
+               "metadata.json", { type:"application/json" })
+    );
+
+    // ---------- STEP 4 – create MEME mint ----------
+    setStepModal({ open:true, step:"Step 4/7: Creating MEME mint…" });
+    const memeMintKey = await createMintWithProvider(provider, 0,
+                                                     wallet.publicKey);
+
+    // ---------- STEP 5 – write token-metadata account ----------
+    setStepModal({ open:true, step:"Step 5/7: Writing token metadata…" });
+    await writeTokenMetadata(provider, memeMintKey,
+                             metaUri, memeName, memeSymbol);
+
+    // ---------- STEP 5½ – pre-mint tokens if AMM ----------
+    const creatorMemeAta = await ensureAtaExists(
+      wallet.publicKey, memeMintKey, wallet.publicKey, wallet, false);
+    if (poolType === 'amm') {
+      await mintToWithProvider(provider, memeMintKey, creatorMemeAta,
+        initialMemeLiquidity * 10 ** MEME_DECIMALS, wallet.publicKey);
     }
+
+    // ---------- STEP 6 – initialise pool ----------
+setStepModal({ open:true, step:"Step 6/7: Initialising pool…" });
+
+/** ▼▼▼ NEW ▼▼▼  **/
+const VTOKENS_RAW = totalSupply * 10 ** MEME_DECIMALS;  // 444 000 000 for fair-launch
+const vtokens     = new BN(VTOKENS_RAW);                // virtual MEME reserve
+
+const P0_UI       = 0.0000009;           // 0.0000005 WOODENG (=  500 lamports)
+const p0Lamports  = new BN(Math.floor(P0_UI * 10 ** WOODENG_DECIMALS));
+
+const vwoodeng    = poolType === 'bonding'
+  ? vtokens.mul(p0Lamports)                             // bonding needs both reserves
+  : new BN(0);
+/** ▲▲▲ NEW ▲▲▲  **/
+
+const [configPda]        = await getConfigPda(memeMintKey);
+const [poolMemeVault]    = await getPoolMemeVaultPda(memeMintKey);
+const [poolWoodengVault] = await getPoolWoodengVaultPda(memeMintKey);
+const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
+
+
+     await poolProgram.methods
+  .initializeSoundMemeAndPool(
+    vtokens,         // ❶ NEW – virtual MEME reserve
+    vwoodeng,        // ❷ virtual WOODENG reserve (lamports)
+    poolType === 'bonding',
+    new BN(threshold),
+  )
+      .accounts({
+        authority:     wallet.publicKey,
+        config:        configPda,
+        memeMint:      memeMintKey,
+        poolMemeVault,
+        poolWoodengVault,
+        lpMint:        lpMintKey,
+        woodengMint:   WOODENG_MINT,
+        tokenProgram:  TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent:          SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+
+    // ---------- STEP 7 – add initial liquidity (AMM only) ----------
+    if (poolType === 'amm') {
+      setStepModal({ open:true, step:"Step 7/7: Adding initial liquidity…" });
+
+      const userWoodengAta = await ensureAtaExists(
+        wallet.publicKey, WOODENG_MINT, wallet.publicKey, wallet, false);
+      const userLpAta = await ensureAtaExists(
+        wallet.publicKey, lpMintKey, wallet.publicKey, wallet, false);
+
+      await poolProgram.methods
+        .addLiquidity(
+          new BN(initialMemeLiquidity    * 10 ** MEME_DECIMALS),
+          new BN(initialWoodengLiquidity * 10 ** WOODENG_DECIMALS),
+        )
+        .accounts({
+          config:          configPda,
+          poolMemeVault,
+          poolWoodengVault,
+          user:            wallet.publicKey,
+          userMemeAta:     creatorMemeAta,
+          userWoodengAta,
+          lpMint:          lpMintKey,
+          userLpAta,
+          tokenProgram:    TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+    }
+
+    // ---------- finished ----------
+    setStepModal({ open:false, step:"" });
+    setTradeModal({ open:true, memeMint:memeMintKey, configPda });
+    setStatus("Sound Meme & Pool created!");
+  } catch (e: any) {
+    setStepModal({ open:true, step:"❌ Error: " + (e.message ?? e) });
+    setStatus("Error: " + (e.message ?? e));
   }
+}
+
 
   // ====== SEARCH BAR LOGIC: fetch meme by address ======
   async function handleSearch() {
@@ -518,9 +639,9 @@ setStatus("Sound Meme & Pool Created!")
       const memeMint = locker.memeMint
       const nftMint = locker.nftMint
       const lockerPda = locker.lockerPda
-      const userMemeToken = await ensureAtaExists(wallet.publicKey, memeMint, wallet.publicKey, false)
-      const lockerMemeAccount = await ensureAtaExists(lockerPda, memeMint, wallet.publicKey, true)
-      const userNftToken = await ensureAtaExists(wallet.publicKey, nftMint, wallet.publicKey, false)
+      const userMemeToken = await ensureAtaExists(wallet.publicKey, memeMint, wallet.publicKey,wallet, false)
+      const lockerMemeAccount = await ensureAtaExists(lockerPda, memeMint, wallet.publicKey,wallet, true)
+      const userNftToken = await ensureAtaExists(wallet.publicKey, nftMint, wallet.publicKey,wallet, false)
 
       const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" })
       const program = new Program(idlJson as Idl, PROGRAM_ID, provider)
@@ -549,9 +670,9 @@ setStatus("Sound Meme & Pool Created!")
       const memeMint = locker.memeMint
       const nftMint = locker.nftMint
       const lockerPda = locker.lockerPda
-      const userMemeToken = await ensureAtaExists(wallet.publicKey, memeMint, wallet.publicKey, false)
-      const lockerMemeAccount = await ensureAtaExists(lockerPda, memeMint, wallet.publicKey, true)
-      const userNftToken = await ensureAtaExists(wallet.publicKey, nftMint, wallet.publicKey, false)
+      const userMemeToken = await ensureAtaExists(wallet.publicKey, memeMint, wallet.publicKey,wallet, false)
+      const lockerMemeAccount = await ensureAtaExists(lockerPda, memeMint, wallet.publicKey,wallet, true)
+      const userNftToken = await ensureAtaExists(wallet.publicKey, nftMint, wallet.publicKey,wallet, false)
 
       const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" })
       const program = new Program(idlJson as Idl, PROGRAM_ID, provider)
@@ -662,8 +783,19 @@ setStatus("Sound Meme & Pool Created!")
                   <div className="grid grid-cols-2 gap-6">
                     <div>
                       <label className="block mb-1 font-medium">Total Supply</label>
-                      <input type="number" className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2" value={totalSupply} onChange={e => setTotalSupply(Number(e.target.value) || 0)} />
-                      <span className="text-xs text-[#aaa]">Set the supply for your meme coin</span>
+                      <input
+  type="number"
+  className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
+  value={totalSupply}
+  onChange={e => setTotalSupply(Number(e.target.value) || 0)}
+  disabled={poolType === 'bonding'}
+/>
+<span className="text-xs text-[#aaa]">
+  {poolType === 'bonding'
+    ? 'Fixed at 444,000,000 for bonding fairlaunch'
+    : 'Set the supply for your meme coin'}
+</span>
+
                     </div>
                     <div>
                       <label className="block mb-1 font-medium">Threshold (for NFT Mint)</label>
@@ -706,16 +838,10 @@ setStatus("Sound Meme & Pool Created!")
                     <span className="ml-1">AMM (XYK)</span>
                   </label>
                 </div>
-                {/* ─────────── Inputs de liquidité ─────────── */}
-<div
-  className={
-    poolType === 'bonding'
-      ? 'grid grid-cols-1 gap-6'   /* 1 colonne si Bonding  */
-      : 'grid grid-cols-2 gap-6'   /* 2 colonnes si AMM     */
-  }
->
-  {/*   ► Affiché uniquement quand AMM ◄ */}
-  {poolType === 'amm' && (
+               {/* ─────────── Liquidity inputs ─────────── */}
+{poolType === 'amm' && (
+  <div className="grid grid-cols-2 gap-6">
+    {/* Initial meme tokens */}
     <div>
       <label className="block mb-1 font-medium">Initial Meme Liquidity</label>
       <input
@@ -728,22 +854,24 @@ setStatus("Sound Meme & Pool Created!")
         Amount of meme tokens for pool
       </span>
     </div>
-  )}
 
-  {/*   ► Toujours affiché ◄ */}
-  <div>
-    <label className="block mb-1 font-medium">Initial WOODENG Liquidity</label>
-    <input
-      type="number"
-      value={initialWoodengLiquidity}
-      onChange={e => setInitialWoodengLiquidity(Number(e.target.value) || 0)}
-      className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
-    />
-    <span className="text-xs text-[#aaa]">
-      Amount of WOODENG for pool
-    </span>
+    {/* Initial WOODENG */}
+    <div>
+      <label className="block mb-1 font-medium">Initial WOODENG Liquidity</label>
+      <input
+        type="number"
+        value={initialWoodengLiquidity}
+        onChange={e => setInitialWoodengLiquidity(Number(e.target.value) || 0)}
+        className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
+      />
+      <span className="text-xs text-[#aaa]">
+        Amount of WOODENG for pool
+      </span>
+    </div>
   </div>
-</div>
+)}
+
+
 
               </div>
 

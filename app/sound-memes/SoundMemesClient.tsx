@@ -33,6 +33,8 @@ import {
   createMintWithUserFunds
 } from "@/lib/sound-memes";
 import { useSearchParams } from "next/navigation";
+import { getMint } from "@solana/spl-token";
+
 
 export default function SoundMemesClient() {
 
@@ -113,10 +115,10 @@ async function pinFile(file: File) {
 }
 
 
-
 // Returns threshold for minting NFT (from pool/locker config)
 function getMintThreshold(pool: PoolType): number {
-  return pool.threshold ?? 10000;
+  const t = pool.nftThreshold ?? 0;         
+  return t > 0 ? t : 10_000;              // fallback
 }
 
 const POOL_PROGRAM_ID = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV');
@@ -128,7 +130,81 @@ const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 const metaplex = Metaplex.make(connection);
 const WOODENG_DECIMALS = 9;
 const MEME_DECIMALS = 0;
+const PROTOCOL_FEE_BPS = 100; // 1 %
+const BONDING_MCAP_THRESHOLD_LAMPORTS = 35 * 10 ** WOODENG_DECIMALS; // 35 WOODENG market-cap (lamports)
+const poolMcap = (p: PoolType) => p.ammReserves?.woodeng ?? 0;
+// 44 000 000 MEME (raw, i.e. decimals *not* applied)
+const BONDING_CURVE_THRESHOLD_RAW = 44_000_000;
+const CONFIG_VERSION = 3;
 
+
+// put this near the other top-level utils
+
+/** Converts a BN (or plain number) to a JS number, defaulting to 0 */
+const asNumber = (x?: BN | number) =>
+  Number(
+    // BN has .toString(); plain numbers don’t – they stringify fine
+    (x ?? 0 as any).toString?.() ?? x ?? 0
+  );
+
+
+
+function isAmm(pool: PoolType) {
+  return pool.poolType === 1;   // ← nothing else
+}
+
+
+async function migratePool(pool: PoolType) {
+  if (!wallet.publicKey) throw new Error('Connect wallet first!');
+  const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: 'confirmed' });
+  const prog     = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+  const [cfgPda] = await getConfigPda(pool.memeMint);
+  const [memeVault]   = await PublicKey.findProgramAddress(
+    [Buffer.from('pool_meme_vault'),   pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
+  const [woodengVault]= await PublicKey.findProgramAddress(
+    [Buffer.from('pool_woodeng_vault'),pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
+
+  const sig = await prog.methods.migrateToAmm().accounts({
+    config: cfgPda,
+    poolMemeVault:   memeVault,
+    poolWoodengVault: woodengVault,
+    memeMint: pool.memeMint,
+    tokenProgram: TOKEN_PROGRAM_ID,
+  }).rpc();
+
+  await refreshBalances();
+  await refreshUserNfts();
+  const upd = await fetchSoundMemePoolsWithMetadata(prog);
+  setPools(upd);
+  setStatus(`Migrated! Tx ${sig.slice(0,8)}…`);
+}
+
+
+
+
+
+
+// ------------------------------------------------------------------
+//  spot price for a bonding (virtual-reserve) pool
+// ------------------------------------------------------------------
+function bondingSpotPrice(
+  cfg: { vtokens: number; vwoodeng: number },
+  reserves: { meme: number; woodeng: number }
+) {
+    const { vtokens, vwoodeng } = cfg;
+  if (!vtokens || !vwoodeng) return NaN;
+  const threshold = BONDING_CURVE_THRESHOLD_RAW;
+
+  // on-chain p0, p1, k:
+  const p0 = vwoodeng / vtokens;
+  const p1 = BONDING_MCAP_THRESHOLD_LAMPORTS / threshold;
+  const k  = Math.log(p1 / p0) / threshold;
+
+  // how many real tokens have been minted so far?
+  const x = reserves.meme;
+  // current price = p0 · e^(k·x), then convert lamports → UI
+  return (p0 * Math.exp(k * x)) / 10 ** WOODENG_DECIMALS;
+}
 
 
 
@@ -200,7 +276,7 @@ async function stillOwnsNft(
 async function ensureLockerInitialized(pool: PoolType & { nftMint: PublicKey }, wallet: WalletContextState) {
   const memeMint = pool.memeMint;
   const nftMint = pool.nftMint;
-  const threshold = pool.threshold ?? 10000;
+  const threshold = pool.nftThreshold ?? 10000;
   const meme_name = pool.name ?? "Meme";
   const meme_symbol = pool.symbol ?? "MEME";
   const meme_uri = pool.imageUrl ?? "";
@@ -440,10 +516,18 @@ async function lockTokens(
 
 
 
-type PoolType = {
-  ammReserves: { meme: number; woodeng: number };
+ type PoolType = {
+   /* on-chain config ------------------------------------ */
+   poolType: 0 | 1;           // 0 = bonding, 1 = AMM
+   lastMemePrice?: number;    // starting price for bonding curve
+
+   /* reserves & mints ----------------------------------- */
+   ammReserves: { meme: number; woodeng: number };
   memeMint: PublicKey;
-  threshold?: number;
+  nftThreshold?: number;
+  vtokens?: number;          // ← add this
+  vwoodeng?: number;
+  bondingSold?: number;  
   userMemeBalance?: number;
   symbol?: string;
   name?: string;
@@ -456,40 +540,109 @@ type PoolType = {
   audioFile?: File;
   attributes?: any[]; // or more specific type
   // add any other fields your pool objects have
+  decimals?: number;
 };
 
-function getWoodengForMemeBuy(pool: { ammReserves: { meme: number, woodeng: number } }, memeRawOut: number): number {
-  const x = Number(pool.ammReserves.meme);
-  const y = Number(pool.ammReserves.woodeng);
-  const Δy = Number(memeRawOut);
-  if (Δy <= 0 || Δy >= x) return NaN;
-  let dx = Math.ceil((y * Δy) / (x - Δy));
-  dx = Math.ceil(dx / (1 - 0.003));
-  return dx;
+/**
+ * How many WOODENG lamports are needed to buy `memeUiOut` MEME?
+ * – Works for both bonding-curve (poolType 0) and AMM (poolType 1) pools.
+ * – Automatically respects the mint’s decimals that you cached in `pool.decimals`.
+ *
+ * @param pool       the pool object (must include `.decimals` and reserves)
+ * @param memeUiOut  desired MEME amount **in UI units** (e.g. 90.5)
+ * @returns          lamports of WOODENG that must be paid
+ */
+function getWoodengForMemeBuy(pool: PoolType, memeUiOut: number): number {
+  const MIN_LAMPORTS = 1;                     // ← add once at the top
+  const DEC = pool.decimals ?? MEME_DECIMALS;           // fall back to 0
+  const memeRawOut = Math.floor(memeUiOut * 10 ** DEC); // smallest units
+
+  /* ── 1. Bonding-curve pool ───────────────────────────────────── */
+  if (pool.poolType === 0) {
+  const BONDING_FEE_BPS = 100;                        // from your Rust
+      const { vtokens, vwoodeng } = pool;
+    if (!vtokens || !vwoodeng) return NaN;
+    const threshold = BONDING_CURVE_THRESHOLD_RAW;
+
+  // on-chain p0, p1, k:
+  const p0 = vwoodeng / vtokens;
+  const p1 = BONDING_MCAP_THRESHOLD_LAMPORTS / threshold;
+  const k  = Math.log(p1 / p0) / threshold;
+
+  const x = memeRawOut;                              // tokens wanted
+  // lamports before fee:
+  const spentNoFee = (p0 / k) * (Math.exp(k * x) - 1);
+  // add 1% protocol fee:
+  const fee = spentNoFee * (BONDING_FEE_BPS / 10_000);
+    const lamports = Math.ceil(spentNoFee + fee);
+    return Math.max(MIN_LAMPORTS, lamports);   // ← new single return
 }
+
+
+
+  /* ── 2. AMM (XYK) pool ───────────────────────────────────────── */
+  const x = Number(pool.ammReserves.meme);    // MEME in vault (raw)
+  const y = Number(pool.ammReserves.woodeng); // WOODENG in vault (lamports)
+  if (memeRawOut <= 0 || memeRawOut >= x) return NaN;
+
+  // Δy = ceil( y * Δx / (x − Δx) )   ← pure XYK
+  let dx = Math.ceil((y * memeRawOut) / (x - memeRawOut));
+  dx = Math.ceil(dx / (1 - 0.003));            // trader fee
+  return Math.max(MIN_LAMPORTS, dx);           // ← and here
+}
+
+// How many tokens still need to be SOLD until the curve migrates?
+function tokensUntilAmm(pool: PoolType): number {
+  if (pool.poolType === 1 || pool.bondingSold === undefined) return NaN;
+  const dec = pool.decimals ?? MEME_DECIMALS;
+  return (BONDING_CURVE_THRESHOLD_RAW - pool.bondingSold) / 10 ** dec;
+ 
+}
+
 
 
 
 function getWoodengForMemeSell(pool: PoolType, memeRawIn: number): number {
-  // Simple XYK AMM formula for selling meme token to get WOODENG out
+  if (pool.poolType === 0) return NaN;              // selling disabled
+
   const x = Number(pool.ammReserves.meme);
   const y = Number(pool.ammReserves.woodeng);
-  const Δx = Number(memeRawIn);
-  if (Δx <= 0 || Δx >= x) return NaN;
-  let dy = Math.floor((y * Δx) / (x + Δx));
-  dy = Math.floor(dy * (1 - 0.003)); // fee
+  if (memeRawIn <= 0 || memeRawIn >= x) return NaN;
+  let dy = Math.floor((y * memeRawIn) / (x + memeRawIn));
+  dy = Math.floor(dy * (1 - 0.003));                // 0.30 % fee
   return dy;
 }
 
 function userMemeTokens(pool: PoolType): number {
-  // TODO: Replace with real logic that fetches user's MEME ATA balance for the pool's memeMint
-  // For demo: return a fixed value or pull from fetched balances.
-  return pool.userMemeBalance ?? 0; // <-- adjust as you wire real state!
+  // balance still loading? – return NaN so we can render a placeholder
+  const raw = balancesByMint[pool.memeMint.toBase58()];
+  if (raw === undefined) return NaN;
+
+  const d = pool.decimals ?? MEME_DECIMALS;   // decimals are fetched with the pool
+  return raw / 10 ** d;
+}
+
+
+
+function PoolTypeBadge({ poolType }: { poolType: 0 | 1 }) {
+  const cfg =
+    poolType === 0
+      ? { text: "Bonding", bg: "bg-orange-600/80" }
+      : { text: "AMM",      bg: "bg-green-600/80" };
+
+  return (
+    <span
+      className={`${cfg.bg} text-xs px-2 py-0.5 rounded-full text-white`}
+    >
+      {cfg.text}
+    </span>
+  );
 }
 
 
 function ProgressBar({ current, total }: { current: number; total: number }) {
-  const pct = Math.min(100, (current / total) * 100);
+  const pct = (current / total) * 100;
+
 
   return (
     <div className="w-full flex flex-col items-center space-y-1">
@@ -505,7 +658,7 @@ function ProgressBar({ current, total }: { current: number; total: number }) {
         />
         {/* percentage label */}
         <span className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-[#f0eaff]">
-          {pct.toFixed(1)}%
+          {pct.toFixed(2)}%
         </span>
       </div>
 
@@ -536,14 +689,70 @@ const ata = await getAssociatedTokenAddress(memeMint, wallet.publicKey!);
 
 // ------ Fetch pools and calculate price from AMM reserves ------
 async function fetchSoundMemePoolsWithMetadata(poolProgram: Program) {
-  const configs = await poolProgram.account.soundMemeConfig.all();
-  return await Promise.all(
+  // 1️⃣ Let Anchor fetch and decode all SoundMemeConfig PDAs for us:
+   // derive your authority pubkey from the Anchor Program instance:
+// only pull down those configs *you* initialized
+// ── REPLACEMENT CODE ───────────────────────────────────────────
+// (1) pull every config that has the new size 8 + 249 bytes
+const rawConfigs = await connection.getProgramAccounts(
+  POOL_PROGRAM_ID,
+  {
+    // size 8 (Anchor discriminator) + 249 (v1 SoundMemeConfig struct)
+    filters: [{ dataSize: 8 + 249 }],
+  }
+);
+
+const configs = rawConfigs
+  .map(({ pubkey, account: { data } }) => ({
+    publicKey: pubkey,
+    account  : poolProgram.coder.accounts.decode(
+                 "SoundMemeConfig",
+                 data,
+               ),
+  }))
+  
+  // NEW – accept ≥1
+.filter(c => c.account.version === CONFIG_VERSION)
+
+
+
+  
+
+
+
+
+ 
+
+
+ 
+
+
+
+
+    return await Promise.all(
     configs.map(async (c: any) => {
-      let meta = {};
+      let meta: any       = {};
       let price = 0;
       let reserves = { meme: 0, woodeng: 0 };
+      let decimals = 0;
+      // ← add these two so they're in-scope everywhere in this function
+      let totalSupply = 0;
+      let marketCap   = 0;
+
       try {
+            // --- convert Anchor enum (object *or* number) to 0 | 1 ------------
+    const raw      = c.account.poolType as number | { bonding?: {}; amm?: {} };
+    const poolType = typeof raw === "number"
+      ? raw                             // already 0 | 1
+      : ("amm" in raw ? 1 : 0);         // object form
+        // ── 1) fetch the mint
         const mintPubkey = new PublicKey(c.account.memeMint);
+        const mintInfo   = await getMint(connection, mintPubkey);
+        decimals         = Number(mintInfo.decimals);
+
+
+
+
         // 1. Get metadata
         const nft = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
         meta = {
@@ -574,19 +783,60 @@ async function fetchSoundMemePoolsWithMetadata(poolProgram: Program) {
           meme: Number(memeAcct.value.amount),
           woodeng: Number(woodengAcct.value.amount)
         };
-        // 4. AMM Price Calculation (XYK): price = reserve_woodeng / reserve_meme
-        price = (reserves.meme > 0 && reserves.woodeng > 0)
-        ? (reserves.woodeng / 10 ** WOODENG_DECIMALS) / (reserves.meme / 10 ** MEME_DECIMALS)
-        : 1;
 
-      } catch (e) { }
-      return {
-        pubkey: c.publicKey,
-        ...c.account,
-        ...meta,
-        ammReserves: reserves,
-        price: price,
-      };
+          // ── 3) compute price
+        if (poolType === 0) {                        // <- use the normalised enum
+  price = bondingSpotPrice(c.account, reserves);
+}
+ else if (reserves.meme > 0 && reserves.woodeng > 0) {
+          price = (reserves.woodeng / 10 ** WOODENG_DECIMALS)
+                / (reserves.meme   / 10 ** decimals);
+        } else {
+          price = 1;
+        }
+
+        // ── 4) now that we know `price`, compute supply & marketCap
+        const supplyRaw = Number(mintInfo.supply);
+        totalSupply     = supplyRaw / 10 ** decimals;
+        marketCap       = price * totalSupply;
+
+      } catch (err) {
+        console.warn("Pool metadata fetch failed – using defaults:", err);
+      }
+        
+    /* ─── 5. Build the final plain-JS object ───────────────────────── */
+     // --- convert Anchor enum (object *or* number) to 0 | 1 ------------
+const raw      = c.account.poolType as number | { bonding?: {}; amm?: {} };
+const poolType = typeof raw === "number"
+  ? raw                             // already 0 | 1
+  : ("amm" in raw ? 1 : 0);         // object form
+
+
+const {
+  lastMemePrice,
+  vtokens,
+  vwoodeng,
+  bondingSold,
+  ...rest
+} = c.account as any;
+
+return {
+  pubkey: c.publicKey,
+  ...rest,
+  poolType,                                     // ⬅️ normalised enum
+  lastMemePrice: asNumber(lastMemePrice),
+  vtokens      : asNumber(vtokens),
+  vwoodeng     : asNumber(vwoodeng),
+  bondingSold  : asNumber(bondingSold),
+  ammReserves: reserves,
+  price,
+  decimals,
+  totalSupply,
+  marketCap,
+  ...meta
+};
+
+
     })
   );
 }
@@ -656,6 +906,7 @@ const buyerMemeAta = await getAssociatedTokenAddress(pool.memeMint, wallet.publi
   config: configPda,
   poolMemeVault,
   poolWoodengVault,
+  memeMint:         pool.memeMint,
   buyer: wallet.publicKey,
   buyerMemeAta,
   buyerWoodengAta,
@@ -663,6 +914,7 @@ const buyerMemeAta = await getAssociatedTokenAddress(pool.memeMint, wallet.publi
   projectWalletAta,
   lpFeeVault: projectWalletAta,
   tokenProgram: TOKEN_PROGRAM_ID,
+  systemProgram:   SystemProgram.programId,
 })
     .rpc();
   return txSig;
@@ -680,6 +932,9 @@ const [nftsLoaded,   setNftsLoaded]   = useState(false);
 const [pools, setPools] = useState<any[]>([]);
 // one entry per memeMint base-58 string
 const [ownedCounts, setOwnedCounts] = useState<Record<string, number>>({});
+// one entry per MEME mint, *always raw units (decimals not applied)*
+const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
+
 
 // ↕ somewhere around the other modal hooks
 const [buyFilled, setBuyFilled] = useState<{
@@ -739,10 +994,30 @@ const refreshUserNfts = useCallback(async () => {
 }, [wallet.publicKey, pools]);
 
 
+const refreshBalances = useCallback(async () => {
+  if (!wallet.publicKey) {                     // no wallet → clear balances
+    setBalancesByMint({});
+    return;
+  }
+
+  const mints = pools.map(p => p.memeMint);
+  const raw   = await Promise.all(
+    mints.map(mint => fetchUserMemeBalance(wallet, mint))
+  );
+
+  const map: Record<string, number> = {};
+  mints.forEach((mint, i) => { map[mint.toBase58()] = raw[i]; });
+  setBalancesByMint(map);
+}, [wallet.publicKey, pools]);
+
+
 
 
 
   const handleOpenSellModal = (pool: PoolType) => {
+  const mcap = pool.ammReserves?.woodeng ?? 0;
+  const canSell = isAmm(pool);
+  if (!canSell) return;
   setSelectedPool(pool);
   setModalTokensToSell('');
   setShowSellModal(true);
@@ -826,16 +1101,15 @@ const handleMintNft = (pool: PoolType) => {
   const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
   const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
   fetchSoundMemePoolsWithMetadata(poolProgram)
+
     .then(async fetchedPools => {
-      // Fetch user meme balances for each pool
-      const balances = await Promise.all(
-        fetchedPools.map(pool => fetchUserMemeBalance(wallet, pool.memeMint))
-      );
-      setPools(fetchedPools.map((pool, i) => ({
-        ...pool,
-        userMemeBalance: balances[i]
-      })));
-    })
+    // ✅ keep *every* pool – threshold is **only** for NFT minting
+    const balances = await Promise.all(
+      fetchedPools.map(pool => fetchUserMemeBalance(wallet, pool.memeMint))
+    );
+    setPools(fetchedPools);
+  })
+
     .catch((e) => setStatus("Failed to load pools: " + e));
 }, [wallet.connected]);
 
@@ -849,6 +1123,11 @@ useEffect(() => {
   setNftsLoaded(false);          // show spinner only while fetching
   refreshUserNfts();             // will set nftsLoaded → true when done
 }, [wallet.publicKey, pools, refreshUserNfts]);
+
+useEffect(() => {
+  refreshBalances();            // ← fetch raw balances
+}, [refreshBalances]);
+
 
   // --------------------------------------------
   //  auto-open the Buy modal when we deep-link
@@ -882,6 +1161,9 @@ useEffect(() => {
     el.play();
   };
 
+
+ 
+
   // --- Buy Logic for Modal ---
   async function buySoundMeme({
   pool,
@@ -893,6 +1175,9 @@ useEffect(() => {
 
     const [configPda] = await getConfigPda(pool.memeMint);
     if (!wallet.publicKey) throw new Error("Connect wallet first!");
+
+    
+
 const buyerMemeAta = await getAssociatedTokenAddress(pool.memeMint, wallet.publicKey);
     const buyerWoodengAta = await getAssociatedTokenAddress(WOODENG_MINT, wallet.publicKey);
     const projectWalletAta = await getAssociatedTokenAddress(WOODENG_MINT, PROJECT_WALLET);
@@ -931,6 +1216,21 @@ const buyerMemeAta = await getAssociatedTokenAddress(pool.memeMint, wallet.publi
     const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: 'confirmed' });
     const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
 
+
+    // bonding-vs-amm check
+const raw = pool.poolType as number | { bonding?: {}; amm?: {} };
+const isAmm = typeof raw === "number" ? raw === 1 : !!raw.amm;
+
+// optional: give the user a hint instead of blocking
+if (!isAmm) {
+  setStatus?.("Buying from bonding curve...");
+}
+
+
+
+
+
+
     // *** Use PDAs for pool vaults ***
     const [poolMemeVault] = await PublicKey.findProgramAddress(
       [Buffer.from('pool_meme_vault'), pool.memeMint.toBuffer()],
@@ -945,58 +1245,141 @@ const buyerMemeAta = await getAssociatedTokenAddress(pool.memeMint, wallet.publi
       POOL_PROGRAM_ID
     );
 
-    const txSig = await poolProgram.methods
-      .buy(new BN(amountWoodengIn), new BN(minMemeOut))
-      .accounts({
-        config: configPda,
-        poolMemeVault,
-        poolWoodengVault,
-        buyer: wallet.publicKey,
-        buyerMemeAta,
-        buyerWoodengAta,
-        userAntibot,
-        projectWalletAta,
-        lpFeeVault: projectWalletAta,
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .rpc();
+  /* choose the right instruction ---------------------------------- */
+const method = isAmm
+  ? poolProgram.methods.swap(new BN(amountWoodengIn), new BN(minMemeOut))
+  : poolProgram.methods.buy (new BN(amountWoodengIn), new BN(minMemeOut));
+
+const txSig = await method
+  .accounts({
+    config:        configPda,
+    memeMint:      pool.memeMint,
+    poolMemeVault,
+    poolWoodengVault,
+    buyer:         wallet.publicKey,
+    buyerMemeAta,
+    buyerWoodengAta,
+    userAntibot,
+    projectWalletAta,
+    lpFeeVault:    projectWalletAta,
+    tokenProgram:  TOKEN_PROGRAM_ID,
+    systemProgram: SystemProgram.programId,
+  })
+  .rpc();
+
+
     return txSig;
   }
 
-  const handleOpenBuyModal = (pool: any) => {
-    setSelectedPool(pool);
-    setModalTokensToBuy('');
-    setShowBuyModal(true);
-    setTransactionStatus('idle');
-    setTransactionMessage('');
-  };
+  // REPLACE the entire handleOpenBuyModal function with this
+const handleOpenBuyModal = async (poolFromGrid: PoolType) => {
+  if (!wallet.publicKey) {
+    setStatus("Please connect your wallet first.");          // quick guard
+    return;
+  }
+
+  /* — pull the latest on-chain config for this mint — */
+  const provider    = new AnchorProvider(connection, getAnchorWallet(wallet), {});
+  const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+  const freshPools  = await fetchSoundMemePoolsWithMetadata(poolProgram);
+  const freshPool   = freshPools.find(p =>
+    p.memeMint.equals(poolFromGrid.memeMint)
+  );
+
+  if (!freshPool) {
+    setStatus("Couldn’t fetch this pool from chain – try again.");
+    return;
+  }
+ 
+
+  setSelectedPool(freshPool);          // ← use the fresh object
+  setModalTokensToBuy("");
+  setShowBuyModal(true);
+  setTransactionStatus("idle");
+  setTransactionMessage("");
+};
+
 
   const handleConfirmBuy = async () => {
-    const woodengRawNeeded = getWoodengForMemeBuy(selectedPool, Number(modalTokensToBuy) * 10**MEME_DECIMALS);
-const woodengUiNeeded = woodengRawNeeded / 10**WOODENG_DECIMALS;
-const spotPrice = Number(selectedPool.price);
-const avgPrice = woodengUiNeeded / Number(modalTokensToBuy);
-const priceImpact = ((avgPrice - spotPrice) / spotPrice) * 100;
+    const DEC = selectedPool.decimals ?? MEME_DECIMALS;
+  // lamports of WOODENG we will actually spend
 
-// Calculate minMemeOut for slippage protection
-const minMemeOut = Math.floor(Number(modalTokensToBuy) * (1 - slippage/100)) * 10**MEME_DECIMALS;
 
-if (priceImpact > slippage) {
-  setTransactionStatus('error');
-  setTransactionMessage('Price impact exceeds slippage tolerance.');
-  return;
-}
+  // lamports of WOODENG we will actually spend (exact-in)
+const spendRaw = getWoodengForMemeBuy(
+  selectedPool,
+  Number(modalTokensToBuy)
+);
+
+// never add slippage to the input – send the solved amount exactly
+const maxWoodengIn = spendRaw;
+
+
+// exact spend at *current* curve state (used for maths & UI)
+const woodengUiExact  = spendRaw     / 10 ** WOODENG_DECIMALS;
+// buffered spend that actually goes into the TX
+const woodengUiNeeded = maxWoodengIn / 10 ** WOODENG_DECIMALS;
+
+const isBonding       = selectedPool.poolType === 0;
+
+
+
+
+    // only enforce slippage on AMM pools
+  if (!isBonding) {
+    const spotPrice = Number(selectedPool.price);
+    const avgPrice  = woodengUiExact / Number(modalTokensToBuy);
+    const priceImpact = ((avgPrice - spotPrice) / spotPrice) * 100;
+    if (priceImpact > slippage) {
+      setTransactionStatus('error');
+      setTransactionMessage('Price impact exceeds slippage tolerance.');
+      return;
+    }
+  }
+
+
+
+  // we always want exactly N tokens (in raw units) back
+ const memeRawOut = Math.floor(Number(modalTokensToBuy) * 10 ** DEC);
+
+ /* -----------------------------------------------------------
+  *  minMemeOut = desired_out × (1 − protocol_fee − user_slippage)
+  *               but never less than 1 raw token
+  * --------------------------------------------------------- */
+ const feePct  = selectedPool.poolType === 0                      // 1 % only
+               ? PROTOCOL_FEE_BPS / 10_000
+               : 0;
+const slipPct = slippage / 100;
+
+const minMemeOut = Math.max(
+  1,
+  Math.floor(memeRawOut * (1 - feePct - slipPct))
+);
 
     setTransactionStatus('processing');
     setTransactionMessage('Processing transaction...');
     try {
       if (!wallet.publicKey) throw new Error('Please connect your wallet!');
       if (!selectedPool || !modalTokensToBuy) throw new Error('Select amount to buy');
-      const amountWoodengIn = getWoodengForMemeBuy(selectedPool, Number(modalTokensToBuy) * 10 ** MEME_DECIMALS);
-      const tx = await buySoundMeme({ pool: selectedPool, amountWoodengIn, minMemeOut, wallet });
+         const tx = await buySoundMeme({
+      pool:            selectedPool,
+      amountWoodengIn: maxWoodengIn,
+      minMemeOut,        // ← now demands exactly N raw tokens
+      wallet,
+    });
+
 
       setTransactionStatus('success');
 setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
+   await refreshUserNfts();          // ⬅️ NEW
+   await refreshBalances();
+
+
+   // NEW: refetch pools (so poolType is up-to-date)
+const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
+const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+const updatedPools = await fetchSoundMemePoolsWithMetadata(poolProgram);
+setPools(updatedPools);
 setShowBuyModal(false);                 // close the buy form
 
 // >>> open filled-order pop-up <<<
@@ -1004,7 +1387,7 @@ setBuyFilled({
   open: true,
   symbol: selectedPool.symbol,
   amountMeme: Number(modalTokensToBuy),
-  priceWoodeng: woodengUiNeeded,        // we computed this a few lines above
+  priceWoodeng: woodengUiExact,        // we computed this a few lines above
 });
 
     } catch (e: any) {
@@ -1014,7 +1397,8 @@ setBuyFilled({
   };
 
   const handleConfirmSell = async () => {
-  const memeRawIn = Number(modalTokensToSell) * 10 ** MEME_DECIMALS;
+  const DEC       = selectedPool.decimals ?? MEME_DECIMALS;
+  const memeRawIn = Math.floor(Number(modalTokensToSell) * 10 ** DEC);
   const woodengRawOut = getWoodengForMemeSell(selectedPool, memeRawIn);
   const woodengUiOut = woodengRawOut / 10 ** WOODENG_DECIMALS;
   const spotPrice = Number(selectedPool.price);
@@ -1040,6 +1424,8 @@ setBuyFilled({
 
     setTransactionStatus('success');
     setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
+    await refreshUserNfts();          // ⬅️ NEW
+    await refreshBalances();          // ⬅️ NEW
     setShowSellModal(false);
     setSellFilled({
   open:true,
@@ -1106,6 +1492,7 @@ async function unlockTokens(
 
     /* refresh local state & show success pop-up */
     await refresh();
+    await refreshBalances();
     setBurnFilled({
       open: true,
       symbol: pool.symbol ?? "",
@@ -1206,8 +1593,14 @@ async function unlockTokens(
     {/* Card Grid */}
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
       {pools.map((pool, i) => {
-        // User NFT count for this pool
-       const userNftCount = ownedCounts[pool.memeMint.toBase58()] ?? 0;
+
+
+     // User NFT count for this pool
+     const userNftCount = ownedCounts[pool.memeMint.toBase58()] ?? 0;
+
+     /* ---------- SELL-eligibility ------------------------------------- */
+     const mcap    = pool.ammReserves?.woodeng ?? 0;
+     const canSell = isAmm(pool);
         return (
           <div
             key={pool.pubkey.toBase58()}
@@ -1224,6 +1617,7 @@ async function unlockTokens(
               <div className="absolute inset-0 flex flex-col justify-between p-2">
                 <div className="flex justify-end space-x-2">
                   <span className="bg-purple-700/80 text-xs px-2 py-0.5 rounded-full text-white">SPL404 NFT</span>
+                  <PoolTypeBadge poolType={pool.poolType} />
                   {pool.category && (
                     <span className="bg-blue-700/80 text-xs px-2 py-0.5 rounded-full text-white">{pool.category}</span>
                   )}
@@ -1263,24 +1657,45 @@ async function unlockTokens(
                   {(pool.ammReserves?.meme / 10 ** MEME_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 6 })} MEME
                 </span>
               </div>
+               <div className="text-xs text-[#adadff] mt-1 flex justify-between">
+   <span>Supply: {pool.totalSupply.toLocaleString()} {pool.symbol}</span>
+   <span>Market Cap: {pool.marketCap.toFixed(2)} WOODENG</span>
+ </div>
               {/* ─────────── Action buttons ─────────── */}
-<div className="grid grid-cols-2 gap-2 mt-4 text-sm font-semibold">
+<div className="grid grid-cols-3 gap-2 mt-4 text-sm font-semibold">
 
   {/* ► BUY ------------------------------------------------------- */}
+
+  {!( !isAmm(pool) && poolMcap(pool) >= 69 * 10 ** WOODENG_DECIMALS ) && (
   <button
     className="h-10 rounded bg-[#907aff] text-white hover:bg-[#37ad71] transition"
     onClick={e => { e.stopPropagation(); handleOpenBuyModal(pool); }}
   >
     Buy
   </button>
+  )}
 
   {/* ► SELL ------------------------------------------------------ */}
+ {canSell && (
   <button
-    className="h-10 rounded bg-[#ff5656] text-white hover:bg-[#f8d648] transition"
     onClick={e => { e.stopPropagation(); handleOpenSellModal(pool); }}
-  >
+    className="h-10 rounded bg-[#ff5656] text-white hover:bg-[#f8d648] transition">
     Sell
   </button>
+)}
+
+{/* ► MIGRATE – shown when 35 ≤ mcap < 69 WOODENG */}
+{!isAmm(pool) &&
+  poolMcap(pool) >= 35 * 10 ** WOODENG_DECIMALS &&
+  poolMcap(pool) <  69 * 10 ** WOODENG_DECIMALS && (
+    <button
+      className="h-10 rounded bg-[#37ad71] text-white hover:bg-[#4cd488] transition"
+      onClick={e => { e.stopPropagation(); migratePool(pool); }}>
+      Migrate&nbsp;to&nbsp;AMM
+    </button>
+)}
+
+
 
   {/* ► MINT NFT -------------------------------------------------- */}
   <button
@@ -1342,7 +1757,22 @@ async function unlockTokens(
 </div>
               </div>
               <div className="mt-2">
-                <ProgressBar current={userMemeTokens(pool)} total={getMintThreshold(pool)} />
+                {
+  (() => {
+    const current  = userMemeTokens(pool);
+    const required = getMintThreshold(pool);
+
+    if (Number.isNaN(current)) {
+      // waiting for RPC – grey placeholder bar
+      return <div className="w-11/12 h-4 bg-[#2b2b37] rounded animate-pulse" />;
+    }
+
+    return (
+      <ProgressBar current={current} total={required} />
+    );
+  })()
+}
+
                 {userMemeTokens(pool) < getMintThreshold(pool) && (
   <div className="w-11/12 mx-auto mt-1 text-[11px] text-center text-[#f8c286]">
     Need {getMintThreshold(pool) - userMemeTokens(pool)} more tokens to mint NFT
@@ -1354,63 +1784,100 @@ async function unlockTokens(
       })}
     </div>
 
-    {/* BUY MODAL */}
-    {showBuyModal && selectedPool && (
-  <div
-    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
-    onClick={() => setShowBuyModal(false)}          // 👈 overlay click
-  >
+    {/* ───────────────────────── BUY MODAL ───────────────────────── */}
+{showBuyModal && selectedPool && (() => {
+  /* how many MEME can still be bought before migration */
+  const tokensLeft = tokensUntilAmm(selectedPool);
+
+  return (
     <div
-      className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl
-                 flex flex-col items-center relative"
-      onClick={e => e.stopPropagation()}            // 👈 block inner clicks
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
+      onClick={() => setShowBuyModal(false)}                     /* overlay click */
     >
-      <button
-        className="absolute top-4 right-4"          // now inside the dialog
-        onClick={() => setShowBuyModal(false)}
+      <div
+        className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl
+                   flex flex-col items-center relative"
+        onClick={e => e.stopPropagation()}                       /* block inner clicks */
       >
-        <X />
-      </button>
-          <h2 className="text-xl font-bold mb-2">Buy {selectedPool.symbol}</h2>
-          <img src={selectedPool.imageUrl} className="w-24 h-24 rounded-xl mb-3" alt="meme" />
-          <span className="text-[#c2c2c9] mb-3">{selectedPool.name}</span>
-          <div className="flex flex-col gap-2 w-full">
-            <label>Amount to buy:</label>
-            <input
-              type="number"
-              className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full"
-              placeholder="0"
-              value={modalTokensToBuy}
-              onChange={e => setModalTokensToBuy(e.target.value)}
-              min={1}
-            />
-            <span className="text-sm text-[#d7bb7a]">
-              Total: {(getWoodengForMemeBuy(selectedPool, Number(modalTokensToBuy)) / 10 ** WOODENG_DECIMALS).toFixed(5)} WOODENG
-            </span>
-          </div>
-          <div className="flex flex-col gap-2 w-full mt-2">
-            <label>Slippage tolerance (%)</label>
-            <input
-              type="number"
-              className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full"
-              value={slippage}
-              onChange={e => setSlippage(Number(e.target.value))}
-              min={0.1}
-              max={50}
-            />
-          </div>
-          <button
-            className="bg-[#ffc371] w-full mt-4 text-black font-bold py-2 rounded"
-            onClick={handleConfirmBuy}
-            disabled={!modalTokensToBuy || transactionStatus === 'processing'}
-          >
-            {transactionStatus === 'processing' ? 'Processing...' : 'Confirm Buy'}
-          </button>
-          {transactionStatus === 'success' && <div className="text-green-400 mt-2">{transactionMessage}</div>}
-          {transactionStatus === 'error' && <div className="text-red-400 mt-2">{transactionMessage}</div>}
+        {/* close × button */}
+        <button
+          className="absolute top-4 right-4"
+          onClick={() => setShowBuyModal(false)}>
+          <X />
+        </button>
+
+        {/* heading + thumbnail */}
+        <h2 className="text-xl font-bold mb-2">Buy {selectedPool.symbol}</h2>
+        <img
+          src={selectedPool.imageUrl}
+          className="w-24 h-24 rounded-xl mb-3"
+          alt={selectedPool.name}
+        />
+        <span className="text-[#c2c2c9] mb-3">{selectedPool.name}</span>
+
+        {/* ─── Amount to buy ─────────────────────────────────── */}
+        <div className="flex flex-col gap-2 w-full">
+          <label>Amount to buy:</label>
+
+          <input
+            type="number"
+            className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full"
+            placeholder="0"
+            value={modalTokensToBuy}
+            onChange={e => setModalTokensToBuy(e.target.value)}
+            min={1}
+            max={tokensLeft}                                      /* clamp! */
+          />
+
+          {/* live counter */}
+          <p className="text-xs text-[#f0eaff] mt-1">
+            {tokensLeft.toLocaleString()} {selectedPool.symbol} left before migration
+          </p>
+
+          <span className="text-sm text-[#d7bb7a]">
+            Total:&nbsp;
+            {(getWoodengForMemeBuy(selectedPool, Number(modalTokensToBuy))
+              / 10 ** WOODENG_DECIMALS).toFixed(5)} WOODENG
+          </span>
         </div>
+
+        {/* ─── Slippage ──────────────────────────────────────── */}
+        <div className="flex flex-col gap-2 w-full mt-2">
+          <label>Slippage tolerance (%)</label>
+          <input
+            type="number"
+            className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full"
+            value={slippage}
+            onChange={e => setSlippage(Number(e.target.value))}
+            min={0.1}
+          />
+        </div>
+
+        {/* ─── Confirm button ───────────────────────────────── */}
+        <button
+          className="bg-[#ffc371] w-full mt-4 text-black font-bold py-2 rounded"
+          onClick={handleConfirmBuy}
+          disabled={
+            !modalTokensToBuy ||
+             Number.isNaN(
+              getWoodengForMemeBuy(selectedPool, Number(modalTokensToBuy))
+            ) ||                               // ← no more unknown identifier
+            transactionStatus === 'processing' ||
+            tokensLeft === 0                           /* block when sold-out */
+          }>
+          {transactionStatus === 'processing' ? 'Processing…' : 'Confirm Buy'}
+        </button>
+
+        {/* status banners */}
+        {transactionStatus === 'success' &&
+          <div className="text-green-400 mt-2">{transactionMessage}</div>}
+        {transactionStatus === 'error' &&
+          <div className="text-red-400 mt-2">{transactionMessage}</div>}
       </div>
-    )}
+    </div>
+  );
+})()}
+
 
     {/* SELL MODAL */}
     {showSellModal && selectedPool && (
