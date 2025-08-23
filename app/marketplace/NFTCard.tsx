@@ -1,7 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Play, Pause, Sparkles } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 
 import type { NFT } from '@/types/nft';                 // <— global NFT type
 import { cn } from '@/lib/utils';
@@ -9,16 +10,13 @@ import { Web3Image, useAudio } from '@/contexts/components/Web3Media';
 
 /* tiny helpers ---------------------------------------------------- */
 const mmss = (sec = 0) =>
-  `${Math.floor(sec / 60)}:${`${sec % 60}`.padStart(2, '0')}`;
+  `${Math.floor(sec / 60)}:${`${Math.floor(sec % 60)}`.padStart(2, '0')}`;
 
 const Badge = ({ children }: { children: React.ReactNode }) => (
   <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-black/60 text-white">
     {children}
   </span>
 );
-
-
-
 
 /* ------------------------------------------------------------------ */
 /*  Card component (shared: marketplace & profile)                    */
@@ -35,21 +33,38 @@ export function NFTCard({
   userPubkey?: string;
 }) {
   const { playing, play, stop } = useAudio(nft.audioUrl);
+  const pathname = usePathname();
+  const prevPathRef = useRef(pathname);
 
-  const isOwner = nft.seller && userPubkey
-  ? nft.seller.toLowerCase() === userPubkey.toLowerCase()
-  : false;
+  // 🔇 Stop audio when the route/section actually changes (without touching mount/unmount)
+  useEffect(() => {
+    if (prevPathRef.current !== pathname) {
+      try { stop(); } catch {}
+      prevPathRef.current = pathname;
+    }
+  }, [pathname, stop]);
 
-const buttonLabel =
-  nft.hasPool
-    ? 'View Pool'
-    : nft.status === 'listed'
-      ? isOwner ? 'Update Listing' : 'Buy Listing'
+  const isOwner =
+    nft.seller && userPubkey
+      ? nft.seller.toLowerCase() === userPubkey.toLowerCase()
+      : false;
+
+  const buttonLabel =
+    nft.hasPool
+      ? 'View Pool'
+      : nft.status === 'listed'
+      ? isOwner
+        ? 'Update Listing'
+        : 'Buy Listing'
       : 'Buy Now';
 
   return (
     <div
-      onClick={() => onOpen(nft)}
+      onClick={() => {
+        // Stop audio before navigating via card click
+        try { stop(); } catch {}
+        onOpen(nft);
+      }}
       className={cn(
         'group bg-card border border-border rounded-lg hover:border-primary/50 transition',
         view === 'list' && 'flex',
@@ -71,10 +86,11 @@ const buttonLabel =
         {nft.audioUrl && (
           <button
             onClick={(e) => {
-              e.stopPropagation();
+              e.stopPropagation(); // don’t navigate when clicking the overlay
               playing ? stop() : play();
             }}
             className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition"
+            title={playing ? 'Pause' : 'Play'}
           >
             {playing ? (
               <Pause className="w-7 h-7 text-white" />
@@ -130,6 +146,8 @@ const buttonLabel =
           <button
             onClick={(e) => {
               e.stopPropagation();
+              // Stop audio before navigating via CTA
+              try { stop(); } catch {}
               onOpen(nft);
             }}
             className="w-full py-2 text-xs rounded text-white

@@ -8,12 +8,19 @@ import poolIdlJson from '../../idl/my_sound_meme_pool.json';
 import lockerIdlJson from '../../idl/hybrid_meme_coin_nft_locker.json';
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
-  Connection, PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY, Keypair
+  Connection, PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY, Keypair,
+  ComputeBudgetProgram, TransactionInstruction, SendTransactionError
 } from "@solana/web3.js";
+
 import { useWallet } from "@solana/wallet-adapter-react";
 import { Program, AnchorProvider, BN, Idl } from "@project-serum/anchor";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress,
-         createAssociatedTokenAccountInstruction } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createInitializeMintInstruction
+} from "@solana/spl-token";
+
 import {
   Play, Pause, Loader2, ArrowUpRight, ArrowDownRight,
   CheckCircle2, AlertCircle, Info, X, Pickaxe
@@ -26,17 +33,492 @@ import {
 
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 import { Metaplex } from "@metaplex-foundation/js";
-import {
-  createMintWithPdaAuthority,
-  createAtaIfNotExists,
-  getLockerPda,
-  createMintWithUserFunds
-} from "@/lib/sound-memes";
+import { getLockerPda } from "@/lib/sound-memes";
+
 import { useSearchParams } from "next/navigation";
-import { getMint } from "@solana/spl-token";
+import { getMint, NATIVE_MINT, createSyncNativeInstruction, createCloseAccountInstruction } from "@solana/spl-token";
+
+import { Rocket } from "lucide-react";
+
+
+const isAmm = (p: { poolType: 0 | 1 }) => p.poolType === 1;
+/* ───────── MOBILE: vertical climb sections ───────── */
+
+// ADD props for buy/sell to MiniVerticalCard
+function MiniVerticalCard({
+  pool,
+  rank,
+  onOpen,
+  change24h,
+  onBuy,          // <—
+  onSell,         // <—
+  active = false, // <— for the pop-up animation section (next part)
+}: {
+  pool: PoolType;
+  rank: number;
+  onOpen: (p: PoolType) => void;
+  change24h: number;
+  onBuy: (p: PoolType) => void;    // <—
+  onSell: (p: PoolType) => void;   // <—
+  active?: boolean;                // <—
+}) {
+  const up = change24h >= 0;
+  return (
+    <button
+      onClick={() => onOpen(pool)}
+      className="
+        snap-center w-full h-full text-left
+        bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl
+        overflow-hidden flex flex-col
+        transition-transform duration-300 active:scale-[0.995]
+      "
+      style={{
+        // subtle 'pop' for the active card (wired up below)
+        transform: active ? 'scale(1.0)' : 'scale(0.96)',
+        opacity: active ? 1 : 0.8,
+      }}
+    >
+      {/* image */}
+      <div className="relative flex-1 min-h-0">
+        <img
+  src={pool.imageUrl || "https://placehold.co/600x600?text=No+Image"}
+  alt={pool.name ?? "Sound Meme"}
+  className="w-full h-full object-cover"
+/>
+
+        <div className="absolute top-2 left-2 ...">#{rank}</div>
+        <div className="absolute top-2 right-2 ...">{pool.symbol ?? 'MEME'}</div>
+      </div>
+
+      {/* info + actions */}
+      <div className="p-4">
+        <div className="font-semibold truncate">{pool.name || 'Untitled Meme'}</div>
+
+        <div className="mt-1 flex items-center gap-2">
+          <span className="text-[#ffc371] font-bold tabular-nums">
+            {Number(pool.price ?? 0).toFixed(5)}
+          </span>
+          <span className="text-xs text-[#ffc371]/90">{quoteLabelOf(pool)}</span>
+          <span className={`ml-auto text-xs px-2 py-0.5 rounded ${up ? 'bg-green-600/20 text-green-300' : 'bg-red-600/20 text-red-300'}`}>
+            {up ? '▲' : '▼'} {Math.abs(change24h).toFixed(2)}%
+          </span>
+        </div>
+
+        {/* extra detail only when active (the ‘pop up’ feel) */}
+        {active && (
+          <div className="mt-2 text-[11px] text-[#c2c2c9] line-clamp-3">
+            {pool.description || '—'}
+          </div>
+        )}
+
+        {/* ACTIONS */}
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); onBuy(pool); }}
+            className="h-9 rounded bg-[#ffc371] text-black font-semibold"
+          >
+            Buy
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onSell(pool); }}
+            disabled={!isAmm(pool)}
+            className="h-9 rounded bg-[#ff5656] text-white font-semibold disabled:opacity-40"
+            title={isAmm(pool) ? '' : 'Sell available after AMM migration'}
+          >
+            Sell
+          </button>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+
+
+function MobileVerticalSection({
+  title,
+  itemsBestFirst,
+  onOpen,
+  onBuy,
+  onSell,
+  change24hFor,
+}: {
+  title: string;
+  itemsBestFirst: PoolType[];
+  onOpen: (p: PoolType) => void;
+  onBuy: (p: PoolType) => void;
+  onSell: (p: PoolType) => void;
+  change24hFor: (mint: string) => number;
+}) {
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const cardRefs = React.useRef<(HTMLDivElement | null)[]>([]);
+  const [progress, setProgress] = React.useState(0); // 0..1 bottom→top
+  const [activeIdx, setActiveIdx] = React.useState(0);
+
+  // decorate cards based on distance to viewport center
+  const decorate = React.useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const mid = el.getBoundingClientRect().top + el.clientHeight / 2;
+    let best = -1, bestDist = Infinity;
+
+    cardRefs.current.forEach((c, i) => {
+      if (!c) return;
+      const r = c.getBoundingClientRect();
+      const center = r.top + r.height / 2;
+      const d = Math.abs(center - mid);
+
+      if (d < bestDist) { bestDist = d; best = i; }
+
+      // 0 (centered) … 1 (far)
+      const t = Math.min(1, d / (el.clientHeight * 0.6));
+      c.style.transform = `scale(${0.92 + (1 - t) * 0.08}) translateY(${(t * 20).toFixed(1)}px)`;
+      c.style.opacity = `${0.6 + (1 - t) * 0.4}`;
+      c.style.zIndex = `${1000 - Math.round(d)}`;
+      c.style.filter = `blur(${(t * 1.2).toFixed(2)}px)`;
+      c.style.transition = 'transform 180ms ease, opacity 180ms ease, filter 180ms ease';
+    });
+
+    if (best !== -1) setActiveIdx(best);
+  }, []);
+
+  // start at bottom so you "climb" to #1
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight - el.clientHeight; // start at bottom
+      setProgress(0);
+      decorate();
+    });
+  }, [itemsBestFirst.length, decorate]);
+
+  const onScroll = React.useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const max = Math.max(1, el.scrollHeight - el.clientHeight);
+    const pct = (max - el.scrollTop) / max; // bottom→top fill
+    setProgress(Math.min(1, Math.max(0, pct)));
+    decorate();
+  }, [decorate]);
+
+  const railH = 'calc(100dvh - 140px)';
+
+  return (
+    <section className="md:hidden">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-lg font-bold">{title}</h2>
+      </div>
+
+      <div className="relative">
+        {/* rocket progress rail */}
+        <div className="pointer-events-none absolute right-1 top-0" style={{ height: railH, width: 8, zIndex: 10 }}>
+          <div className="relative h-full w-full rounded bg-white/10 overflow-hidden">
+            <div
+              className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#6c47e2] to-[#b484ff] transition-[height] duration-200"
+              style={{ height: `${progress * 100}%` }}
+            />
+            <Rocket
+              className="absolute right-[-6px] opacity-90"
+              style={{
+                bottom: `calc(${progress * 100}% - 10px)`,
+                transform: 'rotate(90deg)',
+                width: 16,
+                height: 16,
+              }}
+            />
+          </div>
+        </div>
+
+        {/* slider */}
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="no-scrollbar px-4 pr-10 snap-y snap-mandatory scroll-smooth touch-pan-y overscroll-y-contain"
+          style={{ height: railH }}
+        >
+          {itemsBestFirst.map((p, i) => (
+            <div
+              key={p.pubkey.toBase58()}
+              ref={(el) => { cardRefs.current[i] = el; }} // <-- return void, no TS2322
+              className="h-[calc(100dvh-160px)] flex-none snap-center pb-4"
+            >
+              <MiniVerticalCard
+                pool={p}
+                rank={i + 1}
+                onOpen={onOpen}
+                onBuy={onBuy}
+                onSell={onSell}
+                change24h={change24hFor(p.memeMint.toBase58())}
+                active={i === activeIdx}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
+function MobileVerticalStacks({
+  pools,
+  onOpen,
+  onBuy,         // NEW
+  onSell,        // NEW
+  change24hFor,
+  createdAtFor,
+}: {
+  pools: PoolType[];
+  onOpen: (p: PoolType) => void;
+  onBuy: (p: PoolType) => void;     // NEW
+  onSell: (p: PoolType) => void;    // NEW
+  change24hFor: (mint: string) => number;
+  createdAtFor: (mint: string) => number;
+}) {
+
+  type Mode = 'gainers' | 'marketcap' | 'newest';
+  const [mode, setMode] = React.useState<Mode>('gainers'); // default: Top Gainers
+
+
+  useEffect(() => {
+  const applyHash = () => {
+    const h = (typeof window !== 'undefined' ? window.location.hash : '').replace('#','');
+    if (h === 'top-gainers') setMode('gainers');
+    if (h === 'top-marketcap') setMode('marketcap');
+    if (h === 'newest') setMode('newest');
+  };
+  applyHash();
+  window.addEventListener('hashchange', applyHash);
+  return () => window.removeEventListener('hashchange', applyHash);
+}, []);
+
+
+  const topMcap = React.useMemo(
+    () => [...pools].sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0)),
+    [pools]
+  );
+  const topGainers = React.useMemo(
+    () => [...pools].sort(
+      (a, b) => change24hFor(b.memeMint.toBase58()) - change24hFor(a.memeMint.toBase58())
+    ),
+    [pools, change24hFor]
+  );
+  const newest = React.useMemo(
+    () => [...pools].sort(
+      (a, b) => createdAtFor(b.memeMint.toBase58()) - createdAtFor(a.memeMint.toBase58())
+    ),
+    [pools, createdAtFor]
+  );
+
+  const current = mode === 'gainers' ? topGainers : mode === 'marketcap' ? topMcap : newest;
+  const title   = mode === 'gainers' ? 'Top Gainers (24h)' : mode === 'marketcap' ? 'Top Market Cap' : 'Newest';
+
+  return (
+    <div className="md:hidden">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-sm opacity-80">Category</div>
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as Mode)}
+          className="bg-[#262635] border border-[#33334a] rounded px-3 py-1 text-sm"
+        >
+          <option value="gainers">Top Gainers (24h)</option>
+          <option value="marketcap">Top Market Cap</option>
+          <option value="newest">Newest</option>
+        </select>
+      </div>
+
+      <MobileVerticalSection
+  title={title}
+  itemsBestFirst={current}
+  onOpen={onOpen}
+  onBuy={onBuy}                                      // was: (p) => handleOpenBuyModal(p)
+  onSell={(p) => { if (isAmm(p)) onSell(p); }}       // was: if (isAmm(p)) handleOpenSellModal(p)
+  change24hFor={change24hFor}
+/>
+    </div>
+  );
+}
+
+
+
+
+type PoolType = {
+  /* on-chain config ------------------------------------ */
+  poolType: 0 | 1;           // 0 = bonding, 1 = AMM
+  lastMemePrice?: number;    // starting price for bonding curve
+
+  /* reserves & mints ----------------------------------- */
+  ammReserves: { meme: number; woodeng: number };
+  memeMint: PublicKey;
+
+  /* ➕ added fields you use elsewhere ------------------- */
+  pubkey: PublicKey;         // set in fetchSoundMemePoolsWithMetadata
+  price?: number;
+  decimals?: number;
+  totalSupply?: number;      // computed in fetcher
+  marketCap?: number;        // computed in fetcher
+  volume24h?: number;        // (optional) display only, ok if undefined
+  category?: string;         // derived from metadata trait
+  quoteMint: PublicKey;   // WOODENG mint or wSOL (NATIVE_MINT)
+
+
+  /* metadata / UI -------------------------------------- */
+  symbol?: string;
+  name?: string;
+  description?: string;
+  imageUrl?: string;
+  audioUrl?: string;
+  attributes?: any[];
+
+  /* bonding-curve params --------------------------------*/
+  nftThreshold?: number;
+  vtokens?: number;
+  vwoodeng?: number;
+  bondingSold?: number;
+
+  /* user state ----------------------------------------- */
+  userMemeBalance?: number;
+
+  /* local upload scratch ------------------------------- */
+  imageFile?: File;
+  audioFile?: File;
+};
+
+const QUOTE_DECIMALS = 9;              // WOODENG and wSOL both have 9
+const WOODENG_DECIMALS = QUOTE_DECIMALS;
+const WSOL_MINT = NATIVE_MINT;         // So111111... (wrapped SOL)
+
+const quoteIsSol = (p: PoolType) => p.quoteMint?.equals(WSOL_MINT);
+const quoteLabelOf = (p: PoolType) => (quoteIsSol(p) ? "SOL" : "WOODENG");
+
+const MEME_DECIMALS = 0;
+const PROTOCOL_FEE_BPS = 100; // 1 %
+const BONDING_MCAP_THRESHOLD_LAMPORTS = 35 * 10 ** WOODENG_DECIMALS; // 35 WOODENG market-cap (lamports)
+
+
+
+// % toward AMM migration based on WOODENG liquidity in the pool vault
+function ammMigrationPct(pool: PoolType): number {
+  if (pool.poolType === 1) return 1; // already AMM
+  const wood = Math.max(0, pool.ammReserves?.woodeng ?? 0);
+  const thr  = Math.max(1, BONDING_MCAP_THRESHOLD_LAMPORTS);
+  return Math.min(1, wood / thr);
+}
+
+
+// wallet-like type for one-shot sender
+type SignerWallet = {
+  publicKey: PublicKey;
+  signTransaction: (tx: Transaction) => Promise<Transaction>;
+  signAllTransactions: (txs: Transaction[]) => Promise<Transaction[]>;
+};
+
+// REPLACE your current sendIxsOnce(...) helper with this version
+async function sendIxsOnce(
+  connection: Connection,
+  wallet: SignerWallet,
+  ixs: TransactionInstruction[],
+  signers: Keypair[] = [],
+  { skipPreflight = false }: { skipPreflight?: boolean } = {}
+) {
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+
+  const tx = new Transaction().add(...ixs);
+  tx.feePayer = wallet.publicKey;
+  tx.recentBlockhash = blockhash;
+  if (signers.length) tx.partialSign(...signers);
+
+  const signed = await wallet.signTransaction(tx);
+  const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight });
+
+  try {
+    await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+    return sig;
+  } catch (e) {
+    // fallback poll in case websocket confirm flaked but the tx actually landed
+    const start = Date.now();
+    while (Date.now() - start < 20_000) {
+      const st = await connection.getSignatureStatuses([sig]);
+      const s = st.value[0];
+      if (s?.confirmationStatus === 'confirmed' || s?.confirmationStatus === 'finalized') return sig;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    throw e;
+  }
+}
+
+
+
+async function buildWrapSolIxs(payer: PublicKey, amountLamports: number) {
+  const ata = await getAssociatedTokenAddress(WSOL_MINT, payer);
+  const createAtaIx = createAssociatedTokenAccountIdempotentInstruction(
+    payer, ata, payer, WSOL_MINT
+  );
+  const fundIx = SystemProgram.transfer({ fromPubkey: payer, toPubkey: ata, lamports: amountLamports });
+  const syncIx = createSyncNativeInstruction(ata);
+  return { ata, ixs: [createAtaIx, fundIx, syncIx] };
+}
+
+
+
+
+// idempotent ATA builder (returns address + instruction, no send)
+async function ensureAtaIx(
+  owner: PublicKey,
+  mint: PublicKey,
+  payer: PublicKey,
+  isPdaOwner = false
+): Promise<{ ata: PublicKey; ix: TransactionInstruction }> {
+  const ata = await getAssociatedTokenAddress(mint, owner, isPdaOwner, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
+  const ix = createAssociatedTokenAccountIdempotentInstruction(
+    payer, ata, owner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  return { ata, ix };
+}
+
+// mint account builder (creates + initializes mint; you sign with `kp`)
+// mint account builder (creates + initializes mint; you sign with `kp`)
+async function buildCreateMintIx(
+  connection: Connection,           // ← add this
+  payer: PublicKey,
+  decimals: number,
+  mintAuthority: PublicKey
+): Promise<{ mint: PublicKey; ixs: TransactionInstruction[]; signers: Keypair[] }> {
+  const kp = Keypair.generate();
+  const lamports = await connection.getMinimumBalanceForRentExemption(82);
+  const createIx = SystemProgram.createAccount({
+    fromPubkey: payer,
+    newAccountPubkey: kp.publicKey,
+    lamports,
+    space: 82,
+    programId: TOKEN_PROGRAM_ID,
+  });
+  const initIx = createInitializeMintInstruction(kp.publicKey, decimals, mintAuthority, null, TOKEN_PROGRAM_ID);
+  return { mint: kp.publicKey, ixs: [createIx, initIx], signers: [kp] };
+}
+
+
 
 
 export default function SoundMemesClient() {
+
+  // 1) FIRST
+  const wallet = useWallet();
+  const [pools, setPools] = useState<PoolType[]>([]);
+  const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
+
+
+  const searchParams   = useSearchParams();
+  const deepLinkedMint = searchParams.get("mint");
+  const queryRaw = (searchParams.get("q") || "").trim();
+  const query    = queryRaw.toLowerCase();
+
+
+  
+
+
 
 type UserPoolNfts = Record<
   string,              // memeMint (base-58 string)
@@ -128,17 +610,93 @@ const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad
 const PROJECT_WALLET = new PublicKey('34JBFxZnw7f6Ye9dsHpeLTnDjA1cU3HnJL1ABFVpjBMb');
 const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 const metaplex = Metaplex.make(connection);
-const WOODENG_DECIMALS = 9;
-const MEME_DECIMALS = 0;
-const PROTOCOL_FEE_BPS = 100; // 1 %
-const BONDING_MCAP_THRESHOLD_LAMPORTS = 35 * 10 ** WOODENG_DECIMALS; // 35 WOODENG market-cap (lamports)
+
 const poolMcap = (p: PoolType) => p.ammReserves?.woodeng ?? 0;
 // 44 000 000 MEME (raw, i.e. decimals *not* applied)
 const BONDING_CURVE_THRESHOLD_RAW = 44_000_000;
-const CONFIG_VERSION = 3;
+const CONFIG_VERSION = 7;
+
+
+type SortMode = 'marketcap' | 'gainers' | 'newest';
+const PER_PAGE = 12;
+
+const [sortMode, setSortMode] = useState<SortMode>('marketcap');
+const [page, setPage] = useState(1);
+
+
+
+
+
+
+// one per mint, persisted history only (from the DB API)
+const [persistedSeriesByMint, setPersistedSeriesByMint] = useState<
+  Record<string, { time: number; price: number }[]>
+>({});
+
+
+
+// one in-memory timeseries per meme mint (for charts)
+const [priceSeriesByMint, setPriceSeriesByMint] = useState<
+  Record<string, { time: number; price: number }[]>
+>({});
+
+
+const pushPricePoint = useCallback((mintStr: string, priceLamports: number) => {
+  const priceUi = priceLamports / 10 ** WOODENG_DECIMALS; // lamports → WOODENG
+  setPriceSeriesByMint(prev => {
+    const arr = [...(prev[mintStr] ?? []), { time: Date.now(), price: priceUi }];
+    return { ...prev, [mintStr]: arr.slice(-500) }; // keep last 500 points
+  });
+}, []);
+
+
+// Persist to server (throttled) so charts are shared across users
+const lastPostedRef = useRef<Map<string, number>>(new Map());
+
+async function persistPricePoint(mintStr: string, priceLamports: number) {
+  const now = Date.now();
+  const last = lastPostedRef.current.get(mintStr) ?? 0;
+  if (now - last < 10_000) return; // at most once / 10s per mint
+  lastPostedRef.current.set(mintStr, now);
+
+  try {
+    await fetch('/api/pricepoints/ingest', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mint: mintStr, priceLamports }),
+    });
+  } catch {
+    // ignore transient errors; we'll send again later
+  }
+}
+
 
 
 // put this near the other top-level utils
+
+function memeOutForWoodengIn(pool: PoolType, budgetRaw: number): number {
+  // invert getQuoteForMemeBuy with a small exponential search + binary search
+  const DEC = pool.decimals ?? MEME_DECIMALS;
+  if (!Number.isFinite(budgetRaw) || budgetRaw <= 0) return 0;
+
+  const spend = (amtUi: number) => getQuoteForMemeBuy(pool, amtUi) || Number.POSITIVE_INFINITY;
+
+  // start with a small guess and grow until we exceed budget
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 32 && spend(hi) < budgetRaw; i++) hi *= 2;
+
+  // binary-search to target spend
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    const need = spend(mid);
+    if (need > budgetRaw) hi = mid; else lo = mid;
+  }
+
+  // floor to mint decimals
+  const factor = 10 ** DEC;
+  return Math.floor(lo * factor) / factor;
+}
 
 /** Converts a BN (or plain number) to a JS number, defaulting to 0 */
 const asNumber = (x?: BN | number) =>
@@ -149,9 +707,117 @@ const asNumber = (x?: BN | number) =>
 
 
 
-function isAmm(pool: PoolType) {
-  return pool.poolType === 1;   // ← nothing else
+
+
+function rangeMs(range: string) {
+  switch (range) {
+    case '1s':  return 1_000;
+    case '1m':  return 60_000;
+    case '5m':  return 5 * 60_000;
+    case '30m': return 30 * 60_000;
+    case '1H':  return 60 * 60_000;
+    case '24H': return 24 * 60 * 60_000;
+    case '7D':  return 7  * 24 * 60 * 60_000;
+    case '30D': return 30 * 24 * 60 * 60_000;
+    case '1Y':  return 365* 24 * 60 * 60_000;
+    case 'ALL': return Infinity;
+    default:    return 24 * 60 * 60_000;
+  }
 }
+
+
+
+
+// % change over last 24h from persisted series (already fetched for all pools)
+const change24hFor = useCallback((mintStr: string): number => {
+  const series = priceSeriesByMint[mintStr] ?? [];
+  if (series.length < 2) return 0;
+
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const last = series[series.length - 1].price;
+  // first point within 24h window (fallback to earliest)
+  const past = (series.find(p => p.time >= cutoff)?.price) ?? series[0].price;
+  if (!past) return 0;
+  return ((last - past) / past) * 100;
+}, [priceSeriesByMint]);
+
+// "Newest" ≈ first time we saw a pricepoint for the mint
+const createdAtFor = useCallback((mintStr: string): number => {
+  const s = priceSeriesByMint[mintStr] ?? [];
+  return s.length ? s[0].time : 0; // 0 pushes unknowns to the end
+}, [priceSeriesByMint]);
+
+
+// helper once
+const isPubkey = (s: string) => { try { new PublicKey(s); return true; } catch { return false; } };
+
+// score how well a pool matches the query
+const scorePool = (p: PoolType): number => {
+  if (!query) return 0;
+
+  // 1) address direct hit
+  if (isPubkey(queryRaw) && p.memeMint.toBase58() === queryRaw) return 1000;
+
+  const name   = (p.name || "").toLowerCase();
+  const symbol = (p.symbol || "").toLowerCase();
+
+  let s = 0;
+  if (symbol) {
+    if (symbol === query)        s += 800;
+    else if (symbol.startsWith(query)) s += 600;
+    else if (symbol.includes(query))  s += 400;
+  }
+  if (name === query)            s += 300;
+  else if (name.includes(query)) s += 200;
+
+  return s;
+};
+
+// 1) reduce the set by query (if any)
+const filteredPools = React.useMemo(() => {
+  if (!query) return pools;
+
+  if (isPubkey(queryRaw)) {
+    return pools.filter(p => p.memeMint.toBase58() === queryRaw);
+  }
+  return pools.filter(p => scorePool(p) > 0);
+}, [pools, query, queryRaw]);
+
+// 2) your existing sorting, but on the filtered set
+const sortedPools = React.useMemo(() => {
+  const arr = [...filteredPools];
+
+  // primary: match quality (desc)
+  arr.sort((a, b) => scorePool(b) - scorePool(a));
+
+  // secondary: your selected mode
+  switch (sortMode) {
+    case 'marketcap':
+      arr.sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0));
+      break;
+    case 'gainers':
+      arr.sort((a, b) =>
+        change24hFor(b.memeMint.toBase58()) - change24hFor(a.memeMint.toBase58())
+      );
+      break;
+    case 'newest':
+      arr.sort((a, b) =>
+        createdAtFor(b.memeMint.toBase58()) - createdAtFor(a.memeMint.toBase58())
+      );
+      break;
+  }
+  return arr;
+}, [filteredPools, sortMode, change24hFor, createdAtFor]);
+
+// 3) paging stays the same, but uses sortedPools
+const totalPages  = Math.min(10, Math.max(1, Math.ceil(sortedPools.length / PER_PAGE)));
+const pageClamped = Math.min(page, totalPages);
+const start       = (pageClamped - 1) * PER_PAGE;
+const visiblePools = sortedPools.slice(start, start + PER_PAGE);
+
+// reset to page 1 when sort, pools or query change
+useEffect(() => { setPage(1); }, [sortMode, pools.length, query]);
+
 
 
 async function migratePool(pool: PoolType) {
@@ -187,24 +853,15 @@ async function migratePool(pool: PoolType) {
 // ------------------------------------------------------------------
 //  spot price for a bonding (virtual-reserve) pool
 // ------------------------------------------------------------------
-function bondingSpotPrice(
-  cfg: { vtokens: number; vwoodeng: number },
-  reserves: { meme: number; woodeng: number }
-) {
-    const { vtokens, vwoodeng } = cfg;
+function bondingSpotPrice(cfg: { vtokens: number; vwoodeng: number; bondingSold: number }) {
+  const { vtokens, vwoodeng, bondingSold } = cfg;
   if (!vtokens || !vwoodeng) return NaN;
-  const threshold = BONDING_CURVE_THRESHOLD_RAW;
-
-  // on-chain p0, p1, k:
   const p0 = vwoodeng / vtokens;
-  const p1 = BONDING_MCAP_THRESHOLD_LAMPORTS / threshold;
-  const k  = Math.log(p1 / p0) / threshold;
-
-  // how many real tokens have been minted so far?
-  const x = reserves.meme;
-  // current price = p0 · e^(k·x), then convert lamports → UI
-  return (p0 * Math.exp(k * x)) / 10 ** WOODENG_DECIMALS;
+  const p1 = BONDING_MCAP_THRESHOLD_LAMPORTS;
+  const k  = Math.log(p1 / p0) / BONDING_CURVE_THRESHOLD_RAW;
+  return (p0 * Math.exp(k * bondingSold)) / 10 ** WOODENG_DECIMALS;
 }
+
 
 
 
@@ -273,94 +930,75 @@ async function stillOwnsNft(
 
 
 // ----- NFT LOCK/MINT LOGIC, FULLY FIXED -----
-async function ensureLockerInitialized(pool: PoolType & { nftMint: PublicKey }, wallet: WalletContextState) {
-  const memeMint = pool.memeMint;
-  const nftMint = pool.nftMint;
-  const threshold = pool.nftThreshold ?? 10000;
-  const meme_name = pool.name ?? "Meme";
+// ----- NFT LOCK/MINT PREREQ: ensure counter + locker exist -----
+async function ensureLockerInitialized(
+  pool: PoolType & { nftMint: PublicKey },
+  walletCtx: WalletContextState
+) {
+  const memeMint    = pool.memeMint;
+  const nftMint     = pool.nftMint;
+  const threshold   = pool.nftThreshold ?? 10000;
+  const meme_name   = pool.name   ?? "Meme";
   const meme_symbol = pool.symbol ?? "MEME";
-  const meme_uri = pool.imageUrl ?? "";
+  const meme_uri    = pool.imageUrl ?? "";
 
-  if (!wallet.publicKey) throw new Error("Wallet not connected");
+  assertWallet(walletCtx);
 
-  const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
+  const provider      = new AnchorProvider(connection, getAnchorWallet(walletCtx), { preflightCommitment: "confirmed" });
   const lockerProgram = new Program(lockerIdl, LOCKER_PROGRAM_ID, provider);
 
-  // 1. Derive counter PDA
+  // 1) Counter PDA
   const [counterPda] = await PublicKey.findProgramAddress(
-    [Buffer.from('counter'), memeMint.toBuffer(), wallet.publicKey.toBuffer()],
+    [Buffer.from("counter"), memeMint.toBuffer(), walletCtx.publicKey!.toBuffer()],
     LOCKER_PROGRAM_ID
   );
 
-  // 2. Get or create the counter
-  let lockId: number | bigint = 0;
-  let shouldInitCounter = false;
-  const counterAccountInfo = await connection.getAccountInfo(counterPda);
-  if (!counterAccountInfo) {
-    shouldInitCounter = true;
-  } else {
-    try {
-      const counterAccount = await lockerProgram.account.lockCounter.fetch(counterPda);
-      lockId = typeof counterAccount.count === "number"
-        ? counterAccount.count
-        : Number(counterAccount.count);
-    } catch (e) {
-      throw new Error("Counter PDA exists but failed to deserialize. Try with a new wallet or new memeMint.");
-    }
-  }
-  if (shouldInitCounter) {
-    await lockerProgram.methods.initializeCounter()
-      .accounts({
-        user: wallet.publicKey,
-        counter: counterPda,
-        memeMint,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    // refetch lockId after initializing
-    const counterAccount = await lockerProgram.account.lockCounter.fetch(counterPda);
-    lockId = typeof counterAccount.count === "number"
-      ? counterAccount.count
-      : Number(counterAccount.count);
+  // 2) Initialize counter if missing
+  const counterInfo = await connection.getAccountInfo(counterPda);
+  if (!counterInfo) {
+    await lockerProgram.methods.initializeCounter().accounts({
+      user: walletCtx.publicKey!,
+      counter: counterPda,
+      memeMint,
+      systemProgram: SystemProgram.programId,
+    }).rpc();
   }
 
-  // 3. Derive lockerPda
-  const [lockerPda] = await getLockerPda(memeMint, wallet.publicKey, lockId);
+  // 3) Locker PDA using current counter value
+  const counter = await lockerProgram.account.lockCounter.fetch(counterPda);
+  const lockId  = Number(counter.count);
+  const [lockerPda] = await getLockerPda(memeMint, walletCtx.publicKey!, BigInt(lockId));
 
-  // Compute lockerMemeAccount!
-  const lockerMemeAccount = await getAta(lockerPda, memeMint, true);
-
-  // Now you can use lockerPda for fetching/creating
-  let isInitialized = false;
+  // 4) If locker already exists, done
   try {
     await lockerProgram.account.lockerState.fetch(lockerPda);
-    isInitialized = true;
-  } catch (e) {
-    isInitialized = false;
-  }
-  if (isInitialized) return;
+    return;
+  } catch {}
 
-  // Now call initializeLocker (AFTER counter is initialized)
-  await lockerProgram.methods
-    .initializeLocker(
-      new BN(threshold),
-      meme_name,
-      meme_symbol,
-      meme_uri,
-    )
-    .accounts({
-      user: wallet.publicKey,
-      counter: counterPda,
-      locker: lockerPda,
-      memeMint,
-      nftMint,
-      lockerMemeAccount,
-      systemProgram: SystemProgram.programId,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      rent: SYSVAR_RENT_PUBKEY,
-    })
-    .rpc();
+  // 5) Ensure locker’s meme ATA exists (owned by the PDA) — send once
+  const { ata: lockerMemeAccount, ix: lockerMemeAtaIx } =
+    await ensureAtaIx(lockerPda, memeMint, walletCtx.publicKey!, true);
+  await sendIxsOnce(connection, getAnchorWallet(walletCtx), [lockerMemeAtaIx]);
+
+  // 6) Initialize the locker
+  await lockerProgram.methods.initializeLocker(
+    new BN(threshold),
+    meme_name,
+    meme_symbol,
+    meme_uri,
+  ).accounts({
+    user: walletCtx.publicKey!,
+    counter: counterPda,
+    locker: lockerPda,
+    memeMint,
+    nftMint,
+    lockerMemeAccount,
+    systemProgram: SystemProgram.programId,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    rent: SYSVAR_RENT_PUBKEY,
+  }).rpc();
 }
+
 
 
 // add a tiny helper type
@@ -377,55 +1015,29 @@ type MintedInfo = {
 async function lockTokens(
   pool: PoolType,
   setStatus: (msg: string) => void,
-  wallet: WalletContextState,
+  walletCtx: WalletContextState,
   refresh: () => Promise<void>,
-  onMintSuccess?: (info: MintedInfo) => void
+  onMintSuccess?: (info: { mint: PublicKey; memeMint: string; lockId: number | bigint }) => void
 ) {
-    /* — NEW — show progress pop-up */
+  // nice progress UI
+  const setStep = (s: number, t: number, msg: string) =>
+    setTxStep({ step: s, total: t, message: msg });
+
   try {
-    if (!wallet.publicKey) throw new Error("Connect wallet first");
-
-    const memeMint    = pool.memeMint;
-    const mintKeypair = Keypair.generate();
-    const nftMint     = mintKeypair.publicKey;
-
-    /* ── STEP 1 ─────────────────────────────────── */
-    setTxStep({ step: 1, total: 4, message: "Creating counter / mint…" });
-
-    const [counterPda] = await PublicKey.findProgramAddress(
-      [Buffer.from("counter"), memeMint.toBuffer(), wallet.publicKey.toBuffer()],
-      LOCKER_PROGRAM_ID
-    );
-    const provider      = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
+    if (!walletCtx.publicKey || !walletCtx.signTransaction || !walletCtx.signAllTransactions) {
+      throw new Error("Connect wallet first");
+    }
+    const wallet = getAnchorWallet(walletCtx);
+    const provider = new AnchorProvider(connection, wallet, { preflightCommitment: 'confirmed' });
     const lockerProgram = new Program(lockerIdl, LOCKER_PROGRAM_ID, provider);
 
-    // initialise counter if missing
-    if (!(await connection.getAccountInfo(counterPda))) {
-      await lockerProgram.methods.initializeCounter().accounts({
-        user: wallet.publicKey,
-        counter: counterPda,
-        memeMint,
-        systemProgram: SystemProgram.programId
-      }).rpc();
-    }
-    const { count } = await lockerProgram.account.lockCounter.fetch(counterPda);
-    const lockId = Number(count);
+    const memeMint = pool.memeMint;
+    const threshold = getMintThreshold(pool);
+    const name   = pool.name   ?? "Meme";
+    const symbol = pool.symbol ?? "MEME";
 
-    /* ── STEP 2 ─────────────────────────────────── */
-    setTxStep({ step: 2, total: 4, message: "Creating on-chain accounts…\nYou’ll see 3 wallet pop-ups – approve each" });
-
-    const [lockerPda] = await getLockerPda(memeMint, wallet.publicKey, lockId);
-    await createMintWithPdaAuthority(connection, wallet, lockerPda, [mintKeypair]);
-
-    const userMemeAta   = await createAtaIfNotExists(connection, wallet, memeMint, wallet.publicKey);
-    const userNftAta    = await createAtaIfNotExists(connection, wallet, nftMint,  wallet.publicKey);
-    const lockerMemeAta = await getAta(lockerPda, memeMint, true);
-
-    await ensureLockerInitialized({ ...pool, nftMint }, wallet);
-
-    /* ── STEP 3 ─────────────────────────────────── */
-    setTxStep({ step: 3, total: 4, message: "Uploading metadata to IPFS…" });
-
+    // -------- 0) off-chain uploads (no wallet popups) ----------
+    setStep(1, 3, "Uploading NFT metadata to IPFS…");
     const imageUrl = pool.imageFile instanceof File
       ? `ipfs://${await pinFile(pool.imageFile)}`
       : pool.imageUrl ?? "";
@@ -434,62 +1046,147 @@ async function lockTokens(
       : pool.audioUrl ?? "";
 
     const meta = {
-      name: pool.name,
-      symbol: pool.symbol,
-      description: pool.description,
-      image: imageUrl,
-      animation_url: audioUrl,
+      name, symbol, description: pool.description ?? "",
+      image: imageUrl, animation_url: audioUrl,
       attributes: [
         ...(pool.attributes || []),
         { trait_type: "MemeMint", value: memeMint.toBase58() },
-        { trait_type: "LockId",   value: lockId.toString() }
       ],
       properties: { files: [
-        { uri: imageUrl, type: "image/png" },
-        { uri: audioUrl, type: "audio/mpeg" }
-      ]}
+        imageUrl ? { uri: imageUrl, type: "image/png" } : undefined,
+        audioUrl ? { uri: audioUrl, type: "audio/mpeg" } : undefined,
+      ].filter(Boolean) }
     };
-
     const cid = await pinFile(
       new File([new Blob([JSON.stringify(meta)], { type: "application/json" })], "metadata.json")
     );
     const metaUri = `https://gateway.pinata.cloud/ipfs/${cid}`;
 
-    /* ── STEP 4 ─────────────────────────────────── */
-    setTxStep({ step: 4, total: 4, message: "Signing final mint transaction…" });
+    // -------- 1) pre-derive things we need ----------------------
+    setStep(2, 3, "Preparing accounts…");
+    const [counterPda] = await PublicKey.findProgramAddress(
+      [Buffer.from("counter"), memeMint.toBuffer(), wallet.publicKey.toBuffer()],
+      LOCKER_PROGRAM_ID
+    );
 
-    await lockerProgram.methods.lockTokensAndMintNft(
-      pool.name,
-      pool.symbol,
-      metaUri
-    ).accounts({
-      user: wallet.publicKey,
-      userMemeAccount:   userMemeAta,
-      locker:            lockerPda,
-      lockerMemeAccount: lockerMemeAta,
-      nftMint,
-      userNftAccount:    userNftAta,
-      metadata: (
-        await PublicKey.findProgramAddress(
-          [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), nftMint.toBuffer()],
-          METADATA_PROGRAM_ID
+    // fetch current counter (if exists) to derive lockId now
+    let lockId = 0;
+    const counterInfo = await connection.getAccountInfo(counterPda);
+    if (counterInfo) {
+      const c = await lockerProgram.account.lockCounter.fetch(counterPda);
+      lockId = Number(c.count);
+    } else {
+      lockId = 0; // first time
+    }
+
+    const [lockerPda] = await getLockerPda(memeMint, wallet.publicKey, BigInt(lockId));
+
+    // NFT mint: authority = locker PDA
+    const mintBuild = await buildCreateMintIx(connection, wallet.publicKey, 0, lockerPda);
+    const nftMint   = mintBuild.mint;
+
+    // ATAs (idempotent, so safe in one tx)
+    const { ata: userMemeAta, ix: userMemeAtaIx } =
+      await ensureAtaIx(wallet.publicKey, memeMint, wallet.publicKey, false);
+    const { ata: userNftAta, ix: userNftAtaIx } =
+      await ensureAtaIx(wallet.publicKey, nftMint,  wallet.publicKey, false);
+    const lockerMemeAccount = await getAssociatedTokenAddress(memeMint, lockerPda, true);
+
+    // which on-chain setup do we actually need?
+    const needInitCounter = !counterInfo;
+    let needInitLocker = false;
+    try { await lockerProgram.account.lockerState.fetch(lockerPda); }
+    catch { needInitLocker = true; }
+
+    // instructions – ALL in one blob
+    const ixs: TransactionInstruction[] = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 350_000 }),
+      ...mintBuild.ixs,
+      userMemeAtaIx,
+      userNftAtaIx,
+    ];
+
+    if (needInitCounter) {
+      ixs.push(
+        await lockerProgram.methods.initializeCounter()
+          .accounts({
+            user: wallet.publicKey, counter: counterPda, memeMint,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction()
+      );
+    }
+
+    if (needInitLocker) {
+      ixs.push(
+        await lockerProgram.methods.initializeLocker(
+          new BN(threshold), name, symbol, pool.imageUrl ?? ""
         )
-      )[0],
-      tokenMetadataProgram: METADATA_PROGRAM_ID,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-      rent: SYSVAR_RENT_PUBKEY,
-    }).rpc();
+        .accounts({
+          user: wallet.publicKey,
+          counter: counterPda,
+          locker: lockerPda,
+          memeMint,
+          nftMint,                  // just-created mint
+          lockerMemeAccount,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .instruction()
+      );
+    }
 
-    /* ── SUCCESS ────────────────────────────────── */
+    // final mint (locks tokens & mints NFT, creates metadata inside the program)
+    const metadataPda = (
+      await PublicKey.findProgramAddress(
+        [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), nftMint.toBuffer()],
+        METADATA_PROGRAM_ID
+      )
+    )[0];
+
+    ixs.push(
+      await lockerProgram.methods
+        .lockTokensAndMintNft(name, symbol, metaUri)
+        .accounts({
+          user: wallet.publicKey,
+          userMemeAccount:   userMemeAta,
+          locker:            lockerPda,
+          lockerMemeAccount,
+          nftMint,
+          userNftAccount:    userNftAta,
+          metadata:          metadataPda,
+          tokenMetadataProgram: METADATA_PROGRAM_ID,
+          tokenProgram:      TOKEN_PROGRAM_ID,
+          systemProgram:     SystemProgram.programId,
+          rent:              SYSVAR_RENT_PUBKEY,
+        })
+        .instruction()
+    );
+
+    // -------- 2) single signature send --------------------------
+    setStep(3, 3, "Sign once to mint your sound NFT…");
+    try {
+      await sendIxsOnce(connection, wallet, ixs, mintBuild.signers);
+    } catch (e: any) {
+      let logs = '';
+      try {
+        if (e instanceof SendTransactionError) {
+          const l = await e.getLogs(connection);
+          if (l?.length) logs = '\n' + l.join('\n');
+        }
+      } catch {}
+      throw new Error((e?.message ?? String(e)) + logs);
+    }
+
     setTxStep(null);
     onMintSuccess?.({ mint: nftMint, memeMint: memeMint.toBase58(), lockId });
     await refresh();
+    await refreshBalances();
   } catch (err: any) {
+    setTxStep(null);
     setStatus("NFT mint failed: " + (err.message ?? err.toString()));
     throw err;
-  } finally {
-    setTxStep(null);   // always hide modal
   }
 }
 
@@ -516,32 +1213,8 @@ async function lockTokens(
 
 
 
- type PoolType = {
-   /* on-chain config ------------------------------------ */
-   poolType: 0 | 1;           // 0 = bonding, 1 = AMM
-   lastMemePrice?: number;    // starting price for bonding curve
 
-   /* reserves & mints ----------------------------------- */
-   ammReserves: { meme: number; woodeng: number };
-  memeMint: PublicKey;
-  nftThreshold?: number;
-  vtokens?: number;          // ← add this
-  vwoodeng?: number;
-  bondingSold?: number;  
-  userMemeBalance?: number;
-  symbol?: string;
-  name?: string;
-  description?: string;
-  imageUrl?: string;
-  audioUrl?: string;
-  price?: number;
-    // add these fields:
-  imageFile?: File;
-  audioFile?: File;
-  attributes?: any[]; // or more specific type
-  // add any other fields your pool objects have
-  decimals?: number;
-};
+
 
 /**
  * How many WOODENG lamports are needed to buy `memeUiOut` MEME?
@@ -552,44 +1225,50 @@ async function lockTokens(
  * @param memeUiOut  desired MEME amount **in UI units** (e.g. 90.5)
  * @returns          lamports of WOODENG that must be paid
  */
-function getWoodengForMemeBuy(pool: PoolType, memeUiOut: number): number {
-  const MIN_LAMPORTS = 1;                     // ← add once at the top
-  const DEC = pool.decimals ?? MEME_DECIMALS;           // fall back to 0
-  const memeRawOut = Math.floor(memeUiOut * 10 ** DEC); // smallest units
+function getQuoteForMemeBuy(pool: PoolType, memeUiOut: number): number {
+  const MIN_LAMPORTS = 1;
+  const DEC = pool.decimals ?? 0;
 
-  /* ── 1. Bonding-curve pool ───────────────────────────────────── */
+  // desired MEME out, in RAW units
+  const memeRawOut = Math.floor(memeUiOut * 10 ** DEC);
+
+  // ── Bonding-curve (poolType 0) ───────────────────────────────
   if (pool.poolType === 0) {
-  const BONDING_FEE_BPS = 100;                        // from your Rust
-      const { vtokens, vwoodeng } = pool;
-    if (!vtokens || !vwoodeng) return NaN;
+    const BONDING_FEE_BPS = 100;
     const threshold = BONDING_CURVE_THRESHOLD_RAW;
 
-  // on-chain p0, p1, k:
-  const p0 = vwoodeng / vtokens;
-  const p1 = BONDING_MCAP_THRESHOLD_LAMPORTS / threshold;
-  const k  = Math.log(p1 / p0) / threshold;
+    const vtokens  = pool.vtokens ?? 0;
+    const vwoodeng = pool.vwoodeng ?? 0;
+    const sold     = pool.bondingSold ?? 0;
 
-  const x = memeRawOut;                              // tokens wanted
-  // lamports before fee:
-  const spentNoFee = (p0 / k) * (Math.exp(k * x) - 1);
-  // add 1% protocol fee:
-  const fee = spentNoFee * (BONDING_FEE_BPS / 10_000);
-    const lamports = Math.ceil(spentNoFee + fee);
-    return Math.max(MIN_LAMPORTS, lamports);   // ← new single return
-}
+    if (!vtokens || !vwoodeng || memeRawOut <= 0) return NaN;
 
+    // p(x) = p0 * e^(k x)
+    const p0 = vwoodeng / vtokens;
+    const p1 = BONDING_MCAP_THRESHOLD_LAMPORTS; 
+    const k  = Math.log(p1 / p0) / threshold;
 
+    // ∫_{sold}^{sold + memeRawOut} p0 e^{k t} dt
+    const base = (p0 / k) * (Math.exp(k * (sold + memeRawOut)) - Math.exp(k * sold));
+    const fee  = base * (BONDING_FEE_BPS / 10_000);
+    const lamports = Math.ceil(base + fee);
 
-  /* ── 2. AMM (XYK) pool ───────────────────────────────────────── */
-  const x = Number(pool.ammReserves.meme);    // MEME in vault (raw)
-  const y = Number(pool.ammReserves.woodeng); // WOODENG in vault (lamports)
+    return Math.max(MIN_LAMPORTS, lamports);
+  }
+
+  // ── AMM (XYK) ────────────────────────────────────────────────
+  const x = Number(pool.ammReserves.meme);     // MEME reserve (raw)
+  const y = Number(pool.ammReserves.woodeng);  // WOODENG reserve (lamports)
   if (memeRawOut <= 0 || memeRawOut >= x) return NaN;
 
-  // Δy = ceil( y * Δx / (x − Δx) )   ← pure XYK
-  let dx = Math.ceil((y * memeRawOut) / (x - memeRawOut));
-  dx = Math.ceil(dx / (1 - 0.003));            // trader fee
-  return Math.max(MIN_LAMPORTS, dx);           // ← and here
+  // Δy = ceil( y * Δx / (x − Δx) )
+  let woodengIn = Math.ceil((y * memeRawOut) / (x - memeRawOut));
+  // add 0.3% fee (exact-in)
+  woodengIn = Math.ceil(woodengIn / (1 - 0.003));
+
+  return Math.max(MIN_LAMPORTS, woodengIn);
 }
+
 
 // How many tokens still need to be SOLD until the curve migrates?
 function tokensUntilAmm(pool: PoolType): number {
@@ -602,16 +1281,21 @@ function tokensUntilAmm(pool: PoolType): number {
 
 
 
-function getWoodengForMemeSell(pool: PoolType, memeRawIn: number): number {
-  if (pool.poolType === 0) return NaN;              // selling disabled
+function getQuoteForMemeSell(pool: PoolType, memeRawIn: number): number {
+  if (pool.poolType === 0) return NaN; // selling disabled on bonding
 
-  const x = Number(pool.ammReserves.meme);
-  const y = Number(pool.ammReserves.woodeng);
-  if (memeRawIn <= 0 || memeRawIn >= x) return NaN;
-  let dy = Math.floor((y * memeRawIn) / (x + memeRawIn));
-  dy = Math.floor(dy * (1 - 0.003));                // 0.30 % fee
-  return dy;
+  const x = Number(pool.ammReserves.meme);     // MEME reserve (raw)
+  const y = Number(pool.ammReserves.woodeng);  // WOODENG reserve (lamports)
+  if (memeRawIn <= 0) return NaN;
+
+  // AMM XYK exact-in (user sells MEME to receive WOODENG)
+  // Δy = floor( (y * Δx_eff) / (x + Δx_eff) ), with fee applied to input
+  const FEE = 0.003;
+  const dxEff = Math.floor(memeRawIn * (1 - FEE));
+  let dy = Math.floor((y * dxEff) / (x + dxEff));
+  return Math.max(0, dy);
 }
+
 
 function userMemeTokens(pool: PoolType): number {
   // balance still loading? – return NaN so we can render a placeholder
@@ -632,12 +1316,17 @@ function PoolTypeBadge({ poolType }: { poolType: 0 | 1 }) {
 
   return (
     <span
-      className={`${cfg.bg} text-xs px-2 py-0.5 rounded-full text-white`}
+      className={`
+        ${cfg.bg}
+        shrink-0 whitespace-nowrap
+        text-[11px] px-2 py-0.5 rounded-full font-semibold text-white
+      `}
     >
       {cfg.text}
     </span>
   );
 }
+
 
 
 function ProgressBar({ current, total }: { current: number; total: number }) {
@@ -672,6 +1361,64 @@ function ProgressBar({ current, total }: { current: number; total: number }) {
 }
 
 
+function BondingProgressBar({ pool }: { pool: PoolType }) {
+  if (pool.poolType !== 0) return null; // bonding only
+
+  const woodLamports = Math.max(0, pool.ammReserves?.woodeng ?? 0);
+  const thrLamports  = BONDING_MCAP_THRESHOLD_LAMPORTS; // your 35 WOODENG goal
+  const pct          = Math.min(1, woodLamports / Math.max(1, thrLamports));
+  const pctInt       = Math.round(pct * 100);
+
+  const woodUi = woodLamports / 10 ** WOODENG_DECIMALS;
+  const thrUi  = thrLamports  / 10 ** WOODENG_DECIMALS;
+  const leftUi = Math.max(0, thrUi - woodUi);
+
+  return (
+    <div className="w-full flex flex-col items-center mb-2">
+      {/* header row with subtle tooltip */}
+      <div className="w-11/12 mb-1 flex items-center justify-between text-[11px] text-[#d6d8ff]">
+        <div className="flex items-center gap-1 relative group">
+          <span className="font-semibold">Bonding progress</span>
+          <Info className="w-3.5 h-3.5 opacity-70" />
+          <div
+            className="
+              absolute left-0 top-full mt-1 hidden group-hover:block
+              bg-black/85 text-white rounded-md px-2 py-1 text-[11px]
+              ring-1 ring-white/10 shadow-lg whitespace-nowrap z-10
+            "
+          >
+            
+Pool starts on a bonding curve. When it reaches {thrUi.toFixed(2)} {quoteLabelOf(pool)}
+liquidity, it migrates to the AMM.
+
+          </div>
+        </div>
+        <span className="font-semibold tabular-nums">{pctInt}%</span>
+      </div>
+
+      {/* bar — same proportions as your Mint NFT bar */}
+      <div className="relative w-11/12 h-4 bg-[#2b2b37] rounded overflow-hidden">
+        <div
+          className={`
+            h-full bg-gradient-to-r from-[#b484ff] to-[#6c47e2]
+            ${pctInt === 100 ? 'animate-pulse' : ''}
+          `}
+          style={{ width: `${pct * 100}%` }}
+        />
+        <span className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-[#f0eaff]">
+          {pctInt}%
+        </span>
+      </div>
+
+      {/* micro copy */}
+      <div className="w-11/12 flex justify-between text-[11px] leading-none text-[#d6d8ff] mt-1">
+        <span>{woodUi.toFixed(2)} / {thrUi.toFixed(2)} {quoteLabelOf(pool)}</span>
+        <span>{leftUi.toFixed(2)} {quoteLabelOf(pool)} left</span>
+      </div>
+    </div>
+  );
+}
+
 
 
 async function fetchUserMemeBalance(wallet: WalletContextState, memeMint: PublicKey): Promise<number> {
@@ -697,8 +1444,9 @@ async function fetchSoundMemePoolsWithMetadata(poolProgram: Program) {
 const rawConfigs = await connection.getProgramAccounts(
   POOL_PROGRAM_ID,
   {
-    // size 8 (Anchor discriminator) + 249 (v1 SoundMemeConfig struct)
-    filters: [{ dataSize: 8 + 249 }],
+    
+    filters: [{ dataSize: 8 + 350 }],
+
   }
 );
 
@@ -739,6 +1487,10 @@ const configs = rawConfigs
       let totalSupply = 0;
       let marketCap   = 0;
 
+      
+// 👇 add this before the try
+let quoteMintPk: PublicKey = WOODENG_MINT;
+
       try {
             // --- convert Anchor enum (object *or* number) to 0 | 1 ------------
     const raw      = c.account.poolType as number | { bonding?: {}; amm?: {} };
@@ -747,6 +1499,9 @@ const configs = rawConfigs
       : ("amm" in raw ? 1 : 0);         // object form
         // ── 1) fetch the mint
         const mintPubkey = new PublicKey(c.account.memeMint);
+        // quote mint stored on-chain as `woodengMint` in the config (can be WOODENG or wSOL)
+        quoteMintPk = new PublicKey((c.account as any).woodengMint);
+
         const mintInfo   = await getMint(connection, mintPubkey);
         decimals         = Number(mintInfo.decimals);
 
@@ -785,15 +1540,19 @@ const configs = rawConfigs
         };
 
           // ── 3) compute price
-        if (poolType === 0) {                        // <- use the normalised enum
-  price = bondingSpotPrice(c.account, reserves);
+        // price (AMM path)
+if (poolType === 0) {
+  price = bondingSpotPrice({
+    vtokens:     asNumber((c.account as any).vtokens),
+    vwoodeng:    asNumber((c.account as any).vwoodeng),
+    bondingSold: asNumber((c.account as any).bondingSold),
+  });
+} else if (reserves.meme > 0 && reserves.woodeng > 0) {
+  price = (reserves.woodeng / 10 ** QUOTE_DECIMALS) / (reserves.meme / 10 ** decimals);
+} else {
+  price = 1;
 }
- else if (reserves.meme > 0 && reserves.woodeng > 0) {
-          price = (reserves.woodeng / 10 ** WOODENG_DECIMALS)
-                / (reserves.meme   / 10 ** decimals);
-        } else {
-          price = 1;
-        }
+
 
         // ── 4) now that we know `price`, compute supply & marketCap
         const supplyRaw = Number(mintInfo.supply);
@@ -833,6 +1592,7 @@ return {
   decimals,
   totalSupply,
   marketCap,
+  quoteMint: quoteMintPk,
   ...meta
 };
 
@@ -841,99 +1601,124 @@ return {
   );
 }
 
+
+// REPLACE the whole sellSoundMeme with this version (auto-unwrap to SOL)
 async function sellSoundMeme({
-  pool,
-  memeAmountIn,
-  minWoodengOut,
-  wallet
+  pool, memeAmountIn, minWoodengOut, wallet
 }: { pool: PoolType, memeAmountIn: number, minWoodengOut: number, wallet: any }) {
   if (!wallet.publicKey) throw new Error('Connect wallet first!');
 
   const [configPda] = await getConfigPda(pool.memeMint);
-  if (!wallet.publicKey) throw new Error("Connect wallet first!");
-const buyerMemeAta = await getAssociatedTokenAddress(pool.memeMint, wallet.publicKey!);
-  const buyerWoodengAta = await getAssociatedTokenAddress(WOODENG_MINT, wallet.publicKey);
-  const projectWalletAta = await getAssociatedTokenAddress(WOODENG_MINT, PROJECT_WALLET);
-
-  // Ensure seller has ATAs
-  const instructions = [];
-  if (!(await connection.getAccountInfo(buyerMemeAta)))
-    instructions.push(createAssociatedTokenAccountInstruction(wallet.publicKey, buyerMemeAta, wallet.publicKey, pool.memeMint));
-  if (!(await connection.getAccountInfo(buyerWoodengAta)))
-    instructions.push(createAssociatedTokenAccountInstruction(wallet.publicKey, buyerWoodengAta, wallet.publicKey, WOODENG_MINT));
-  if (instructions.length > 0) {
-    const ataTx = new Transaction().add(...instructions);
-    ataTx.feePayer = wallet.publicKey;
-    ataTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-    try {
-  const signed = await wallet.signTransaction!(ataTx);
-  const txSig = await connection.sendRawTransaction(signed.serialize(), {
-    skipPreflight: false,
-    preflightCommitment: 'confirmed',
-  });
-  await connection.confirmTransaction(txSig, 'confirmed');
-} catch (e: any) {
-  if (e.message?.includes('already been processed')) {
-    console.warn('Ignoring duplicate transaction');
-  } else {
-    throw e;
-  }
-}
-
-  }
-
-
-
-  const provider = new AnchorProvider(connection, getAnchorWallet(wallet),{ preflightCommitment: 'confirmed' });
+  const provider    = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: 'confirmed' });
   const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
 
-  const [poolMemeVault] = await PublicKey.findProgramAddress(
-    [Buffer.from('pool_meme_vault'), pool.memeMint.toBuffer()],
-    POOL_PROGRAM_ID
-  );
-  const [poolWoodengVault] = await PublicKey.findProgramAddress(
-    [Buffer.from('pool_woodeng_vault'), pool.memeMint.toBuffer()],
-    POOL_PROGRAM_ID
-  );
-  const [userAntibot] = await PublicKey.findProgramAddress(
-    [Buffer.from('user_antibot'), wallet.publicKey.toBuffer(), pool.memeMint.toBuffer()],
-    POOL_PROGRAM_ID
-  );
+  const [poolMemeVault]    = await PublicKey.findProgramAddress([Buffer.from('pool_meme_vault'),    pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
+  const [poolWoodengVault] = await PublicKey.findProgramAddress([Buffer.from('pool_woodeng_vault'), pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
 
-  const txSig = await poolProgram.methods
+  const { ata: buyerMemeAta,  ix: buyerMemeAtaIx  } = await ensureAtaIx(wallet.publicKey, pool.memeMint,  wallet.publicKey);
+  const { ata: buyerQuoteAta, ix: buyerQuoteAtaIx } = await ensureAtaIx(wallet.publicKey, pool.quoteMint, wallet.publicKey);
+  const { ata: projectWalletAta, ix: projectWalletAtaIx } = await ensureAtaIx(PROJECT_WALLET, pool.quoteMint, wallet.publicKey);
+
+  const coreIx = await poolProgram.methods
     .sell(new BN(memeAmountIn), new BN(minWoodengOut))
     .accounts({
-  config: configPda,
-  poolMemeVault,
-  poolWoodengVault,
-  memeMint:         pool.memeMint,
-  buyer: wallet.publicKey,
-  buyerMemeAta,
-  buyerWoodengAta,
-  userAntibot,
-  projectWalletAta,
-  lpFeeVault: projectWalletAta,
-  tokenProgram: TOKEN_PROGRAM_ID,
-  systemProgram:   SystemProgram.programId,
-})
-    .rpc();
-  return txSig;
+      config:           configPda,
+      poolMemeVault,
+      poolWoodengVault,
+      memeMint:         pool.memeMint,
+      buyer:            wallet.publicKey,
+      buyerMemeAta,
+      buyerWoodengAta:  buyerQuoteAta,     // destination (quote) ATA
+      projectWalletAta,
+      lpFeeVault:       projectWalletAta,
+      tokenProgram:     TOKEN_PROGRAM_ID,
+      systemProgram:    SystemProgram.programId,
+    })
+    .instruction();
+
+  const ixs = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
+    buyerMemeAtaIx,
+    buyerQuoteAtaIx,
+    projectWalletAtaIx,
+    coreIx,
+  ].filter(Boolean) as TransactionInstruction[];
+
+  // 🚀 NEW: if quote is SOL, unwrap by closing the wSOL ATA → SOL back to the user
+  if (quoteIsSol(pool)) {
+    ixs.push(createCloseAccountInstruction(
+      buyerQuoteAta,         // the wSOL ATA we just received into
+      wallet.publicKey,      // send SOL (lamports) to user
+      wallet.publicKey       // close authority
+    ));
+  }
+
+  return await sendIxsOnce(connection, getAnchorWallet(wallet), ixs);
 }
 
 
 
 
-// ---- MAIN COMPONENT ----
 
-  const wallet = useWallet();
+
+
+
 // 1️⃣ keep the state hook at the top of the component
 const [userPoolNfts, setUserPoolNfts] = useState<UserPoolNfts>({});
 const [nftsLoaded,   setNftsLoaded]   = useState(false);
-const [pools, setPools] = useState<any[]>([]);
 // one entry per memeMint base-58 string
 const [ownedCounts, setOwnedCounts] = useState<Record<string, number>>({});
-// one entry per MEME mint, *always raw units (decimals not applied)*
-const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
+
+
+const [quoteBalancesRaw, setQuoteBalancesRaw] = useState<Record<string, number>>({});
+
+
+
+
+// 1 WOODENG ≡ 1 SOL — on récupère le prix USD de Solana
+const [solUsd, setSolUsd] = useState<number | null>(null);
+const fmtUSD = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v)
+    ? '—'
+    : v.toLocaleString(undefined, {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: v < 1 ? 4 : 2,
+      });
+
+const refreshBalances = useCallback(async () => {
+  if (!wallet.publicKey) {
+    setBalancesByMint({});
+    setQuoteBalancesRaw({});
+    return;
+  }
+
+  // 1) MEME balances (per pool mint)
+  const mints = pools.map(p => p.memeMint);
+  const raw   = await Promise.all(mints.map(mint => fetchUserMemeBalance(wallet, mint)));
+  const map: Record<string, number> = {};
+  mints.forEach((mint, i) => { map[mint.toBase58()] = raw[i]; });
+  setBalancesByMint(map);
+
+  // 2) Quote balances (unique quote mints among visible pools)
+  const quoteSet = Array.from(new Set(
+  pools.map(p => p.quoteMint?.toBase58()).filter(Boolean) as string[]
+));
+
+const qMap: Record<string, number> = {};
+for (const q of quoteSet) {
+  if (q === WSOL_MINT.toBase58()) {
+  const nativeLamports = await connection.getBalance(wallet.publicKey);
+  qMap[q] = nativeLamports; // show only native SOL
+} else {
+  qMap[q] = await fetchUserMemeBalance(wallet, new PublicKey(q));
+}
+
+}
+setQuoteBalancesRaw(qMap);
+}, [wallet.publicKey, pools]);
+
 
 
 // ↕ somewhere around the other modal hooks
@@ -942,6 +1727,7 @@ const [buyFilled, setBuyFilled] = useState<{
   symbol: string;
   amountMeme: number;      // UI units
   priceWoodeng: number;    // UI units
+  quoteLabel?: string; 
 }>({ open: false, symbol: "", amountMeme: 0, priceWoodeng: 0 });
 
 // ↕ right below const [buyFilled, …]
@@ -994,21 +1780,7 @@ const refreshUserNfts = useCallback(async () => {
 }, [wallet.publicKey, pools]);
 
 
-const refreshBalances = useCallback(async () => {
-  if (!wallet.publicKey) {                     // no wallet → clear balances
-    setBalancesByMint({});
-    return;
-  }
 
-  const mints = pools.map(p => p.memeMint);
-  const raw   = await Promise.all(
-    mints.map(mint => fetchUserMemeBalance(wallet, mint))
-  );
-
-  const map: Record<string, number> = {};
-  mints.forEach((mint, i) => { map[mint.toBase58()] = raw[i]; });
-  setBalancesByMint(map);
-}, [wallet.publicKey, pools]);
 
 
 
@@ -1039,9 +1811,9 @@ const refreshBalances = useCallback(async () => {
   const [detailPool, setDetailPool] = useState<any | null>(null);
 
   const [selectedTimeRange, setSelectedTimeRange] = useState('24H');
-  const [chartData, setChartData] = useState<any[]>([]);
-  const [brushStartIndex, setBrushStartIndex] = useState(0);
-  const [selectedDataPoint, setSelectedDataPoint] = useState<number | null>(null);
+
+ 
+
 
   const [showBuyModal, setShowBuyModal] = useState(false);
   const [selectedPool, setSelectedPool] = useState<any | null>(null);
@@ -1055,8 +1827,8 @@ const [burnModal, setBurnModal] = useState<{
   open: boolean;
 }>({ pool: null, nfts: [], open: false });
 
-  const searchParams   = useSearchParams();
-  const deepLinkedMint = searchParams.get("mint");
+  
+
 
 const handleMintNft = (pool: PoolType) => {
   // prevent a second click while the modal is open
@@ -1113,6 +1885,162 @@ const handleMintNft = (pool: PoolType) => {
     .catch((e) => setStatus("Failed to load pools: " + e));
 }, [wallet.connected]);
 
+useEffect(() => {
+  if (!wallet.connected) return;
+
+  const provider = new AnchorProvider(connection, getAnchorWallet(wallet), {
+    commitment: 'confirmed',
+    preflightCommitment: 'confirmed',
+  });
+  const prog = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+
+  let subId: number | null = null;
+
+  (async () => {
+    try {
+      subId = await prog.addEventListener('PriceUpdate', (ev: any /* { memeMint, priceLamports } */, _slot) => {
+        const mintStr = new PublicKey(ev.memeMint).toBase58();
+        const lamports = Number(ev.priceLamports);
+        pushPricePoint(mintStr, Number(ev.priceLamports));
+        persistPricePoint(mintStr, lamports);
+      });
+    } catch (e) {
+      console.warn('Event subscription failed (RPC may not support logs). Will rely on polling.', e);
+    }
+  })();
+
+  return () => {
+    if (subId != null) prog.removeEventListener(subId);
+  };
+}, [wallet.connected, pushPricePoint]);
+
+
+
+
+
+// Load existing history for each pool so charts show up on first open
+useEffect(() => {
+  if (pools.length === 0) return;
+
+  (async () => {
+    try {
+      const all = await Promise.all(
+        pools.map(async (p) => {
+          const mintStr = p.memeMint.toBase58();
+          const res = await fetch(`/api/pricepoints/${mintStr}?limit=2000`, { cache: 'no-store' });
+          if (!res.ok) return [mintStr, []] as const;
+          const arr: Array<{ time: string; priceLamports: string }> = await res.json();
+          return [mintStr, arr] as const;
+        })
+      );
+
+      setPriceSeriesByMint(prev => {
+        const next = { ...prev };
+        for (const [mintStr, arr] of all) {
+          next[mintStr] = arr.map(pt => ({
+            time: new Date(pt.time).getTime(),
+            price: Number(pt.priceLamports) / 10 ** WOODENG_DECIMALS,
+          }));
+        }
+        return next;
+      });
+    } catch (e) {
+      console.warn('Failed loading history', e);
+    }
+  })();
+}, [pools]);
+
+
+
+
+// seed a point when pools load or refresh, and keep polling every 10s
+useEffect(() => {
+  if (pools.length === 0) return;
+
+  let stop = false;
+
+  // seed current price for every pool right away
+  for (const p of pools) {
+    const mintStr = p.memeMint.toBase58();
+    // prefer on-chain config last price if present
+    const lamports = (p.lastMemePrice ?? 0);
+    const derived  = Math.max(1, Math.floor((p.price ?? 0) * 10 ** WOODENG_DECIMALS));
+    pushPricePoint(mintStr, lamports > 0 ? lamports : derived);
+  }
+
+  // polling: read config.lastMemePrice every 10s
+  const provider = new AnchorProvider(connection, (wallet.publicKey
+    ? getAnchorWallet(wallet)
+    : ({ publicKey: new PublicKey('11111111111111111111111111111111') } as any)
+  ), { commitment: 'confirmed' });
+  const prog = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+
+  const id = setInterval(async () => {
+    if (stop) return;
+    try {
+      for (const p of pools) {
+        const cfg = await prog.account.soundMemeConfig.fetch(p.pubkey);
+        const lamports = Number((cfg as any).lastMemePrice ?? 0);
+if (lamports > 0) {
+  const mintStr = p.memeMint.toBase58();
+  pushPricePoint(mintStr, lamports);
+  persistPricePoint(mintStr, lamports);   // ← ADD THIS
+}
+
+      }
+    } catch (e) {
+      // swallow intermittent RPC errors
+    }
+  }, 10_000);
+
+  return () => {
+    stop = true;
+    clearInterval(id);
+  };
+}, [pools, wallet.publicKey, pushPricePoint]);
+
+
+useEffect(() => {
+  if (!showDetail || !detailPool) return;
+
+  const mintStr = detailPool.memeMint.toBase58();
+  let stop = false;
+  let timer: any = null;
+
+  const fetchOnce = async () => {
+    try {
+      const res = await fetch(`/api/pricepoints/${mintStr}?limit=2000`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const rows: Array<{ time: string; priceLamports: string }> = await res.json();
+
+      if (stop) return;
+      setPersistedSeriesByMint(prev => ({
+        ...prev,
+        [mintStr]: rows
+          .map(r => ({
+            time: new Date(r.time).getTime(),
+            price: Number(r.priceLamports) / 1e9, // lamports → WOODENG
+          }))
+          .sort((a, b) => a.time - b.time)
+          .slice(-2000),
+      }));
+    } catch {
+      /* ignore transient errors */
+    }
+  };
+
+  // initial fetch
+  fetchOnce();
+
+  // keep it fresh while the modal is open (every 10s)
+  timer = setInterval(fetchOnce, 10_000);
+
+  return () => {
+    stop = true;
+    if (timer) clearInterval(timer);
+  };
+}, [showDetail, detailPool]);
+
 
 
 // place just after the other useEffect hooks
@@ -1127,6 +2055,25 @@ useEffect(() => {
 useEffect(() => {
   refreshBalances();            // ← fetch raw balances
 }, [refreshBalances]);
+
+
+// Récupère le prix USD de SOL (1 WOODENG = 1 SOL)
+useEffect(() => {
+  let mounted = true;
+  (async () => {
+    try {
+      const r = await fetch(
+        'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+        { cache: 'no-store' }
+      );
+      const j = await r.json();
+      if (mounted) setSolUsd(Number(j?.solana?.usd) || null);
+    } catch {
+      if (mounted) setSolUsd(null);
+    }
+  })();
+  return () => { mounted = false; };
+}, []);
 
 
   // --------------------------------------------
@@ -1165,111 +2112,69 @@ useEffect(() => {
  
 
   // --- Buy Logic for Modal ---
-  async function buySoundMeme({
-  pool,
-  amountWoodengIn,
-  minMemeOut,
-  wallet,
+async function buySoundMeme({
+  pool, amountWoodengIn, minMemeOut, wallet
 }: { pool: PoolType, amountWoodengIn: number, minMemeOut: number, wallet: any }) {
-    if (!wallet.publicKey) throw new Error('Connect wallet first!');
+  if (!wallet.publicKey) throw new Error('Connect wallet first!');
 
-    const [configPda] = await getConfigPda(pool.memeMint);
-    if (!wallet.publicKey) throw new Error("Connect wallet first!");
+  const [configPda] = await getConfigPda(pool.memeMint);
+  const provider    = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: 'confirmed' });
+  const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
 
-    
+  const [poolMemeVault]    = await PublicKey.findProgramAddress([Buffer.from('pool_meme_vault'),    pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
+  const [poolWoodengVault] = await PublicKey.findProgramAddress([Buffer.from('pool_woodeng_vault'), pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
 
-const buyerMemeAta = await getAssociatedTokenAddress(pool.memeMint, wallet.publicKey);
-    const buyerWoodengAta = await getAssociatedTokenAddress(WOODENG_MINT, wallet.publicKey);
-    const projectWalletAta = await getAssociatedTokenAddress(WOODENG_MINT, PROJECT_WALLET);
+  const { ata: buyerMemeAta, ix: buyerMemeAtaIx } = await ensureAtaIx(wallet.publicKey, pool.memeMint, wallet.publicKey);
 
-
-
-
-    // Ensure buyer has ATAs
-    const instructions = [];
-    if (!(await connection.getAccountInfo(buyerMemeAta)))
-      instructions.push(createAssociatedTokenAccountInstruction(wallet.publicKey, buyerMemeAta, wallet.publicKey, pool.memeMint));
-    if (!(await connection.getAccountInfo(buyerWoodengAta)))
-      instructions.push(createAssociatedTokenAccountInstruction(wallet.publicKey, buyerWoodengAta, wallet.publicKey, WOODENG_MINT));
-    if (instructions.length > 0) {
-      const ataTx = new Transaction().add(...instructions);
-      ataTx.feePayer = wallet.publicKey;
-      ataTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      try {
-  const signed = await wallet.signTransaction!(ataTx);
-  const txSig = await connection.sendRawTransaction(signed.serialize(), {
-    skipPreflight: false,
-    preflightCommitment: 'confirmed',
-  });
-  await connection.confirmTransaction(txSig, 'confirmed');
-} catch (e: any) {
-  if (e.message?.includes('already been processed')) {
-    console.warn('Ignoring duplicate transaction');
+  // Quote (input) account: wrap for SOL, otherwise idempotent ATA
+  let buyerQuoteAta: PublicKey;
+  let buyerQuoteAtaIx: TransactionInstruction | null = null;
+  let wrapIxs: TransactionInstruction[] = [];
+  if (quoteIsSol(pool)) {
+    const w = await buildWrapSolIxs(wallet.publicKey, amountWoodengIn);
+    buyerQuoteAta = w.ata;
+    wrapIxs = w.ixs;                                   // create + fund + sync
   } else {
-    throw e;
+    const r = await ensureAtaIx(wallet.publicKey, pool.quoteMint, wallet.publicKey);
+    buyerQuoteAta = r.ata;
+    buyerQuoteAtaIx = r.ix;
   }
-}
 
-    }
+  const { ata: projectWalletAta, ix: projectWalletAtaIx } =
+    await ensureAtaIx(PROJECT_WALLET, pool.quoteMint, wallet.publicKey);
 
-    // Anchor setup
-    const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: 'confirmed' });
-    const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+  const isAmm  = pool.poolType === 1;
+  const method = isAmm
+    ? poolProgram.methods.swap(new BN(amountWoodengIn), new BN(minMemeOut))
+    : poolProgram.methods.buy (new BN(amountWoodengIn), new BN(minMemeOut));
 
-
-    // bonding-vs-amm check
-const raw = pool.poolType as number | { bonding?: {}; amm?: {} };
-const isAmm = typeof raw === "number" ? raw === 1 : !!raw.amm;
-
-// optional: give the user a hint instead of blocking
-if (!isAmm) {
-  setStatus?.("Buying from bonding curve...");
-}
-
-
-
-
-
-
-    // *** Use PDAs for pool vaults ***
-    const [poolMemeVault] = await PublicKey.findProgramAddress(
-      [Buffer.from('pool_meme_vault'), pool.memeMint.toBuffer()],
-      POOL_PROGRAM_ID
-    );
-    const [poolWoodengVault] = await PublicKey.findProgramAddress(
-      [Buffer.from('pool_woodeng_vault'), pool.memeMint.toBuffer()],
-      POOL_PROGRAM_ID
-    );
-    const [userAntibot] = await PublicKey.findProgramAddress(
-      [Buffer.from('user_antibot'), wallet.publicKey.toBuffer(), pool.memeMint.toBuffer()],
-      POOL_PROGRAM_ID
-    );
-
-  /* choose the right instruction ---------------------------------- */
-const method = isAmm
-  ? poolProgram.methods.swap(new BN(amountWoodengIn), new BN(minMemeOut))
-  : poolProgram.methods.buy (new BN(amountWoodengIn), new BN(minMemeOut));
-
-const txSig = await method
-  .accounts({
+  const coreIx = await method.accounts({
     config:        configPda,
     memeMint:      pool.memeMint,
     poolMemeVault,
     poolWoodengVault,
     buyer:         wallet.publicKey,
     buyerMemeAta,
-    buyerWoodengAta,
-    userAntibot,
+    buyerWoodengAta: buyerQuoteAta,     // << input (quote) ATA
     projectWalletAta,
     lpFeeVault:    projectWalletAta,
     tokenProgram:  TOKEN_PROGRAM_ID,
     systemProgram: SystemProgram.programId,
-  })
-  .rpc();
+  }).instruction();
 
+  const ixs = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
+    buyerMemeAtaIx,
+    buyerQuoteAtaIx,     // may be null for SOL
+    projectWalletAtaIx,
+    ...wrapIxs,          // only for SOL
+    coreIx,
+  ].filter(Boolean) as TransactionInstruction[];
 
-    return txSig;
-  }
+  return await sendIxsOnce(connection, getAnchorWallet(wallet), ixs);
+}
+
 
   // REPLACE the entire handleOpenBuyModal function with this
 const handleOpenBuyModal = async (poolFromGrid: PoolType) => {
@@ -1306,7 +2211,7 @@ const handleOpenBuyModal = async (poolFromGrid: PoolType) => {
 
 
   // lamports of WOODENG we will actually spend (exact-in)
-const spendRaw = getWoodengForMemeBuy(
+const spendRaw = getQuoteForMemeBuy(
   selectedPool,
   Number(modalTokensToBuy)
 );
@@ -1316,7 +2221,7 @@ const maxWoodengIn = spendRaw;
 
 
 // exact spend at *current* curve state (used for maths & UI)
-const woodengUiExact  = spendRaw     / 10 ** WOODENG_DECIMALS;
+const quoteUiExact  = spendRaw / 10 ** QUOTE_DECIMALS;
 // buffered spend that actually goes into the TX
 const woodengUiNeeded = maxWoodengIn / 10 ** WOODENG_DECIMALS;
 
@@ -1328,7 +2233,7 @@ const isBonding       = selectedPool.poolType === 0;
     // only enforce slippage on AMM pools
   if (!isBonding) {
     const spotPrice = Number(selectedPool.price);
-    const avgPrice  = woodengUiExact / Number(modalTokensToBuy);
+    const avgPrice  = quoteUiExact / Number(modalTokensToBuy);
     const priceImpact = ((avgPrice - spotPrice) / spotPrice) * 100;
     if (priceImpact > slippage) {
       setTransactionStatus('error');
@@ -1387,7 +2292,8 @@ setBuyFilled({
   open: true,
   symbol: selectedPool.symbol,
   amountMeme: Number(modalTokensToBuy),
-  priceWoodeng: woodengUiExact,        // we computed this a few lines above
+  priceWoodeng: quoteUiExact,        // we computed this a few lines above
+  quoteLabel: quoteLabelOf(selectedPool),   // ← add this
 });
 
     } catch (e: any) {
@@ -1399,7 +2305,7 @@ setBuyFilled({
   const handleConfirmSell = async () => {
   const DEC       = selectedPool.decimals ?? MEME_DECIMALS;
   const memeRawIn = Math.floor(Number(modalTokensToSell) * 10 ** DEC);
-  const woodengRawOut = getWoodengForMemeSell(selectedPool, memeRawIn);
+  const woodengRawOut = getQuoteForMemeSell(selectedPool, memeRawIn);
   const woodengUiOut = woodengRawOut / 10 ** WOODENG_DECIMALS;
   const spotPrice = Number(selectedPool.price);
   const avgPrice = memeRawIn > 0 ? (woodengUiOut / Number(modalTokensToSell)) : 0;
@@ -1508,72 +2414,68 @@ async function unlockTokens(
 }
 
 
+function CompactBondingGauge({ pool }: { pool: PoolType }) {
+  if (pool.poolType !== 0) return null;
+
+  const woodLamports = Math.max(0, pool.ammReserves?.woodeng ?? 0);
+  const thrLamports  = BONDING_MCAP_THRESHOLD_LAMPORTS; // 35 WOODENG
+  const pct          = Math.min(1, woodLamports / thrLamports);
+  const pctInt       = Math.round(pct * 100);
+
+  const woodUi = woodLamports / (10 ** WOODENG_DECIMALS);
+  const thrUi  = thrLamports  / (10 ** WOODENG_DECIMALS);
+  const leftUi = Math.max(0, thrUi - woodUi);
+
+  return (
+    <div
+      className="group h-full flex flex-col items-center justify-center gap-2 pointer-events-auto select-none"
+      onMouseDown={(e) => e.stopPropagation()} // don’t open the card if user clicks here
+    >
+      {/* top label (always visible) */}
+      <div className="text-[11px] font-semibold text-white/95 bg-black/60 px-2 py-0.5 rounded-md ring-1 ring-white/10">
+        Bonding in progress...
+      </div>
+
+      {/* vertical bar: wider & taller; percent lives INSIDE the bar */}
+      <div className="relative w-8 h-full min-h-32 rounded-full overflow-hidden bg-white/10 ring-1 ring-white/10">
+        {/* hover tooltip (only on hover) */}
+        <div className="
+            absolute left-1/2 -translate-x-1/2 -top-2 -translate-y-full
+            opacity-0 group-hover:opacity-100 transition-opacity
+            bg-black/80 text-[11px] text-white px-2 py-1 rounded-md ring-1 ring-white/10
+            whitespace-nowrap pointer-events-none
+          ">
+          Bonding · {pctInt}% · {leftUi.toFixed(2)} {quoteLabelOf(pool)} left
+        </div>
+
+        {/* percent label inside bar */}
+        <div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-white drop-shadow">
+          {pctInt}%
+        </div>
+
+        {/* fill */}
+        <div
+          className="absolute bottom-0 left-0 right-0 bg-gradient-to-b from-[#b484ff] to-[#6c47e2]"
+          style={{ height: `${pct * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+
 
 
   
 
-  // --- Chart logic (dummy, unchanged) ---
-  const generateChartData = useCallback(() => {
-    const now = new Date();
-    const data = [];
-    let interval, points;
-    switch (selectedTimeRange) {
-      case '1s': interval = 100; points = 10; break;
-      case '1m': interval = 6 * 1000; points = 10; break;
-      case '5m': interval = 30 * 1000; points = 10; break;
-      case '30m': interval = 3 * 60 * 1000; points = 10; break;
-      case '1H': interval = 6 * 60 * 1000; points = 10; break;
-      case '24H': interval = 144 * 60 * 1000; points = 10; break;
-      case '7D': interval = 16.8 * 60 * 60 * 1000; points = 10; break;
-      case '30D': interval = 3 * 24 * 60 * 60 * 1000; points = 10; break;
-      case '1Y': interval = 36.5 * 24 * 60 * 60 * 1000; points = 10; break;
-      case 'ALL': interval = 73 * 24 * 60 * 60 * 1000; points = 10; break;
-      default: interval = 144 * 60 * 1000; points = 10;
-    }
-    for (let i = points - 1; i >= 0; i--) {
-      const time = new Date(now.getTime() - (i * interval));
-      const basePrice = 150;
-      const variance = Math.random() * 20 - 10;
-      data.push({
-        time: time.toISOString(),
-        price: +(basePrice + variance).toFixed(2),
-        volume: Math.floor(Math.random() * 100)
-      });
-    }
-    return data;
-  }, [selectedTimeRange]);
-  useEffect(() => {
-    setChartData(generateChartData());
-    setBrushStartIndex(0);
-  }, [selectedTimeRange, generateChartData]);
 
-  const formatTime = (time: string) => {
-    const date = new Date(time);
-    switch (selectedTimeRange) {
-      case '1s':
-      case '1m':
-      case '5m':
-      case '30m':
-        date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      case '1H':
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      case '24H':
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      case '7D':
-      case '30D':
-        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-      case '1Y':
-      case 'ALL':
-        return date.toLocaleDateString([], { month: 'short', year: '2-digit' });
-      default:
-        return date.toLocaleString();
-    }
-  };
+
 
   return (
-  <div className="min-h-screen bg-[#181920] text-white p-8">
-    {/* Header */}
-    <h1 className="text-3xl font-bold mb-8">Sound Meme Pools</h1>
+  <div className="min-h-screen bg-[#181920] text-white px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
+  {/* Header */}
+  <h1 className="text-2xl sm:text-3xl font-bold mb-4 sm:mb-8">Sound Meme Pools</h1>
+
 
     {/* Status Banner */}
     {status && (
@@ -1586,13 +2488,90 @@ async function unlockTokens(
     )}
 
 
+
+    {/* Toolbar */}
+<div className="hidden md:flex mb-4 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+  <div className="inline-flex rounded-lg overflow-hidden border border-[#33334a] overflow-x-auto whitespace-nowrap">
+
+    <button
+      onClick={() => setSortMode('marketcap')}
+      className={`px-3 py-1 text-sm ${sortMode==='marketcap' ? 'bg-[#ffc371] text-black' : 'bg-[#262635] text-white'}`}
+    >
+      Top Market Cap
+    </button>
+    <button
+      onClick={() => setSortMode('gainers')}
+      className={`px-3 py-1 text-sm ${sortMode==='gainers' ? 'bg-[#ffc371] text-black' : 'bg-[#262635] text-white'}`}
+    >
+      Top Gainers 24h
+    </button>
+    <button
+      onClick={() => setSortMode('newest')}
+      className={`px-3 py-1 text-sm ${sortMode==='newest' ? 'bg-[#ffc371] text-black' : 'bg-[#262635] text-white'}`}
+    >
+      Newest
+    </button>
+  </div>
+
+  {/* Pagination */}
+  <div className="flex items-center gap-2">
+    <button
+  className="px-3 py-2 text-sm bg-[#262635] rounded disabled:opacity-40"
+
+      onClick={() => setPage(p => Math.max(1, p - 1))}
+      disabled={pageClamped === 1}
+    >
+      Prev
+    </button>
+    <span className="text-xs text-[#c2c2c9]">{pageClamped} / {totalPages}</span>
+    <button
+  className="px-3 py-2 text-sm bg-[#262635] rounded disabled:opacity-40"
+
+      onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+      disabled={pageClamped === totalPages}
+    >
+      Next
+    </button>
+  </div>
+
+  {/* hash targets for the mobile drawer */}
+<div id="top-gainers" className="scroll-mt-24" />
+<div id="top-marketcap" className="scroll-mt-24" />
+<div id="newest" className="scroll-mt-24" />
+
+<MobileVerticalStacks
+  pools={pools}
+  onOpen={(p) => { setDetailPool(p); setShowDetail(true); }}
+  onBuy={(p) => handleOpenBuyModal(p)}
+  onSell={(p) => handleOpenSellModal(p)}
+  change24hFor={change24hFor}
+  createdAtFor={createdAtFor}
+/>
+
+</div>
+
+
+
     {/* Global step-progress modal */}
     {txStep && <StepModal {...txStep} />}
 
+    {/* MOBILE — vertical climb stacks with rocket progress */}
+<MobileVerticalStacks
+  pools={pools}
+  onOpen={(p) => { setDetailPool(p); setShowDetail(true); }}
+  onBuy={(p) => handleOpenBuyModal(p)}
+  onSell={(p) => handleOpenSellModal(p)}
+  change24hFor={change24hFor}
+  createdAtFor={createdAtFor}
+/>
 
-    {/* Card Grid */}
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-      {pools.map((pool, i) => {
+
+
+    {/* DESKTOP/TABLET — existing grid */}
+<div className="hidden md:block">
+  {/* Card Grid */}
+  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+    {visiblePools.map((pool, i) => {
 
 
      // User NFT count for this pool
@@ -1601,68 +2580,109 @@ async function unlockTokens(
      /* ---------- SELL-eligibility ------------------------------------- */
      const mcap    = pool.ammReserves?.woodeng ?? 0;
      const canSell = isAmm(pool);
+          // 24h change for badge
+     const chg = change24hFor(pool.memeMint.toBase58());
+     const chgAbs = Math.abs(chg).toFixed(2);
+     const chgUp = chg >= 0;
         return (
           <div
             key={pool.pubkey.toBase58()}
-            className="group bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl overflow-hidden hover:scale-105 transition-all cursor-pointer flex flex-col"
+            className="group bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl hover:scale-105 transition-all cursor-pointer flex flex-col"
             onClick={() => { setDetailPool(pool); setShowDetail(true); }}
           >
             {/* IMAGE + Overlay */}
-            <div className="relative aspect-square w-full">
-              <img
-                src={pool.imageUrl || "https://placehold.co/400x400?text=No+Image"}
-                alt={pool.name}
-                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-              />
-              <div className="absolute inset-0 flex flex-col justify-between p-2">
-                <div className="flex justify-end space-x-2">
-                  <span className="bg-purple-700/80 text-xs px-2 py-0.5 rounded-full text-white">SPL404 NFT</span>
-                  <PoolTypeBadge poolType={pool.poolType} />
-                  {pool.category && (
-                    <span className="bg-blue-700/80 text-xs px-2 py-0.5 rounded-full text-white">{pool.category}</span>
-                  )}
-                  
+            <div className="relative aspect-square w-full overflow-hidden rounded-t-2xl">
+               <img
+   src={pool.imageUrl || "https://placehold.co/400x400?text=No+Image"}
+   alt={pool.name || 'Sound meme'}
+   className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+   loading="lazy"
+   decoding="async"
+   fetchPriority="low"
+   sizes="(min-width:1280px) 25vw, (min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
+ />
+               <div className="absolute inset-0 flex items-center justify-center p-2">
+  <button
+    className="bg-black/70 p-3 rounded-full hover:bg-black/80 transition"
+    onClick={e => { e.stopPropagation(); playDemo(pool.pubkey.toBase58(), pool.audioUrl); }}
+  >
+    {playing === pool.pubkey.toBase58() ? (
+      <Pause className="w-6 h-6 text-white" />
+    ) : (
+      <Play className="w-6 h-6 text-white" />
+    )}
+  </button>
+</div>
 
-                </div>
-                {/* Play Button Overlay */}
-                <button
-                  className="self-center mb-2 bg-black/70 p-3 rounded-full hover:bg-black/80 transition"
-                  onClick={e => { e.stopPropagation(); playDemo(pool.pubkey.toBase58(), pool.audioUrl); }}
-                >
-                  {playing === pool.pubkey.toBase58() ? (
-                    <Pause className="w-6 h-6 text-white" />
-                  ) : (
-                    <Play className="w-6 h-6 text-white" />
-                  )}
-                </button>
-              </div>
+
+
+
+
+
             </div>
             {/* Main Card Info */}
             <div className="flex flex-col flex-1 p-4">
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="font-bold text-xl truncate">{pool.name || "No Name"}</h2>
-                <span className="text-xs text-[#adadff] font-semibold">
-                  24h Vol: {pool.volume24h?.toLocaleString()} WOODENG
-                </span>
-              </div>
+              
               <div className="text-[#c2c2c9] text-sm truncate">{pool.description || "No description"}</div>
-              <div className="flex items-center gap-3 mt-3">
-                <span className="text-[#ffc371] font-bold text-lg">{pool.price?.toFixed(5)} WOODENG</span>
-                <span className="text-xs bg-[#2b323c] px-2 py-1 rounded">{pool.symbol || "MEME"}</span>
-              </div>
-              <div className="flex items-center gap-2 mt-2">
-                <span className="text-xs">Liquidity:</span>
-                <span className="text-xs text-[#d3d3d3]">
-                  {(pool.ammReserves?.woodeng / 10 ** WOODENG_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 6 })} WOODENG /
-                  {(pool.ammReserves?.meme / 10 ** MEME_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 6 })} MEME
-                </span>
-              </div>
-               <div className="text-xs text-[#adadff] mt-1 flex justify-between">
-   <span>Supply: {pool.totalSupply.toLocaleString()} {pool.symbol}</span>
-   <span>Market Cap: {pool.marketCap.toFixed(2)} WOODENG</span>
- </div>
-              {/* ─────────── Action buttons ─────────── */}
-<div className="grid grid-cols-3 gap-2 mt-4 text-sm font-semibold">
+               <div className="mt-3 flex items-center gap-3">
+  {/* price + unit */}
+  <div className="flex items-baseline gap-2 whitespace-nowrap">
+    <span className="text-[#ffc371] font-bold text-lg tabular-nums">
+      {Number(pool.price ?? 0).toFixed(5)}
+    </span>
+    <span className="text-sm text-[#ffc371]/90">{quoteLabelOf(pool)}</span>
+  </div>
+
+  
+
+
+  {/* right side pushed to edge */}
+  <div className="ml-auto flex items-center gap-2">
+    <span className="text-xs bg-[#2b323c] px-2 py-1 rounded">{pool.symbol || "MEME"}</span>
+    <span className={`text-xs px-2 py-0.5 rounded ${chgUp ? 'bg-green-600/20 text-green-300' : 'bg-red-600/20 text-red-300'}`}>
+      {chgUp ? '▲' : '▼'} {chgAbs}%
+    </span>
+  </div>
+</div>
+
+
+              {/* Liquidity row — SHOW ONLY ON AMM */}
+{isAmm(pool) && (
+  <div className="flex items-center gap-2 mt-2">
+    <span className="text-xs">Liquidity:</span>
+    <span className="text-xs text-[#d3d3d3]">
+  {(pool.ammReserves?.woodeng / 10 ** QUOTE_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 6 })} {quoteLabelOf(pool)}
+  {" / "}
+  {(pool.ammReserves?.meme / 10 ** (pool.decimals ?? MEME_DECIMALS)).toLocaleString(undefined, { maximumFractionDigits: 6 })} {pool.symbol || "MEME"}
+</span>
+
+  </div>
+)}
+
+{/* Supply + Market Cap — SHOW ONLY ON AMM */}
+{isAmm(pool) && (
+  <div className="mt-1 text-xs text-[#adadff]">
+    <div>
+      Supply: {(pool.totalSupply ?? 0).toLocaleString()} {pool.symbol ?? ""}
+    </div>
+    <div className="whitespace-nowrap">
+      Market Cap: {Number(pool.marketCap ?? 0).toFixed(2)} {quoteLabelOf(pool)}
+      {solUsd && (
+        <span className="text-[#9ea1ff]">
+          {" "} (≈ {fmtUSD(Number(pool.marketCap ?? 0) * solUsd)})
+        </span>
+      )}
+    </div>
+  </div>
+)}
+
+              {/* Bonding progress (bonding pools only) */}
+{pool.poolType === 0 && <BondingProgressBar pool={pool} />}
+
+{/* ─────────── Action buttons ─────────── */}
+<div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2 text-sm font-semibold">
+
+
 
   {/* ► BUY ------------------------------------------------------- */}
 
@@ -1686,7 +2706,7 @@ async function unlockTokens(
 
 {/* ► MIGRATE – shown when 35 ≤ mcap < 69 WOODENG */}
 {!isAmm(pool) &&
-  poolMcap(pool) >= 35 * 10 ** WOODENG_DECIMALS &&
+  poolMcap(pool) >= 34 * 10 ** WOODENG_DECIMALS &&
   poolMcap(pool) <  69 * 10 ** WOODENG_DECIMALS && (
     <button
       className="h-10 rounded bg-[#37ad71] text-white hover:bg-[#4cd488] transition"
@@ -1775,73 +2795,165 @@ async function unlockTokens(
 
                 {userMemeTokens(pool) < getMintThreshold(pool) && (
   <div className="w-11/12 mx-auto mt-1 text-[11px] text-center text-[#f8c286]">
-    Need {getMintThreshold(pool) - userMemeTokens(pool)} more tokens to mint NFT
+    Need {(Math.max(0, getMintThreshold(pool) - userMemeTokens(pool))).toLocaleString(
+      undefined, { maximumFractionDigits: pool.decimals ?? 0 }
+    )} more tokens to mint NFT
   </div>
-                )}
+)}
+
               </div>
             </div>
         );
       })}
     </div>
+    </div>
 
-    {/* ───────────────────────── BUY MODAL ───────────────────────── */}
+
 {showBuyModal && selectedPool && (() => {
-  /* how many MEME can still be bought before migration */
-  const tokensLeft = tokensUntilAmm(selectedPool);
+  const DEC = selectedPool.decimals ?? MEME_DECIMALS;
+
+  // quote balances for this pool (WOODENG or SOL)
+  const quoteMintStr = selectedPool.quoteMint.toBase58();
+  const quoteBalRaw  = quoteBalancesRaw[quoteMintStr] ?? 0;
+  const quoteBalUi   = quoteBalRaw / 10 ** QUOTE_DECIMALS;
+  const quoteLabel   = quoteLabelOf(selectedPool);
+
+  // user's current MEME balance (for display)
+  const memeBalRaw = balancesByMint[selectedPool.memeMint.toBase58()] ?? 0;
+  const memeBalUi  = memeBalRaw / 10 ** DEC;
+
+  // how many MEME are left on bonding before migration (∞ on AMM)
+  const tokensLeft = selectedPool.poolType === 0
+    ? Math.max(0, tokensUntilAmm(selectedPool))
+    : Infinity;
+
+  // % chips: spend a portion of quote balance and solve for MEME out
+  const setQuickBuyPct = (pct: number | "MAX") => {
+    // keep a tiny SOL buffer when the quote is SOL
+    const safety = quoteIsSol(selectedPool) ? 5_000 : 0; // lamports
+    const budgetRaw = pct === "MAX"
+      ? Math.max(0, quoteBalRaw - safety)
+      : Math.floor(quoteBalRaw * pct);
+
+    if (budgetRaw <= 0) return setModalTokensToBuy("");
+
+    let amtUi = memeOutForWoodengIn(selectedPool, budgetRaw);
+    if (Number.isFinite(tokensLeft)) amtUi = Math.min(amtUi, tokensLeft as number);
+
+    const floored = Math.floor(amtUi * 10 ** DEC) / 10 ** DEC;
+    setModalTokensToBuy(DEC === 0 ? String(Math.floor(floored)) : String(floored));
+  };
+
+  const maxUi = Number.isFinite(tokensLeft) ? (tokensLeft as number) : undefined;
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
-      onClick={() => setShowBuyModal(false)}                     /* overlay click */
-    >
-      <div
-        className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl
-                   flex flex-col items-center relative"
-        onClick={e => e.stopPropagation()}                       /* block inner clicks */
-      >
-        {/* close × button */}
-        <button
-          className="absolute top-4 right-4"
-          onClick={() => setShowBuyModal(false)}>
+  className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-3 py-[env(safe-area-inset-top)]"
+  onClick={() => setShowBuyModal(false)}
+>
+  <div
+    className="bg-[#181920] rounded-2xl w-[min(92vw,420px)] p-4 sm:p-6 shadow-2xl
+               flex flex-col items-center relative max-h-[85vh] overflow-y-auto"
+    onClick={e => e.stopPropagation()}
+  >
+        <button className="absolute top-4 right-4" onClick={() => setShowBuyModal(false)}>
           <X />
         </button>
 
-        {/* heading + thumbnail */}
         <h2 className="text-xl font-bold mb-2">Buy {selectedPool.symbol}</h2>
         <img
-          src={selectedPool.imageUrl}
-          className="w-24 h-24 rounded-xl mb-3"
-          alt={selectedPool.name}
-        />
+  src={selectedPool.imageUrl}
+  className="w-24 h-24 rounded-xl mb-3"
+  alt={selectedPool.name || 'meme'}
+  loading="lazy"
+  decoding="async"
+  sizes="(max-width: 480px) 96px, 128px"
+/>
         <span className="text-[#c2c2c9] mb-3">{selectedPool.name}</span>
 
-        {/* ─── Amount to buy ─────────────────────────────────── */}
         <div className="flex flex-col gap-2 w-full">
-          <label>Amount to buy:</label>
+          <label className="flex items-center justify-between">
+            <span>Amount to buy:</span>
+          </label>
+
+          <div className="text-xs text-[#aab] -mt-1">
+            Balance:&nbsp;
+            <span className="text-white font-medium">
+              {memeBalUi.toLocaleString(undefined, { maximumFractionDigits: DEC })}
+            </span>
+            &nbsp;{selectedPool.symbol}
+          </div>
+
+          <div className="text-[11px] text-[#8ea] -mt-0.5">
+            {quoteLabel} Balance:&nbsp;
+            <span className="text-white/90">
+              {quoteBalUi.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+            </span>
+          </div>
 
           <input
-            type="number"
-            className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full"
-            placeholder="0"
-            value={modalTokensToBuy}
-            onChange={e => setModalTokensToBuy(e.target.value)}
-            min={1}
-            max={tokensLeft}                                      /* clamp! */
-          />
+  type="number"
+  inputMode="decimal"
+  autoComplete="off"
+  className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full text-base"
+  placeholder="0"
+  value={modalTokensToBuy}
+  onChange={e => setModalTokensToBuy(e.target.value)}
+  step={(selectedPool.decimals ?? MEME_DECIMALS) === 0 ? 1 : 'any'}
+  min={(selectedPool.decimals ?? MEME_DECIMALS) === 0 ? 1 : 0}
+/>
 
-          {/* live counter */}
-          <p className="text-xs text-[#f0eaff] mt-1">
-            {tokensLeft.toLocaleString()} {selectedPool.symbol} left before migration
-          </p>
+
+          <div className="grid grid-cols-4 gap-2 w-full">
+            <button
+              className="text-xs bg-[#262635] hover:bg-[#2c2c3d] rounded px-2 py-1"
+              onClick={() => setQuickBuyPct(0.10)}
+              disabled={quoteBalRaw <= 0 || tokensLeft === 0}
+              title={`Spend 10% of ${quoteLabel}`}
+            >
+              10%
+            </button>
+            <button
+              className="text-xs bg-[#262635] hover:bg-[#2c2c3d] rounded px-2 py-1"
+              onClick={() => setQuickBuyPct(0.25)}
+              disabled={quoteBalRaw <= 0 || tokensLeft === 0}
+              title={`Spend 25% of ${quoteLabel}`}
+            >
+              25%
+            </button>
+            <button
+              className="text-xs bg-[#262635] hover:bg-[#2c2c3d] rounded px-2 py-1"
+              onClick={() => setQuickBuyPct(0.50)}
+              disabled={quoteBalRaw <= 0 || tokensLeft === 0}
+              title={`Spend 50% of ${quoteLabel}`}
+            >
+              50%
+            </button>
+            <button
+              className="text-xs bg-[#262635] hover:bg-[#2c2c3d] rounded px-2 py-1"
+              onClick={() => setQuickBuyPct("MAX")}
+              disabled={quoteBalRaw <= 0 || tokensLeft === 0}
+              title={`Spend almost all ${quoteLabel}`}
+            >
+              MAX
+            </button>
+          </div>
+
+          {Number.isFinite(tokensLeft) && (
+            <p className="text-xs text-[#f0eaff] mt-1">
+              {Math.max(0, tokensLeft as number).toLocaleString()} {selectedPool.symbol} left before migration
+            </p>
+          )}
 
           <span className="text-sm text-[#d7bb7a]">
-            Total:&nbsp;
-            {(getWoodengForMemeBuy(selectedPool, Number(modalTokensToBuy))
-              / 10 ** WOODENG_DECIMALS).toFixed(5)} WOODENG
-          </span>
+  Total:&nbsp;
+  {(() => {
+    const raw = getQuoteForMemeBuy(selectedPool, Number(modalTokensToBuy));
+    return Number.isFinite(raw) ? (raw / 10 ** QUOTE_DECIMALS).toFixed(5) : '—';
+  })()} {quoteLabel}
+</span>
         </div>
 
-        {/* ─── Slippage ──────────────────────────────────────── */}
         <div className="flex flex-col gap-2 w-full mt-2">
           <label>Slippage tolerance (%)</label>
           <input
@@ -1853,89 +2965,178 @@ async function unlockTokens(
           />
         </div>
 
-        {/* ─── Confirm button ───────────────────────────────── */}
         <button
           className="bg-[#ffc371] w-full mt-4 text-black font-bold py-2 rounded"
           onClick={handleConfirmBuy}
           disabled={
             !modalTokensToBuy ||
-             Number.isNaN(
-              getWoodengForMemeBuy(selectedPool, Number(modalTokensToBuy))
-            ) ||                               // ← no more unknown identifier
+            Number.isNaN(getQuoteForMemeBuy(selectedPool, Number(modalTokensToBuy))) ||
             transactionStatus === 'processing' ||
-            tokensLeft === 0                           /* block when sold-out */
-          }>
+            tokensLeft === 0
+          }
+        >
           {transactionStatus === 'processing' ? 'Processing…' : 'Confirm Buy'}
         </button>
 
-        {/* status banners */}
-        {transactionStatus === 'success' &&
-          <div className="text-green-400 mt-2">{transactionMessage}</div>}
-        {transactionStatus === 'error' &&
-          <div className="text-red-400 mt-2">{transactionMessage}</div>}
+        {transactionStatus === 'success' && (
+          <div className="text-green-400 mt-2">{transactionMessage}</div>
+        )}
+        {transactionStatus === 'error' && (
+          <div className="text-red-400 mt-2">{transactionMessage}</div>
+        )}
       </div>
     </div>
   );
 })()}
 
 
+
+
     {/* SELL MODAL */}
-    {showSellModal && selectedPool && (
-  <div
-    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
-    onClick={() => setShowSellModal(false)}          // 👈 overlay click
-  >
+{showSellModal && selectedPool && (() => {
+  const DEC    = selectedPool.decimals ?? MEME_DECIMALS;
+  const balRaw = balancesByMint[selectedPool.memeMint.toBase58()] ?? 0;
+  const balUi  = balRaw / 10 ** DEC;
+  const step   = DEC > 0 ? "any" : 1;
+
+  // % quick buttons (10/25/50/MAX)
+  const setQuickSellPct = (pct: number | "MAX") => {
+    let targetUi =
+      pct === "MAX" ? balUi : Math.max(0, Math.min(balUi, balUi * pct));
+    // floor to decimals
+    const floored = Math.floor(targetUi * 10 ** DEC) / 10 ** DEC;
+    setModalTokensToSell(DEC === 0 ? String(Math.floor(floored)) : String(floored));
+  };
+
+  const amountUi = Number(modalTokensToSell || 0);
+  const overBal  = amountUi > balUi || amountUi <= 0;
+
+  // live receive preview
+  const rawIn  = Math.floor(amountUi * 10 ** DEC);
+  const wood   = getQuoteForMemeSell(selectedPool, rawIn);
+  const woodUi = wood / 10 ** QUOTE_DECIMALS;
+  const quoteLabel = quoteLabelOf(selectedPool);
+
+
+  return (
     <div
-      className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl
-                 flex flex-col items-center relative"
-      onClick={e => e.stopPropagation()}            // 👈 block inner clicks
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
+      onClick={() => setShowSellModal(false)}
     >
-      <button
-        className="absolute top-4 right-4"          // now inside the dialog
-        onClick={() => setShowSellModal(false)}
+      <div
+        className="bg-[#181920] rounded-2xl max-w-xs w-full p-6 shadow-2xl
+                   flex flex-col items-center relative"
+        onClick={e => e.stopPropagation()}
       >
-        <X />
-      </button>
-          <h2 className="text-xl font-bold mb-2">Sell {selectedPool.symbol}</h2>
-          <img src={selectedPool.imageUrl} className="w-24 h-24 rounded-xl mb-3" alt="meme" />
-          <span className="text-[#c2c2c9] mb-3">{selectedPool.name}</span>
-          <div className="flex flex-col gap-2 w-full">
-            <label>Amount to sell:</label>
-            <input
-              type="number"
-              className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full"
-              placeholder="0"
-              value={modalTokensToSell}
-              onChange={e => setModalTokensToSell(e.target.value)}
-              min={1}
-            />
-            <span className="text-sm text-[#d7bb7a]">
-              Receive: {(getWoodengForMemeSell(selectedPool, Number(modalTokensToSell)) / 10 ** WOODENG_DECIMALS).toFixed(5)} WOODENG
-            </span>
+        <button className="absolute top-4 right-4" onClick={() => setShowSellModal(false)}>
+          <X />
+        </button>
+
+        <h2 className="text-xl font-bold mb-2">Sell {selectedPool.symbol}</h2>
+         <img
+  src={selectedPool.imageUrl}
+  className="w-24 h-24 rounded-xl mb-3"
+  alt={selectedPool.name || 'meme'}
+  loading="lazy"
+  decoding="async"
+  sizes="(max-width: 480px) 96px, 128px"
+/>
+        <span className="text-[#c2c2c9] mb-3">{selectedPool.name}</span>
+
+        <div className="flex flex-col gap-2 w-full">
+          <label className="flex items-center justify-between">
+            <span>Amount to sell:</span>
+          </label>
+
+          {/* balance under the label */}
+          <div className="text-xs text-[#aab] mb-1">
+            Balance:&nbsp;
+            <span className="text-white font-medium">
+              {balUi.toLocaleString(undefined, { maximumFractionDigits: DEC })}
+            </span>&nbsp;{selectedPool.symbol}
           </div>
-          <div className="flex flex-col gap-2 w-full mt-2">
-            <label>Slippage tolerance (%)</label>
-            <input
-              type="number"
-              className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full"
-              value={slippage}
-              onChange={e => setSlippage(Number(e.target.value))}
-              min={0.1}
-              max={50}
-            />
+
+          <input
+  type="number"
+  inputMode="decimal"
+  autoComplete="off"
+  step={step as any}
+  className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full text-base"
+  placeholder="0"
+  value={modalTokensToSell}
+  onChange={e => setModalTokensToSell(e.target.value)}
+  min={DEC === 0 ? 1 : 0}
+  max={balUi}
+/>
+
+
+          {/* % quick chips 10 / 25 / 50 / MAX */}
+          <div className="grid grid-cols-4 gap-2 w-full">
+            <button
+              className="text-xs bg-[#262635] hover:bg-[#2c2c3d] rounded px-2 py-1"
+              onClick={() => setQuickSellPct(0.10)}
+              disabled={balUi <= 0}
+            >
+              10%
+            </button>
+            <button
+              className="text-xs bg-[#262635] hover:bg-[#2c2c3d] rounded px-2 py-1"
+              onClick={() => setQuickSellPct(0.25)}
+              disabled={balUi <= 0}
+            >
+              25%
+            </button>
+            <button
+              className="text-xs bg-[#262635] hover:bg-[#2c2c3d] rounded px-2 py-1"
+              onClick={() => setQuickSellPct(0.50)}
+              disabled={balUi <= 0}
+            >
+              50%
+            </button>
+            <button
+              className="text-xs bg-[#262635] hover:bg-[#2c2c3d] rounded px-2 py-1"
+              onClick={() => setQuickSellPct("MAX")}
+              disabled={balUi <= 0}
+            >
+              MAX
+            </button>
           </div>
-          <button
-            className="bg-[#ffc371] w-full mt-4 text-black font-bold py-2 rounded"
-            onClick={handleConfirmSell}
-            disabled={!modalTokensToSell || transactionStatus === 'processing'}
-          >
-            {transactionStatus === 'processing' ? 'Processing...' : 'Confirm Sell'}
-          </button>
-          {transactionStatus === 'success' && <div className="text-green-400 mt-2">{transactionMessage}</div>}
-          {transactionStatus === 'error' && <div className="text-red-400 mt-2">{transactionMessage}</div>}
+
+          <span className="text-sm text-[#d7bb7a]">
+  Receive: {Number.isFinite(woodUi) ? woodUi.toFixed(5) : '0.00000'} {quoteLabel}
+</span>
+
         </div>
+
+        <div className="flex flex-col gap-2 w-full mt-2">
+          <label>Slippage tolerance (%)</label>
+          <input
+            type="number"
+            className="px-3 py-2 rounded bg-[#23232e] border border-[#31313d] w-full"
+            value={slippage}
+            onChange={e => setSlippage(Number(e.target.value))}
+            min={0.1}
+            max={50}
+          />
+        </div>
+
+        <button
+          className="bg-[#ffc371] w-full mt-4 text-black font-bold py-2 rounded disabled:opacity-50"
+          onClick={handleConfirmSell}
+          disabled={!modalTokensToSell || transactionStatus === 'processing' || overBal}
+          title={overBal ? 'Amount exceeds balance' : undefined}
+        >
+          {transactionStatus === 'processing' ? 'Processing...' : 'Confirm Sell'}
+        </button>
+
+        {transactionStatus === 'success' && <div className="text-green-400 mt-2">{transactionMessage}</div>}
+        {transactionStatus === 'error'   && <div className="text-red-400 mt-2">{transactionMessage}</div>}
       </div>
-    )}
+    </div>
+  );
+})()}
+
+
 
     {/* BUY-FILLED MODAL */}
 {buyFilled.open && (
@@ -1956,7 +3157,7 @@ async function unlockTokens(
         <span className="font-semibold">{buyFilled.amountMeme}</span>&nbsp;
         {buyFilled.symbol}&nbsp;for&nbsp;
         <span className="font-semibold">
-          {buyFilled.priceWoodeng.toFixed(5)} WOODENG
+          {buyFilled.priceWoodeng.toFixed(5)} {buyFilled.quoteLabel ?? 'WOODENG'}
         </span>.
       </p>
 
@@ -1982,7 +3183,7 @@ async function unlockTokens(
         <span className="font-semibold">{sellFilled.amountMeme}</span>&nbsp;
         {sellFilled.symbol}&nbsp;for&nbsp;
         <span className="font-semibold">
-          {sellFilled.priceWoodeng.toFixed(5)} WOODENG
+          {sellFilled.priceWoodeng.toFixed(5)} {quoteLabelOf(selectedPool!)}
         </span>.
       </p>
       <button className="bg-[#ffc371] w-full py-2 rounded text-black font-bold"
@@ -2063,7 +3264,7 @@ async function unlockTokens(
     {/* BURN MODAL */}
 {burnModal.open && burnModal.pool && (
   <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center">
-    <div className="bg-[#23232e] rounded-2xl p-6 w-full max-w-sm relative">
+     <div className="bg-[#23232e] rounded-2xl p-4 sm:p-6 w-[min(92vw,520px)] max-h-[85vh] overflow-y-auto relative">
       <button
         className="absolute top-4 right-4"
         onClick={() => setBurnModal(m => ({ ...m, open: false }))}>
@@ -2107,64 +3308,111 @@ async function unlockTokens(
 
 
     {/* Pool Detail Modal */}
-    {showDetail && detailPool && (
-      <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-        <div className="bg-[#23232e] p-6 rounded-2xl max-w-lg w-full relative">
-          <button className="absolute top-4 right-4" onClick={() => setShowDetail(false)}><X /></button>
-          <div className="flex items-center gap-5 mb-4">
-            <img src={detailPool.imageUrl} alt={detailPool.name} className="w-20 h-20 rounded-xl" />
-            <div>
-              <h2 className="text-2xl font-bold mb-1">{detailPool.name}</h2>
-              <div className="text-sm text-[#aab]">{detailPool.description}</div>
-              <div className="flex items-center gap-2 mt-2">
-                <span className="text-[#ffc371] font-bold">{detailPool.price?.toFixed(5)} WOODENG</span>
-                <span className="bg-[#2b323c] text-xs px-2 py-1 rounded">{detailPool.symbol}</span>
-              </div>
-              <div className="flex items-center gap-2 text-xs mt-1">
-                <span>Reserves:</span>
-                <span className="text-[#f7f7b2]">
-                  {(detailPool.ammReserves?.woodeng / 10 ** WOODENG_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 6 })} WOODENG
-                </span>
-                <span>/</span>
-                <span className="text-[#f8b2f7]">
-                  {(detailPool.ammReserves?.meme / 10 ** MEME_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 6 })} {detailPool.symbol}
-                </span>
-              </div>
-            </div>
-          </div>
+{showDetail && detailPool && (() => {
+  const mintKey = detailPool.memeMint.toBase58();
+
+  // ✅ Build the series from live data if present; otherwise use an empty array.
+  //    Also, clamp to the currently selected time range and ensure numeric timestamps.
+  const now = Date.now();
+  const horizon = rangeMs(selectedTimeRange);
+  const baseSeries = persistedSeriesByMint[mintKey] ?? [];
+
+
+  const series = baseSeries
+    .map(p => ({
+      time: typeof p.time === 'string' ? new Date(p.time).getTime() : Number(p.time),
+      price: Number(p.price),
+    }))
+    .filter(p => (horizon === Infinity ? true : p.time >= now - horizon))
+    .sort((a, b) => a.time - b.time);
+
+  return (
+    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+      <div className="bg-[#23232e] p-6 rounded-2xl max-w-lg w-full relative">
+        <button className="absolute top-4 right-4" onClick={() => setShowDetail(false)}><X /></button>
+        <div className="flex items-center gap-5 mb-4">
+           <img
+  src={detailPool.imageUrl}
+  alt={detailPool.name || 'meme'}
+  className="w-20 h-20 rounded-xl"
+  loading="lazy"
+  decoding="async"
+  sizes="(max-width: 480px) 80px, 96px"
+/>
+
           <div>
-            <div className="flex gap-2 mt-4 mb-2">
-              {["1s", "1m", "5m", "30m", "1H", "24H", "7D", "30D", "1Y", "ALL"].map(range => (
-                <button
-                  key={range}
-                  className={`text-xs px-2 py-1 rounded ${selectedTimeRange === range ? "bg-[#ffc371] text-black" : "bg-[#262635] text-white"}`}
-                  onClick={() => setSelectedTimeRange(range)}
-                >{range}</button>
-              ))}
+            <h2 className="text-2xl font-bold mb-1">{detailPool.name}</h2>
+            <div className="text-sm text-[#aab]">{detailPool.description}</div>
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-[#ffc371] font-bold">
+  {detailPool.price?.toFixed(5)} {quoteLabelOf(detailPool)}
+</span>
+              <span className="bg-[#2b323c] text-xs px-2 py-1 rounded">{detailPool.symbol}</span>
             </div>
-            <div className="w-full h-40 bg-[#141419] rounded-xl">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
-                  <CartesianGrid stroke="#23232e" />
-                  <XAxis dataKey="time" tickFormatter={formatTime} hide />
-                  <YAxis domain={['dataMin', 'dataMax']} hide />
-                  <Tooltip
-                    content={({ active, payload }) =>
-                      active && payload && payload.length ?
-                        <div className="bg-[#23232e] rounded px-3 py-2">
-                          <div className="font-bold">{payload[0].payload.price} WOODENG</div>
-                          <div className="text-xs">{formatTime(payload[0].payload.time)}</div>
+            <div className="flex items-center gap-2 text-xs mt-1">
+              <span>Reserves:</span>
+              <span className="text-[#f7f7b2]">
+  {(detailPool.ammReserves?.woodeng / 1e9).toLocaleString(undefined, { maximumFractionDigits: 6 })} {quoteLabelOf(detailPool)}
+</span>
+              <span>/</span>
+              <span className="text-[#f8b2f7]">
+                {(detailPool.ammReserves?.meme / 10 ** (detailPool.decimals ?? MEME_DECIMALS)).toLocaleString(undefined, { maximumFractionDigits: 6 })} {detailPool.symbol}
+              </span>
+            </div>
+            <div className="text-xs text-[#adadff] mt-1">
+  Market Cap: {Number(detailPool.marketCap ?? 0).toFixed(2)} {quoteLabelOf(detailPool)}
+</div>
+          </div>
+        </div>
+
+        <div>
+          <div className="flex gap-2 mt-4 mb-2">
+            {["1s", "1m", "5m", "30m", "1H", "24H", "7D", "30D", "1Y", "ALL"].map(range => (
+              <button
+                key={range}
+                className={`text-xs px-2 py-1 rounded ${selectedTimeRange === range ? "bg-[#ffc371] text-black" : "bg-[#262635] text-white"}`}
+                onClick={() => setSelectedTimeRange(range)}
+              >
+                {range}
+              </button>
+            ))}
+          </div>
+
+          <div className="w-full h-56 sm:h-64 md:h-72 bg-[#141419] rounded-xl">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={series}>
+                <CartesianGrid stroke="#23232e" />
+                <XAxis
+                  dataKey="time"
+                  tickFormatter={(t) =>
+                    new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  }
+                  hide
+                />
+                <YAxis domain={['dataMin', 'dataMax']} hide />
+                <Tooltip
+                  content={({ active, payload }) =>
+                    active && payload?.length ? (
+                      <div className="bg-[#23232e] rounded px-3 py-2">
+                        <div className="font-bold">
+                          {Number(payload[0].payload.price).toFixed(6)} {quoteLabelOf(detailPool)}
                         </div>
-                        : null
-                    }
-                  />
-                  <Line type="monotone" dataKey="price" stroke="#ffc371" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+                        <div className="text-xs">
+                          {new Date(payload[0].payload.time).toLocaleString()}
+                        </div>
+                      </div>
+                    ) : null
+                  }
+                />
+                <Line type="monotone" dataKey="price" stroke="#ffc371" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
         </div>
       </div>
-    )}
+    </div>
+  );
+})()}
+
   </div>
 )}

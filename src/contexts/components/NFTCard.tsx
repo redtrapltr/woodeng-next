@@ -1,9 +1,10 @@
 'use client';
-import React from 'react';
+import React, { useEffect } from 'react'; 
 import { Pause, Play } from 'lucide-react';
 import { NFT } from '@/types/nft';
 import { cn } from '@/lib/utils';
 import { Web3Image, useAudio } from '@/contexts/components/Web3Media';
+
 
 
 function liveCount(lockers: {balance?: number}[]) {

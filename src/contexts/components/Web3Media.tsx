@@ -117,5 +117,42 @@ export function useAudio(src?: string) {
     }
   };
 
+  /* Stop when this hook unmounts (e.g., card removed) */
+  useEffect(() => {
+    return () => {
+      if (currentAudio === audio) {
+        audio.pause();
+        audio.currentTime = 0;
+        currentAudio   = null;
+        releaseCurrent = null;
+      }
+    };
+  }, [audio]);
+
+  /* Listen for global “stop all” (route change, tab hide, etc.) */
+  useEffect(() => {
+    const onStopAll = () => stop();
+    window.addEventListener('woodeng:audio:stop-all', onStopAll);
+    return () => window.removeEventListener('woodeng:audio:stop-all', onStopAll);
+  }, []); // stop is stable enough here
+
+
+  useEffect(() => {
+  const handler = () => {
+    // stop whatever is currently playing
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+      releaseCurrent?.();
+      currentAudio = null;
+      releaseCurrent = null;
+    }
+    setPlaying(false);
+  };
+  window.addEventListener('woodeng:audio:stop-all', handler);
+  return () => window.removeEventListener('woodeng:audio:stop-all', handler);
+}, []);
+
+
   return { playing, play, stop };
 }

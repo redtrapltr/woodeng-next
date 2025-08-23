@@ -282,12 +282,15 @@ export function getWoodengForMemeSell(
   memeRawIn: number,
 ) {
   const { meme: x, woodeng: y } = pool.ammReserves;
-  const Δx = memeRawIn;
-  if (Δx <= 0 || Δx >= x) return NaN;
-  let dy = Math.floor((y * Δx) / (x + Δx));
-  dy     = Math.floor(dy * (1 - 0.003)); // 0.3 % fee
-  return dy;
+  if (memeRawIn <= 0) return NaN;
+
+  // fee on input (exact-in)
+  const FEE = 0.003;
+  const dxEff = Math.floor(memeRawIn * (1 - FEE));
+  const dy = Math.floor((y * dxEff) / (x + dxEff));
+  return Math.max(0, dy);
 }
+
 
 /* ------------------------------------------------------------------ */
 /*  Trade helpers (BUY / SELL)                                        */

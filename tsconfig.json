@@ -1,8 +1,5 @@
 {
   "compilerOptions": {
-    /* ────────────────────────────────
-       baseline settings (unchanged)
-    ──────────────────────────────────*/
     "target": "ES2020",
     "lib": [
       "ES2020",
@@ -17,26 +14,8 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    /* ▼ use the React 18 TS transform instead of leaving it to SWC
-       (either "react-jsx" or keep "preserve" – pick ONE) */
     "jsx": "preserve",
     "incremental": true,
-    /* React / Node typings so the TS server
-       stops complaining about JSX & global types */
-    "types": [
-      "react",
-      "react-dom",
-      "node"
-    ],
-    /* Next.js plug-in  */
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
-    /* ────────────────────────────────
-       path aliases
-    ──────────────────────────────────*/
     "baseUrl": ".",
     "paths": {
       "@/*": [
@@ -54,7 +33,6 @@
       "@/utils/*": [
         "./src/utils/*"
       ],
-      /* UI & profile components */
       "@/components/*": [
         "./src/contexts/components/*"
       ],
@@ -64,20 +42,30 @@
       "@/components/profile/*": [
         "./src/contexts/components/profile/*"
       ],
-      /* profile-feature stores */
       "@/stores/*": [
         "./src/stores/*"
       ]
-    }
+    },
+    "types": [
+      "node",
+      "next",
+      "next/types/global"
+    ],
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
   },
   "include": [
-    "next-env.d.ts",
+    "**/*.json",
     "**/*.ts",
     "**/*.tsx",
-    "**/*.json",
+    "next-env.d.ts",
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next"
   ]
 }

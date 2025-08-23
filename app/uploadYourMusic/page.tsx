@@ -13,12 +13,20 @@ import {
   SYSVAR_RENT_PUBKEY,
   clusterApiUrl,
   Transaction,
+  TransactionInstruction,
 } from '@solana/web3.js'
+
+import { Buffer } from 'buffer';
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
   TOKEN_PROGRAM_ID,
+  NATIVE_MINT,
+  createSyncNativeInstruction,
+  createCloseAccountInstruction,
+  getMint,
 } from '@solana/spl-token'
+
 import { AnchorProvider, Program, BN } from '@project-serum/anchor'
 import idl from '../../idl/idl.json'
 import { CheckCircle2, AlertCircle, ArrowLeft, Plus, Minus, Coins, Info, Loader2, ArrowRight } from 'lucide-react'
@@ -27,6 +35,7 @@ import cn from 'classnames'
 // -- CONSTANTS --
 const PROGRAM_ID = new PublicKey('FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS')
 const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad')
+const WSOL_MINT = NATIVE_MINT;      // So11111111111111111111111111111111111111112
 
 // -- HELPERS --
 async function pinFile(file: File): Promise<string> {
@@ -52,27 +61,42 @@ async function pinFile(file: File): Promise<string> {
   if (!res.ok) throw new Error(body.error || body.message || 'Pinata upload failed')
   return body.IpfsHash as string
 }
-async function ensureAta(
+
+async function ensureQuoteAtaAndMaybeWrap(
   conn: Connection,
   owner: PublicKey,
   mint: PublicKey,
-  wallet: ReturnType<typeof useWallet>
+  wallet: ReturnType<typeof useWallet>,
+  lamportsToWrap: number = 0
 ): Promise<PublicKey> {
-  const ata = await getAssociatedTokenAddress(mint, owner)
+  const ata = await getAssociatedTokenAddress(mint, owner);
+  const ixs: TransactionInstruction[] = [];
+
   if (!(await conn.getAccountInfo(ata))) {
-    const ix = createAssociatedTokenAccountInstruction(owner, ata, owner, mint)
-    const tx = new Transaction().add(ix)
-    tx.feePayer = owner
-    tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash
-    const signed = await wallet.signTransaction!(tx)
-    const sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false })
-    await conn.confirmTransaction(sig, 'confirmed')
+    ixs.push(createAssociatedTokenAccountInstruction(owner, ata, owner, mint));
   }
-  return ata
+
+  if (mint.equals(WSOL_MINT) && lamportsToWrap > 0) {
+    ixs.push(SystemProgram.transfer({ fromPubkey: owner, toPubkey: ata, lamports: lamportsToWrap }));
+    ixs.push(createSyncNativeInstruction(ata));
+  }
+
+  if (ixs.length) {
+    const tx = new Transaction().add(...ixs);
+    tx.feePayer = owner;
+    tx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash;
+    const signed = await wallet.signTransaction!(tx);
+    const sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+    await conn.confirmTransaction(sig, 'confirmed');
+  }
+
+  return ata;
 }
 
 // -- COMPONENTS --
-function FileDrop({ value, onChange, accept = '', label, required, previewType }: {
+function FileDrop({
+  value, onChange, accept = '', label, required, previewType
+}: {
   value: File | null, onChange: (file: File | null) => void, accept?: string, label?: string, required?: boolean, previewType?: 'audio' | 'image' | 'video'
 }) {
   const [dragActive, setDragActive] = useState(false)
@@ -89,9 +113,7 @@ function FileDrop({ value, onChange, accept = '', label, required, previewType }
         setDragActive(false)
         if (e.dataTransfer.files.length) onChange(e.dataTransfer.files[0])
       }}
-      onClick={() => {
-        (document.getElementById(label + '_input') as HTMLInputElement)?.click()
-      }}
+      onClick={() => (document.getElementById(label + '_input') as HTMLInputElement)?.click()}
       style={{ minHeight: 100 }}
     >
       <input
@@ -103,9 +125,9 @@ function FileDrop({ value, onChange, accept = '', label, required, previewType }
         onChange={e => onChange(e.target.files?.[0] || null)}
       />
       {!value && (
-        <div className="flex flex-col items-center gap-2">
+        <div className="flex flex-col items-center gap-2 text-center">
           <span className="text-2xl"><Plus /></span>
-          <span className="text-sm text-muted-foreground">Drop file here or click to select</span>
+          <span className="text-sm text-muted-foreground">Drop file here or tap to select</span>
           {accept.includes('audio') && (
             <span className="text-xs text-muted-foreground">MP3, MP4, WAV, FLAC, AIFF (max 100MB)</span>
           )}
@@ -206,11 +228,7 @@ export default function UploadYourMusic() {
   const [ownershipConfirmed, setOwnershipConfirmed] = useState(false)
 
   // success pop-up
-const [successModal, setSuccessModal] = useState<{
-  open: boolean
-  pool?: string
-}>(() => ({ open: false }))
-
+  const [successModal, setSuccessModal] = useState<{ open: boolean; pool?: string }>(() => ({ open: false }))
 
   // Stepper logic
   const next = () => setCurrentStep(s => Math.min(s + 1, 3))
@@ -241,15 +259,14 @@ const [successModal, setSuccessModal] = useState<{
       setFormError('Please connect your wallet')
       return
     }
-     const missingFile = tracks.some(t => {
-   const hasImage = isBundle ? !!t.trackImage : !!t.cover;   // 👈 key line
-   return !hasImage || !t.audio?.mp3;        // add “|| !t.video” if video is mandatory
- });
-
- if (missingFile) {
-   setFormError('Each track needs an image and audio file'); // update wording
-   return;
- }
+    const missingFile = tracks.some(t => {
+      const hasImage = isBundle ? !!t.trackImage : !!t.cover;
+      return !hasImage || !t.audio?.mp3;
+    })
+    if (missingFile) {
+      setFormError('Each track needs an image and audio file')
+      return;
+    }
     if (!ownershipConfirmed || !termsAccepted) {
       setFormError('Please accept the terms and confirm ownership')
       return
@@ -259,37 +276,51 @@ const [successModal, setSuccessModal] = useState<{
     setPoolAddr(null)
 
     try {
+      // Normalize initial deposit based on the chosen mint's decimals (wSOL=9, WOODENG may differ)
+      const tokenMint = (tokenType === 'sol') ? WSOL_MINT : WOODENG_MINT;
+      const tmpConn = new Connection(clusterApiUrl('devnet'), 'confirmed');
+      const mintInfo = await getMint(tmpConn, tokenMint);
+      const decimals = mintInfo.decimals;
+
+      const uiAmount = parseFloat(depositWoodeng || '0') || 0;
+      const depositRawBn = new BN(Math.round(uiAmount * 10 ** decimals).toString());
+      const depositRaw = depositRawBn.toNumber();
+
+      if (!skipDeposit && depositRaw <= 0) {
+        throw new Error('Initial deposit must be > 0');
+      }
+
+      // Pools in your UI have no royalties; keep 0. (Change if you want pool fees.)
+      const poolRoyaltyBps = 0;
+
       // 1) Pin raw assets & metadata
       const uris: string[] = []
       for (let i = 0; i < tracks.length; i++) {
         const t = tracks[i]
-        // Bundle uses .trackImage, otherwise use .cover
         const coverFile = isBundle ? t.trackImage : t.cover
         if (!coverFile) throw new Error(`Missing cover/track image for track ${i + 1}`)
         const coverCid = await pinFile(coverFile)
         const imageURI = `ipfs://${coverCid}`
 
         let animationURI = ''
-if (t.video) {
-  const videoCid = await pinFile(t.video)
-  animationURI = `ipfs://${videoCid}`
-}
+        if (t.video) {
+          const videoCid = await pinFile(t.video)
+          animationURI = `ipfs://${videoCid}`
+        }
 
-let audioURI = ''
-if (t.audio.mp3) {
-  const audioCid = await pinFile(t.audio.mp3)
-  audioURI = `ipfs://${audioCid}`
-}
-const meta: any = {
-  name: t.metadata.songName,
-  symbol: 'MUSIC',
-  description: t.metadata.description,
-  image: imageURI,
-  properties: { audio: audioURI, ...t.metadata },
-}
-if (animationURI) {
-  meta.animation_url = animationURI
-}
+        let audioURI = ''
+        if (t.audio.mp3) {
+          const audioCid = await pinFile(t.audio.mp3)
+          audioURI = `ipfs://${audioCid}`
+        }
+        const meta: any = {
+          name: t.metadata.songName,
+          symbol: 'MUSIC',
+          description: t.metadata.description,
+          image: imageURI,
+          properties: { audio: audioURI, ...t.metadata },
+        }
+        if (animationURI) meta.animation_url = animationURI
 
         const blob = new Blob([JSON.stringify(meta)], { type: 'application/json' })
         const fileJson = new File([blob], `meta-${i}.json`, { type: 'application/json' })
@@ -298,9 +329,7 @@ if (animationURI) {
       }
 
       // 2) Mint via Metaplex
-      const mx = Metaplex
-        .make(new Connection(clusterApiUrl('devnet'), 'finalized'))
-        .use(walletAdapterIdentity(wallet))
+      const mx = Metaplex.make(new Connection(clusterApiUrl('devnet'), 'finalized')).use(walletAdapterIdentity(wallet))
       const nCopies = Math.max(1, parseInt(copies, 10))
       const minted: PublicKey[] = []
 
@@ -311,7 +340,7 @@ if (animationURI) {
               uri: uris[i],
               name: `${tracks[i].metadata.songName} #${c + 1}`,
               symbol: 'MUSIC',
-              sellerFeeBasisPoints: 0,
+              sellerFeeBasisPoints: skipDeposit ? Math.round((parseFloat(royalties || '0') || 0) * 100) : 0,
               creators: [{ address: publicKey, share: 100 }],
               tokenOwner: publicKey,
             })
@@ -330,10 +359,9 @@ if (animationURI) {
           tokenAmount: token(1, 0),
         })
         minted.push(sft.address)
-        // mint extra copies into your ATA
         const extra = Math.max(0, nCopies - 1)
         if (extra > 0) {
-          const ata = await ensureAta(mx.connection, publicKey, sft.address, wallet)
+          const ata = await ensureQuoteAtaAndMaybeWrap(mx.connection, publicKey, sft.address, wallet, 0);
           await mx.tokens().mint({
             mintAddress: sft.address,
             amount: token(extra, 0),
@@ -344,19 +372,18 @@ if (animationURI) {
 
       setMintedAddrs(minted.map(pk => pk.toBase58()))
 
-      // ─── open modal when user skipped the pool ───
-if (skipDeposit) {
-  setSuccessModal({ open: true });        // no pool address
-}
-
+      if (skipDeposit) {
+        setSuccessModal({ open: true })
+      }
 
       // 3) create & seed AMM pool on-chain via Anchor
       if (!skipDeposit) {
         const conn2 = new Connection(clusterApiUrl('devnet'), 'confirmed')
         const provider2 = new AnchorProvider(conn2, wallet as any, {})
         const prog2 = new Program(idl as any, PROGRAM_ID, provider2)
-        const userWoodAta = await ensureAta(conn2, publicKey!, WOODENG_MINT, wallet)
-        const depLam = new BN(Math.floor(parseFloat(depositWoodeng) * 1e9))
+
+        const depLam = new BN(depositRaw);
+
         if (isBundle) {
           const bundleIdBn = new BN(Date.now())
           const idBuf = Buffer.from(bundleIdBn.toArray('le', 8))
@@ -372,21 +399,48 @@ if (skipDeposit) {
             [Buffer.from('bundle_token_vault'), bundlePda.toBuffer()],
             PROGRAM_ID
           )[0]
+
+          const tokenMint = (tokenType === 'sol') ? WSOL_MINT : WOODENG_MINT;
+          const payerTokenAta = await getAssociatedTokenAddress(tokenMint, publicKey!);
+
+          const preIxs: TransactionInstruction[] = [];
+          const ataInfo = await conn2.getAccountInfo(payerTokenAta);
+          if (!ataInfo) {
+            preIxs.push(createAssociatedTokenAccountInstruction(publicKey!, payerTokenAta, publicKey!, tokenMint));
+          }
+          if (tokenType === 'sol' && depositRaw > 0) {
+            preIxs.push(SystemProgram.transfer({ fromPubkey: publicKey!, toPubkey: payerTokenAta, lamports: depositRaw }));
+            preIxs.push(createSyncNativeInstruction(payerTokenAta));
+          }
+
+          const postIxs: TransactionInstruction[] = [];
+          if (tokenType === 'sol') {
+            postIxs.push(createCloseAccountInstruction(payerTokenAta, publicKey!, publicKey!));
+          }
+
           await prog2.methods
-            .initializeBundle(bundleIdBn, new BN(1), new BN(1_000_000_000), depLam)
+            .initializeBundle(
+              bundleIdBn,
+              new BN(1),
+              new BN(0),
+              depLam,
+              poolRoyaltyBps
+            )
             .accounts({
               bundle: bundlePda,
               bundleSigner,
               tokenVault: tokenVaultPda,
-              payerTokenAta: userWoodAta,
-              tokenMint: WOODENG_MINT,
+              payerTokenAta,
+              tokenMint,
               payer: publicKey!,
               systemProgram: SystemProgram.programId,
               tokenProgram: TOKEN_PROGRAM_ID,
               rent: SYSVAR_RENT_PUBKEY,
             })
-            .rpc()
-          // whitelist
+            .preInstructions(preIxs)
+            .postInstructions(postIxs)
+            .rpc();
+
           for (let i = 0; i < minted.length && i < uris.length; i++) {
             const mint = minted[i]
             const [vaultPda] = PublicKey.findProgramAddressSync(
@@ -424,26 +478,53 @@ if (skipDeposit) {
             [Buffer.from('token_vault'), poolKP.publicKey.toBuffer()],
             PROGRAM_ID
           )
+
+          const tokenMint = (tokenType === 'sol') ? WSOL_MINT : WOODENG_MINT;
+          const payerTokenAta = await getAssociatedTokenAddress(tokenMint, publicKey!);
+
+          const preIxs: TransactionInstruction[] = [];
+          const ataInfo = await conn2.getAccountInfo(payerTokenAta);
+          if (!ataInfo) {
+            preIxs.push(createAssociatedTokenAccountInstruction(publicKey!, payerTokenAta, publicKey!, tokenMint));
+          }
+          if (tokenType === 'sol' && depositRaw > 0) {
+            preIxs.push(SystemProgram.transfer({ fromPubkey: publicKey!, toPubkey: payerTokenAta, lamports: depositRaw }));
+            preIxs.push(createSyncNativeInstruction(payerTokenAta));
+          }
+
+          const postIxs: TransactionInstruction[] = [];
+          if (tokenType === 'sol') {
+            postIxs.push(createCloseAccountInstruction(payerTokenAta, publicKey!, publicKey!));
+          }
+
           await prog2.methods
-            .createPool(new BN(1), new BN(1_000_000_000), depLam)
+            .createPool(
+              new BN(1),
+              new BN(0),
+              depLam,
+              publicKey!,
+              poolRoyaltyBps
+            )
             .accounts({
               pool: poolKP.publicKey,
               poolSigner,
               nftVault,
               tokenVault,
-              payerTokenAta: userWoodAta,
+              payerTokenAta,
               nftMint: minted[0],
-              tokenMint: WOODENG_MINT,
+              tokenMint,
               payer: publicKey!,
               systemProgram: SystemProgram.programId,
               tokenProgram: TOKEN_PROGRAM_ID,
               rent: SYSVAR_RENT_PUBKEY,
             })
             .signers([poolKP])
-            .rpc()
+            .preInstructions(preIxs)
+            .postInstructions(postIxs)
+            .rpc();
+
           setPoolAddr(poolKP.publicKey.toBase58())
           setSuccessModal({ open: true, pool: poolKP.publicKey.toBase58() })
-
         }
       }
     } catch (err: any) {
@@ -457,110 +538,120 @@ if (skipDeposit) {
   // -- MAIN UI --
   if (!connected) {
     return (
-      <div className="min-h-[60vh] flex flex-col items-center justify-center gap-6 text-center">
+      <div className="min-h-[60vh] flex flex-col items-center justify-center gap-6 text-center px-4">
         <div className="space-y-4">
-          <h1 className="text-4xl font-bold gradient-text">Create Your NFT</h1>
-          <p className="text-xl text-muted-foreground max-w-lg">
+          <h1 className="text-3xl sm:text-4xl font-bold gradient-text">Create Your NFT</h1>
+          <p className="text-base sm:text-xl text-muted-foreground max-w-lg mx-auto">
             Connect your wallet to start minting your unique music NFT
           </p>
         </div>
-        <WalletMultiButton className="!bg-primary hover:!bg-primary/90 !px-8 !py-3 !text-lg" />
+        <WalletMultiButton className="!bg-primary hover:!bg-primary/90 !px-6 !py-2.5 sm:!px-8 sm:!py-3 !text-base sm:!text-lg" />
       </div>
     )
   }
 
   return (
-    <div className="max-w-4xl mx-auto py-8">
+    <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
       {/* ─── Success pop-up ─── */}
-{successModal.open && (
-  <div
-    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
-    onClick={() => setSuccessModal({ open: false })}
-  >
-    <div
-      className="relative bg-[#1b1c20] rounded-xl p-8 w-full max-w-sm text-center"
-      onClick={e => e.stopPropagation()}
-    >
-      <button
-        className="absolute top-4 right-4 text-xl"
-        onClick={() => setSuccessModal({ open: false })}
-      >
-        ×
-      </button>
-
-      <h2 className="text-2xl font-bold mb-4">Musical&nbsp;NFT created!</h2>
-
-      {successModal.pool && (
-  <p className="break-all text-xs bg-[#23252b] rounded p-3 mb-6">
-    {successModal.pool}
-  </p>
-)}
-
-
-      <div className="space-y-3">
-        {skipDeposit ? (                                                      // 👈 user minted *without* pool
-  <Link
-    href={`/list-nft/${mintedAddrs[0]}`}                              // mint address → list page
-    className="block w-full py-3 rounded bg-[#ffc371] text-black font-bold hover:bg-[#ffb24d] text-center"
-    onClick={() => setSuccessModal({ open: false })}                  // close modal
-  >
-    List for Sale
-  </Link>
-) : (                                                                 // 👈 pool *was* created
-  <Link
-    href={`/amm?addr=${successModal.pool}`}                           // pool address → AMM page
-    className="block w-full py-3 rounded bg-[#ffc371] text-black font-bold hover:bg-[#ffb24d] text-center"
-    onClick={() => setSuccessModal({ open: false })}                  // close modal
-  >
-    Go to your pool
-  </Link>
-)}
-
-
-        <button
-          className="w-full py-3 rounded bg-muted text-muted-foreground hover:bg-muted/80"
-          onClick={() => {
-            /* reset wizard for a new mint */
-            setCurrentStep(0)
-            setTracks([{ ...blankTrack }])
-            setAlbumMeta({ albumName: '', year: '' })
-            setMintedAddrs([])
-            setPoolAddr(null)
-            setSuccessModal({ open: false })
-            setOwnershipConfirmed(false)
-            setTermsAccepted(false)
-          }}
+      {successModal.open && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 overflow-y-auto"
+          onClick={() => setSuccessModal({ open: false })}
         >
-          Mint another
-        </button>
-      </div>
-    </div>
-  </div>
-)}
+          <div
+            className="relative bg-[#1b1c20] rounded-xl p-6 sm:p-8 w-full max-w-sm text-center mx-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <button
+              className="absolute top-3 right-4 text-xl"
+              onClick={() => setSuccessModal({ open: false })}
+              aria-label="Close"
+            >
+              ×
+            </button>
+
+            <h2 className="text-2xl font-bold mb-4">Musical&nbsp;NFT created!</h2>
+
+            {successModal.pool && (
+              <p className="break-all text-xs bg-[#23252b] rounded p-3 mb-6">
+                {successModal.pool}
+              </p>
+            )}
+
+            <div className="space-y-3">
+              {skipDeposit ? (
+                <Link
+                  href={`/list-nft/${mintedAddrs[0]}`}
+                  className="block w-full py-3 rounded bg-[#ffc371] text-black font-bold hover:bg-[#ffb24d] text-center"
+                  onClick={() => setSuccessModal({ open: false })}
+                >
+                  List for Sale
+                </Link>
+              ) : (
+                <Link
+                  href={`/amm?addr=${successModal.pool}`}
+                  className="block w-full py-3 rounded bg-[#ffc371] text-black font-bold hover:bg-[#ffb24d] text-center"
+                  onClick={() => setSuccessModal({ open: false })}
+                >
+                  Go to your pool
+                </Link>
+              )}
+
+              <button
+                className="w-full py-3 rounded bg-muted text-muted-foreground hover:bg-muted/80"
+                onClick={() => {
+                  setCurrentStep(0)
+                  setTracks([{ ...blankTrack }])
+                  setAlbumMeta({ albumName: '', year: '' })
+                  setMintedAddrs([])
+                  setPoolAddr(null)
+                  setSuccessModal({ open: false })
+                  setOwnershipConfirmed(false)
+                  setTermsAccepted(false)
+                }}
+              >
+                Mint another
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* --- Back to Selection --- */}
-      <Link
-        href="/create"
-        className="flex items-center gap-2 text-muted-foreground hover:text-foreground mb-6"
-      >
+      <Link href="/create" className="flex items-center gap-2 text-muted-foreground hover:text-foreground mb-6">
         <ArrowLeft className="w-4 h-4" />
         Back to selection
       </Link>
+
       {/* --- Header --- */}
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold">Create Musical NFT</h1>
-          <p className="text-muted-foreground">Create your unique music NFT with liquidity pool</p>
+          <h1 className="text-2xl sm:text-3xl font-bold">Create Musical NFT</h1>
+          <p className="text-sm sm:text-base text-muted-foreground">Create your unique music NFT with liquidity pool</p>
         </div>
-        {/* --- Step Progression Bar --- */}
-        <div className="mb-12">
+
+        {/* --- Step Progression --- */}
+        {/* Mobile: compact progress */}
+        <div className="md:hidden mb-8">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium">Step {currentStep + 1} of {mintSteps.length}</p>
+            <span className="text-sm text-muted-foreground">{mintSteps[currentStep].title}</span>
+          </div>
+          <div className="h-1.5 rounded bg-muted overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all"
+              style={{ width: `${(currentStep / (mintSteps.length - 1)) * 100}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Desktop: detailed stepper */}
+        <div className="hidden md:block mb-12">
           <div className="flex items-center justify-between relative">
             {mintSteps.map((step, index) => (
               <div
                 key={index}
-                className={cn(
-                  "flex flex-col items-center relative z-10 w-1/4 transition-colors duration-300"
-                )}
+                className="flex flex-col items-center relative z-10 w-1/4 transition-colors duration-300"
               >
                 <div
                   className={cn(
@@ -572,22 +663,13 @@ if (skipDeposit) {
                         : "border-muted-foreground bg-background text-muted-foreground"
                   )}
                 >
-                  {index < currentStep ? (
-                    <CheckCircle2 className="w-5 h-5" />
-                  ) : (
-                    <span>{index + 1}</span>
-                  )}
+                  {index < currentStep ? <CheckCircle2 className="w-5 h-5" /> : <span>{index + 1}</span>}
                 </div>
                 <div className="text-center">
-                  <p className={cn(
-                    "font-medium",
-                    index === currentStep ? "text-primary" : "text-muted-foreground"
-                  )}>
+                  <p className={cn("font-medium", index === currentStep ? "text-primary" : "text-muted-foreground")}>
                     {step.title}
                   </p>
-                  <p className="text-xs text-muted-foreground hidden sm:block">
-                    {step.description}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{step.description}</p>
                 </div>
               </div>
             ))}
@@ -605,27 +687,28 @@ if (skipDeposit) {
           {/* STEP 1: Upload Files */}
           <div className={currentStep !== 0 ? 'hidden' : ''}>
             <div className="space-y-6">
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={isBundle}
-                  onChange={() => {
-                    const nxt = !isBundle
-                    setIsBundle(nxt)
-                    setNumTracks(nxt ? 2 : 1)
-                    setTracks(Array(nxt ? 2 : 1).fill(null).map(() => ({ ...blankTrack })))
-                  }}
-                  id="isBundle"
-                  className="w-4 h-4 rounded border-border accent-primary"
-                />
-                <label htmlFor="isBundle" className="text-sm font-medium">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={isBundle}
+                    onChange={() => {
+                      const nxt = !isBundle
+                      setIsBundle(nxt)
+                      setNumTracks(nxt ? 2 : 1)
+                      setTracks(Array(nxt ? 2 : 1).fill(null).map(() => ({ ...blankTrack })))
+                    }}
+                    id="isBundle"
+                    className="w-4 h-4 rounded border-border accent-primary"
+                  />
                   Create Album Bundle
                 </label>
+
                 {isBundle && (
                   <button
                     type="button"
                     onClick={addTrack}
-                    className="ml-6 py-2 px-4 border-2 border-dashed border-border hover:border-primary rounded-lg flex items-center gap-2 transition-colors text-sm"
+                    className="py-2 px-4 border-2 border-dashed border-border hover:border-primary rounded-lg flex items-center gap-2 transition-colors text-sm"
                   >
                     <Plus className="w-4 h-4" /> Add Track
                   </button>
@@ -646,30 +729,31 @@ if (skipDeposit) {
                       </button>
                     )}
                   </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-  <div>
-    <label className="block text-sm font-medium mb-1 text-foreground">Image</label>
-    <FileDrop
-      label={`track_${i}_image`} 
-      value={isBundle ? track.trackImage || null : track.cover}
-      onChange={file => isBundle ? updateTrack(i, { trackImage: file }) : updateTrack(i, { cover: file })}
-      accept="image/*"
-      required
-      previewType="image"
-    />
-  </div>
-  <div>
-    <label className="block text-sm font-medium mb-1 text-foreground">Audio</label>
-    <FileDrop
-      label={`track_${i}_audio`} 
-      value={track.audio.mp3}
-      onChange={file => updateTrack(i, { audio: { mp3: file } })}
-      accept="audio/mp3,audio/mpeg,audio/wav"
-      required
-      previewType="audio"
-    />
-  </div>
-</div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1 text-foreground">Image</label>
+                      <FileDrop
+                        label={`track_${i}_image`}
+                        value={isBundle ? track.trackImage || null : track.cover}
+                        onChange={file => isBundle ? updateTrack(i, { trackImage: file }) : updateTrack(i, { cover: file })}
+                        accept="image/*"
+                        required
+                        previewType="image"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1 text-foreground">Audio</label>
+                      <FileDrop
+                        label={`track_${i}_audio`}
+                        value={track.audio.mp3}
+                        onChange={file => updateTrack(i, { audio: { mp3: file } })}
+                        accept="audio/mp3,audio/mpeg,audio/wav"
+                        required
+                        previewType="audio"
+                      />
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -784,9 +868,10 @@ if (skipDeposit) {
                   <p className="mt-1 text-xs text-muted-foreground">NFT Copies</p>
                 </div>
               </div>
+
               <div className="bg-card border border-border rounded-lg p-6 space-y-4">
                 <h3 className="text-lg font-medium">Pool Token</h3>
-                <div className="flex items-center gap-4">
+                <div className="flex flex-wrap items-center gap-4">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="radio"
@@ -818,6 +903,7 @@ if (skipDeposit) {
                   Select the token you want to use for your liquidity pool
                 </p>
               </div>
+
               <div>
                 <label className="block text-sm font-medium mb-2">
                   Initial Deposit ({tokenType.toUpperCase()})
@@ -834,6 +920,7 @@ if (skipDeposit) {
                   )}
                 />
               </div>
+
               <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -846,11 +933,10 @@ if (skipDeposit) {
                   Skip Deposit
                 </label>
               </div>
+
               {skipDeposit && (
                 <div>
-                  <label className="block text-sm font-medium mb-2">
-                    Royalties (%)
-                  </label>
+                  <label className="block text-sm font-medium mb-2">Royalties (%)</label>
                   <input
                     type="number"
                     min="0"
@@ -860,11 +946,10 @@ if (skipDeposit) {
                     onChange={e => setRoyalties(e.target.value)}
                     className="w-full px-4 py-2 bg-card border rounded-lg transition-colors"
                   />
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Set royalties up to 15% for secondary sales
-                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">Set royalties up to 15% for secondary sales</p>
                 </div>
               )}
+
               {!skipDeposit && (
                 <div className="bg-muted/50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 text-sm">
@@ -883,7 +968,6 @@ if (skipDeposit) {
             <div className="bg-card border border-border rounded-lg p-6">
               <h3 className="text-xl font-semibold mb-6">Preview Your NFT</h3>
               <div className="space-y-8">
-                {/* Album/Bundle Preview */}
                 {isBundle && (
                   <div className="aspect-[3/1] relative rounded-lg overflow-hidden bg-muted/50">
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
@@ -893,7 +977,7 @@ if (skipDeposit) {
                     </div>
                   </div>
                 )}
-                {/* Track Previews */}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {tracks.map((track, index) => (
                     <div key={index} className="bg-muted/50 rounded-lg overflow-hidden">
@@ -932,7 +1016,7 @@ if (skipDeposit) {
                     </div>
                   ))}
                 </div>
-                {/* Pool Token Preview */}
+
                 <div className="bg-muted/50 rounded-lg p-4">
                   <h4 className="text-sm font-medium text-muted-foreground mb-2">Pool Token</h4>
                   <div className="flex items-center gap-2">
@@ -940,7 +1024,7 @@ if (skipDeposit) {
                     <p className="text-xl font-semibold">{tokenType === 'woodeng' ? 'WOODENG' : 'SOL'}</p>
                   </div>
                 </div>
-                {/* Deposit/Royalties */}
+
                 {!skipDeposit && (
                   <div className="bg-muted/50 rounded-lg p-4">
                     <h4 className="text-sm font-medium text-muted-foreground mb-2">Initial Deposit</h4>
@@ -956,9 +1040,9 @@ if (skipDeposit) {
                     <p className="text-xl font-semibold">{royalties}%</p>
                   </div>
                 )}
-                {/* Terms Checkboxes */}
+
                 <div className="space-y-4 border-t border-border pt-6">
-                  <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
                       checked={ownershipConfirmed}
@@ -966,11 +1050,11 @@ if (skipDeposit) {
                       id="ownershipConfirmed"
                       className="w-4 h-4 rounded border-border accent-primary"
                     />
-                    <label htmlFor="ownershipConfirmed" className="text-sm">
+                    <span className="text-sm">
                       I confirm that I own this music/these tracks or have permission to upload them
-                    </label>
-                  </div>
-                  <div className="flex items-center gap-2">
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
                       checked={termsAccepted}
@@ -978,12 +1062,12 @@ if (skipDeposit) {
                       id="termsAccepted"
                       className="w-4 h-4 rounded border-border accent-primary"
                     />
-                    <label htmlFor="termsAccepted" className="text-sm">
+                    <span className="text-sm">
                       I agree to the <a href="/terms" className="text-primary hover:underline" target="_blank">Terms of Service</a>
-                    </label>
-                  </div>
+                    </span>
+                  </label>
                 </div>
-                {/* Mint Success */}
+
                 {mintedAddrs.length > 0 && (
                   <div className="space-y-4 bg-muted/50 rounded-lg p-6">
                     <div className="flex items-center gap-2 text-green-500">
@@ -1002,11 +1086,10 @@ if (skipDeposit) {
                   </div>
                 )}
               </div>
-              
             </div>
           </div>
         </div>
-        
+
         {/* --- Error Message --- */}
         {formError && (
           <div className="p-4 bg-destructive/10 text-destructive rounded-lg flex items-center gap-2 mt-6">
@@ -1015,60 +1098,49 @@ if (skipDeposit) {
           </div>
         )}
 
-        {/* --- Error Message --- */}
-{formError && (
-  <div className="p-4 bg-destructive/10 text-destructive rounded-lg flex items-center gap-2 mt-6">
-    <AlertCircle className="w-5 h-5" />
-    <p>{formError}</p>
-  </div>
-)}
+        {/* --- Stepper Navigation + Mint Button --- */}
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between sm:items-center mt-8">
+          <button
+            type="button"
+            onClick={prev}
+            className={cn(
+              "px-5 py-2 rounded-lg transition-colors self-start sm:self-auto",
+              currentStep === 0 ? "opacity-0 pointer-events-none" : "bg-muted hover:bg-muted/80"
+            )}
+          >
+            Previous
+          </button>
 
-{/* --- Stepper Navigation + Mint Button --- */}
-<div className="flex justify-between items-center mt-8">
-  {/* Previous Button */}
-  <button
-    type="button"
-    onClick={prev}
-    className={cn(
-      "px-6 py-2 rounded-lg transition-colors",
-      currentStep === 0
-        ? "opacity-0 pointer-events-none"
-        : "bg-muted hover:bg-muted/80"
-    )}
-  >
-    Previous
-  </button>
-
-  {/* Next OR Mint Button */}
-  {currentStep < 3 ? (
-    <button
-      type="button"
-      onClick={next}
-      className="px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2 ml-4"
-    >
-      Next <ArrowRight className="w-4 h-4" />
-    </button>
-  ) : (
-    <button
-      onClick={mintNFT}
-      disabled={minting || !termsAccepted || !ownershipConfirmed}
-      className="px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 ml-4"
-      style={{ minWidth: 200 }}
-    >
-      {minting ? (
-        <>
-          <Loader2 className="w-5 h-5 animate-spin" />
-          Minting...
-        </>
-      ) : (
-        <>
-          {skipDeposit ? 'Create' : `Create & Seed ${tokenType === 'woodeng' ? 'WOODENG' : 'SOL'} Pool`}
-          <ArrowRight className="w-4 h-4" />
-        </>
-      )}
-    </button>
-  )}
+          {currentStep < 3 ? (
+            <button
+              type="button"
+              onClick={next}
+              className="w-full sm:w-auto px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+            >
+              Next <ArrowRight className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              onClick={mintNFT}
+              disabled={minting || !termsAccepted || !ownershipConfirmed}
+              className="w-full sm:w-auto px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              style={{ minWidth: 200 }}
+            >
+              {minting ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Minting...
+                </>
+              ) : (
+                <>
+                  {skipDeposit ? 'Create' : `Create & Seed ${tokenType === 'woodeng' ? 'WOODENG' : 'SOL'} Pool`}
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </button>
+          )}
+        </div>
       </div>
-    </div> 
-  </div>  
-)}
+    </div>
+  )
+}

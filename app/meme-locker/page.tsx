@@ -1,11 +1,17 @@
 'use client'
 
 import React, { useState, useCallback, useEffect } from 'react'
+
 import {
   Connection, PublicKey, SystemProgram, Transaction, Keypair,
-  SYSVAR_RENT_PUBKEY,
+  SYSVAR_RENT_PUBKEY, ComputeBudgetProgram, TransactionInstruction,
+  SendTransactionError
 } from '@solana/web3.js'
 
+import {
+  NATIVE_MINT,                 // wSOL mint (So1111…)
+  createSyncNativeInstruction, // needed to wrap SOL
+} from '@solana/spl-token'
 
 import {
   Program, AnchorProvider, BN, Idl,
@@ -15,7 +21,7 @@ import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import {
   TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction,
   ASSOCIATED_TOKEN_PROGRAM_ID, createInitializeMintInstruction, createMintToInstruction,
-  createSetAuthorityInstruction, AuthorityType,
+  createSetAuthorityInstruction, AuthorityType, createAssociatedTokenAccountIdempotentInstruction
 } from '@solana/spl-token'
 import idlJson from '../../idl/hybrid_meme_coin_nft_locker.json'
 import poolIdlJson from '../../idl/my_sound_meme_pool.json'
@@ -24,11 +30,14 @@ import {
   createCreateMetadataAccountV3Instruction,
 } from '@metaplex-foundation/mpl-token-metadata';
 import { findMetadataPda } from '@metaplex-foundation/js'
-import { Siren as Fire, Info, Coins } from 'lucide-react'
+import { Siren as Fire, Info, Coins, Volume2 } from 'lucide-react'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { LiquidChargeButton } from "../../src/contexts/components/LiquidChargeButton"
 import { useRouter } from 'next/navigation'
+
+
+
 
 
 
@@ -37,61 +46,70 @@ const POOL_PROGRAM_ID = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugE
 const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad')
 const connection = new Connection('https://api.devnet.solana.com', 'confirmed')
 const BONDING_SUPPLY = 444_000_000;
+const PROJECT_WALLET = new PublicKey(
+  process.env.NEXT_PUBLIC_PROJECT_WALLET ??
+  '34JBFxZnw7f6Ye9dsHpeLTnDjA1cU3HnJL1ABFVpjBMb' // <- your project fee wallet
+);
+
+
+const WSOL_MINT = NATIVE_MINT;       // So11111111111111111111111111111111111111112
+const QUOTE_DECIMALS = 9;            // WOODENG and wSOL both use 9
+
+
 
 
 
 // ──────────────────────────────────────────────────────────────
-//  sendTx - helper: signs, sends, retries duplicate gracefully
-// ──────────────────────────────────────────────────────────────
-// AFTER  (accepts any signer-capable wallet)
-// -----------------------------------------------------------
-// 1⃣  Relax the helper-wallet interface
-// -----------------------------------------------------------
+
+// replace your SignerWallet with this:
 type SignerWallet = {
   publicKey: PublicKey | null;
   signTransaction?: (tx: Transaction) => Promise<Transaction>;
   signAllTransactions?: (txs: Transaction[]) => Promise<Transaction[]>;
 };
 
+
+// Legacy “single blob” sender (good enough; keeps code simple)
+export async function sendIxsOnce(
+  connection: Connection,
+  wallet: SignerWallet,
+  ixs: TransactionInstruction[],
+  signers: Keypair[] = [],
+  { skipPreflight = false }: { skipPreflight?: boolean } = {}
+) {
+  if (!wallet.publicKey) throw new Error('Wallet has no public key');
+
+
+
+
+
+
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+  const tx = new Transaction().add(...ixs);
+  tx.feePayer = wallet.publicKey;
+  tx.recentBlockhash = blockhash;
+  if (signers.length) tx.partialSign(...signers);
+
+  const signed =
+    wallet.signTransaction
+      ? await wallet.signTransaction(tx)
+      : (await wallet.signAllTransactions!([tx]))[0];
+
+  const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight });
+  await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+  return sig;
+}
+
+
+// -------------------- BACK-COMPAT SHIM (OUTSIDE!) --------------------
 export async function sendTx(
   connection: Connection,
   wallet: SignerWallet,
   tx: Transaction,
   extraSigners: Keypair[] = []
 ) {
-  if (!wallet.publicKey) throw new Error('Wallet has no public key');
-
-  /* 1️⃣  finalize the header BEFORE anyone signs */
-  const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash('finalized');
-
-  tx.feePayer        = wallet.publicKey;
-  tx.recentBlockhash = blockhash;
-
-  /* 2️⃣  wallet signs */
-  const signedByWallet =
-    wallet.signTransaction
-      ? await wallet.signTransaction(tx)
-      : (await wallet.signAllTransactions!([tx]))[0];
-
-  /* 3️⃣  extra keypairs (if any) sign AFTER the wallet */
-  if (extraSigners.length) signedByWallet.partialSign(...extraSigners);
-
-  /* 4️⃣  send + confirm */
-  const sig = await connection.sendRawTransaction(
-    signedByWallet.serialize(),
-    { skipPreflight: false }
-  );
-
-  await connection.confirmTransaction(
-    { signature: sig, blockhash, lastValidBlockHeight },
-    'confirmed'
-  );
-
-  return sig;
+  return sendIxsOnce(connection, wallet, tx.instructions, extraSigners);
 }
-
-
 
 
 const WOODENG_DECIMALS = 9;
@@ -121,35 +139,18 @@ async function ensureAtaExists(
   owner: PublicKey,
   mint: PublicKey,
   payer: PublicKey,
-  wallet: WalletContextState,        // 👈 add param
+  wallet: WalletContextState,
   isPdaOwner = false
 ): Promise<PublicKey> {
-  const ata = await getAssociatedTokenAddress(mint, owner, isPdaOwner)
-  const info = await connection.getAccountInfo(ata)
-  if (!info) {
-    const ix = createAssociatedTokenAccountInstruction(
-  payer, // payer
-  ata,   // ata
-  owner, // owner
-  mint,  // mint
-  TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID
-);
-    const tx = new Transaction().add(ix)
-    tx.feePayer = payer
-    // AFTER   — pass the WalletContextState you already have
-tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-// the wallet that called ensureAtaExists signs the tx
-  try {
-    await sendTx(connection, wallet, tx)
-  } catch (err: any) {
-    // RPC may return “address already in use” if another tx made the ATA first.
-    if (!/already in use/i.test(err?.message ?? '')) throw err
-  }
-
-    
-  }
-  return ata
+  const ata = await getAssociatedTokenAddress(mint, owner, isPdaOwner);
+  const ix = createAssociatedTokenAccountIdempotentInstruction(
+    payer, ata, owner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  const tx = new Transaction().add(ix);
+  tx.feePayer = payer;
+  tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+  await sendTx(connection, wallet, tx); // idempotent => safe to always send
+  return ata;
 }
 
 
@@ -253,20 +254,15 @@ function FileUploader({ onUri }: FileUploaderProps) {
 
   return (
     <div
-      onDragOver={e => { e.preventDefault(); setDragOver(true) }}
-      onDragLeave={e => { e.preventDefault(); setDragOver(false) }}
-      onDrop={handleDrop}
-      onClick={handleClick}
-      style={{
-        border: '2px dashed #FFC371',
-        padding: 24,
-        borderRadius: 8,
-        background: dragOver ? '#FFC37133' : '#181920',
-        color: 'white',
-        marginBottom: 16,
-        textAlign: 'center',
-        cursor: 'pointer'
-      }}>
+  onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+  onDragLeave={e => { e.preventDefault(); setDragOver(false) }}
+  onDrop={handleDrop}
+  onClick={handleClick}
+  className={`rounded-lg border-2 border-dashed text-center cursor-pointer transition-colors mb-4
+    ${dragOver ? 'bg-[#FFC371]/20 border-[#FFC371]' : 'bg-[#181920] border-[#FFC371]'}
+    p-4 sm:p-6`}
+>
+
       <input
         type="file"
         ref={inputRef}
@@ -343,7 +339,8 @@ function StepModal({ open, step, onClose }: StepModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60 overflow-y-auto">
       <div
-        className="relative mx-4 w-full max-w-sm md:max-w-md lg:max-w-lg bg-[#1b1c20] rounded-xl shadow-lg p-8 flex flex-col items-center my-16"
+        className="relative mx-4 w-full max-w-sm md:max-w-md lg:max-w-lg bg-[#1b1c20] rounded-xl shadow-lg p-6 sm:p-8 flex flex-col items-center my-16"
+
         style={{ maxHeight: '90vh' }}
       >
         <span className="text-3xl mb-4">🚀</span>
@@ -380,17 +377,30 @@ export default function MemeLockerFactory() {
 
   // Pool Settings
   const [poolType, setPoolType] = useState<'bonding' | 'amm'>('bonding')
+
+  const [quoteToken, setQuoteToken] = useState<'WOODENG' | 'SOL'>('WOODENG');
+const QUOTE_MINT  = quoteToken === 'WOODENG' ? WOODENG_MINT : WSOL_MINT;
+const quoteLabel  = quoteToken === 'WOODENG' ? 'WOODENG'     : 'SOL';
+
+
+  
+// Founder pre-buy (0..1 %) — only used for bonding
+const [founderBuyPct, setFounderBuyPct] = useState<number>(0); // percent, max 1.00
+
+// handy deriveds
+const founderBuyTokens = Math.floor(BONDING_SUPPLY * (founderBuyPct / 100)); // MEME (0-decimals)
+const fmt = (n: number) => n.toLocaleString();
   
 
 
   const [initialMemeLiquidity, setInitialMemeLiquidity] = useState(10000)
-  const [initialWoodengLiquidity, setInitialWoodengLiquidity] = useState(10000)
+  const [initialQuoteLiquidity, setInitialQuoteLiquidity] = useState(10000)
 
     /* ── si on repasse sur Bonding on force la liq. meme à 0 ── */
 useEffect(() => {
   if (poolType === 'bonding') {
     setInitialMemeLiquidity(0);
-    setInitialWoodengLiquidity(0);   // ← optional
+    setInitialQuoteLiquidity(0);
   }
 }, [poolType]);
 
@@ -463,148 +473,442 @@ async function writeTokenMetadata(
 
 
 
+// ───────── ATA (idempotent) builder: returns { ata, ix } — no send ─────────
+async function ensureAtaIx(
+  owner: PublicKey,
+  mint: PublicKey,
+  payer: PublicKey,
+  isPdaOwner = false
+): Promise<{ ata: PublicKey; ix: TransactionInstruction }> {
+  const ata = await getAssociatedTokenAddress(mint, owner, isPdaOwner);
+  // idempotent = safe to include even if ATA already exists
+  const ix = createAssociatedTokenAccountIdempotentInstruction(
+    payer, ata, owner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  return { ata, ix };
+}
+
+// ───────── Mint creation builder: returns { mint, ixs, signers } — no send ─────────
+async function buildCreateMintIx(
+  payer: PublicKey,
+  decimals: number,
+  mintAuthority: PublicKey
+): Promise<{ mint: PublicKey; ixs: TransactionInstruction[]; signers: Keypair[] }> {
+  const kp = Keypair.generate();
+  const lamports = await connection.getMinimumBalanceForRentExemption(82);
+  const createIx = SystemProgram.createAccount({
+    fromPubkey: payer,
+    newAccountPubkey: kp.publicKey,
+    lamports,
+    space: 82,
+    programId: TOKEN_PROGRAM_ID,
+  });
+  const initIx = createInitializeMintInstruction(kp.publicKey, decimals, mintAuthority, null, TOKEN_PROGRAM_ID);
+  return { mint: kp.publicKey, ixs: [createIx, initIx], signers: [kp] };
+}
+
+// ───────── Token metadata builder (mpl) — returns a single ix ─────────
+function buildMetadataIx(
+  payer: PublicKey,
+  mint: PublicKey,
+  uri: string,
+  name: string,
+  symbol: string
+): TransactionInstruction {
+  const mdPda = findMetadataPda(mint);
+  return createCreateMetadataAccountV3Instruction(
+    { metadata: mdPda, mint, mintAuthority: payer, payer, updateAuthority: payer },
+    {
+      createMetadataAccountArgsV3: {
+        data: { name, symbol, uri, sellerFeeBasisPoints: 0, creators: null, collection: null, uses: null },
+        isMutable: true,
+        collectionDetails: null,
+      },
+    },
+  );
+}
+
+// ───────── MintTo builder — returns a single ix ─────────
+function buildMintToIx(
+  mint: PublicKey,
+  dest: PublicKey,
+  authority: PublicKey,
+  amount: number
+): TransactionInstruction {
+  return createMintToInstruction(mint, dest, authority, amount);
+}
+
+async function buildWrapSolIxs(
+  payer: PublicKey,
+  amountLamports: number
+): Promise<{ ata: PublicKey; ixs: TransactionInstruction[] }> {
+  // Create (idempotent) ATA for wSOL
+  const ata = await getAssociatedTokenAddress(NATIVE_MINT, payer, false);
+  const createAtaIx = createAssociatedTokenAccountIdempotentInstruction(
+    payer, ata, payer, NATIVE_MINT, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  // Move SOL into the ATA, then sync as wSOL
+  const fundIx = SystemProgram.transfer({ fromPubkey: payer, toPubkey: ata, lamports: amountLamports });
+  const syncIx = createSyncNativeInstruction(ata);
+  return { ata, ixs: [createAtaIx, fundIx, syncIx] };
+}
+
 
   // ========== CREATION STEPS ==========
   // ──────────────────────────────────────────────────────────────
-//  FULL replacement for handleCreateAll()
-// ──────────────────────────────────────────────────────────────
 async function handleCreateAll() {
   try {
-    // ---------- sanity checks ----------
-    if (!wallet.connected || !wallet.publicKey)
-      throw new Error("Connect your wallet first!");
-    if (!memeName.trim() || !memeSymbol.trim() || !audioUri.trim())
-      throw new Error("Fill all meme details and upload audio!");
-    if (!agreedTOS || !agreedOwn)
-      throw new Error("You must accept the terms to proceed.");
+    if (!wallet.connected || !wallet.publicKey) throw new Error("Connect your wallet first!");
+    if (!memeName.trim() || !memeSymbol.trim() || !audioUri.trim()) throw new Error("Fill all meme details and upload audio!");
+    if (!agreedTOS || !agreedOwn) throw new Error("You must accept the terms to proceed.");
 
-    const provider    = new AnchorProvider(connection, wallet as any,
-                                           { preflightCommitment: "confirmed" });
-    const poolProgram = new Program(poolIdlJson as Idl,
-                                    POOL_PROGRAM_ID, provider);
+    const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" });
+    const poolProgram = new Program(poolIdlJson as Idl, POOL_PROGRAM_ID, provider);
 
-    // ---------- STEP 1 – upload cover ----------
-    setStepModal({ open:true, step:"Step 1/7: Uploading cover image…" });
-    const imgCid = coverImageUri
-      ? coverImageUri                                // already uploaded
-      : await pinFile(new File([], "cover.png"));    // (should never trip)
+    // 1) Off-chain uploads (unchanged)
+    setStepModal({ open:true, step:"Uploading media & metadata…" });
+    const imgCid   = coverImageUri;
+    const audioCid = audioUri;
+    const metaJson = { name: memeName, symbol: memeSymbol, description: memeDescription, image: imgCid, animation_url: audioCid, attributes: [{ trait_type:"Category", value:"Sound Meme" }] };
+    const metaUri = await pinFile(new File([JSON.stringify(metaJson)], "metadata.json", { type:"application/json" }));
 
-    // ---------- STEP 2 – upload audio ----------
-    setStepModal({ open:true, step:"Step 2/7: Uploading audio…" });
-    const audioCid = audioUri;                       // FileUploader did this
+    // 2) Build on-chain instructions (we’ll sign ONCE)
+    setStepModal({ open:true, step:"Preparing on-chain creation…" });
 
-    // ---------- STEP 3 – upload metadata.json ----------
-    setStepModal({ open:true, step:"Step 3/7: Uploading metadata…" });
-    const metaJson = {
-      name: memeName,
-      symbol: memeSymbol,
-      description: memeDescription,
-      image: imgCid,
-      animation_url: audioCid,
-      attributes: [{ trait_type:"Category", value:"Sound Meme" }],
-    };
-    const metaUri = await pinFile(
-      new File([JSON.stringify(metaJson)],
-               "metadata.json", { type:"application/json" })
-    );
+    // mints
+    const memeMintBuild = await buildCreateMintIx(wallet.publicKey, MEME_DECIMALS, wallet.publicKey);
+    const lpMintBuild   = await buildCreateMintIx(wallet.publicKey, 0, wallet.publicKey);
 
-    // ---------- STEP 4 – create MEME mint ----------
-    setStepModal({ open:true, step:"Step 4/7: Creating MEME mint…" });
-    const memeMintKey = await createMintWithProvider(provider, 0,
-                                                     wallet.publicKey);
+    // metadata for MEME
+    const mdIx = buildMetadataIx(wallet.publicKey, memeMintBuild.mint, metaUri, memeName, memeSymbol);
 
-    // ---------- STEP 5 – write token-metadata account ----------
-    setStepModal({ open:true, step:"Step 5/7: Writing token metadata…" });
-    await writeTokenMetadata(provider, memeMintKey,
-                             metaUri, memeName, memeSymbol);
+    // PDAs
+    const [configPda]        = await getConfigPda(memeMintBuild.mint);
+    const [poolMemeVault]    = await getPoolMemeVaultPda(memeMintBuild.mint);
+    const [poolWoodengVault] = await getPoolWoodengVaultPda(memeMintBuild.mint);
 
-    // ---------- STEP 5½ – pre-mint tokens if AMM ----------
-    const creatorMemeAta = await ensureAtaExists(
-      wallet.publicKey, memeMintKey, wallet.publicKey, wallet, false);
-    if (poolType === 'amm') {
-      await mintToWithProvider(provider, memeMintKey, creatorMemeAta,
-        initialMemeLiquidity * 10 ** MEME_DECIMALS, wallet.publicKey);
-    }
-
-    // ---------- STEP 6 – initialise pool ----------
-setStepModal({ open:true, step:"Step 6/7: Initialising pool…" });
-
-/** ▼▼▼ NEW ▼▼▼  **/
-const VTOKENS_RAW = totalSupply * 10 ** MEME_DECIMALS;  // 444 000 000 for fair-launch
-const vtokens     = new BN(VTOKENS_RAW);                // virtual MEME reserve
-
-const P0_UI       = 0.0000009;           // 0.0000005 WOODENG (=  500 lamports)
-const p0Lamports  = new BN(Math.floor(P0_UI * 10 ** WOODENG_DECIMALS));
-
-const vwoodeng    = poolType === 'bonding'
-  ? vtokens.mul(p0Lamports)                             // bonding needs both reserves
-  : new BN(0);
-/** ▲▲▲ NEW ▲▲▲  **/
-
-const [configPda]        = await getConfigPda(memeMintKey);
-const [poolMemeVault]    = await getPoolMemeVaultPda(memeMintKey);
-const [poolWoodengVault] = await getPoolWoodengVaultPda(memeMintKey);
-const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
+    // fee vault (PROJECT_WALLET, WOODENG)
+    const { ata: lpFeeVault, ix: lpFeeVaultIx } =
+  await ensureAtaIx(PROJECT_WALLET, QUOTE_MINT, wallet.publicKey, false);
 
 
-     await poolProgram.methods
-  .initializeSoundMemeAndPool(
-    vtokens,         // ❶ NEW – virtual MEME reserve
-    vwoodeng,        // ❷ virtual WOODENG reserve (lamports)
-    poolType === 'bonding',
-    new BN(threshold),
-  )
+    // creator meme ATA (for AMM seeding)
+    const { ata: creatorMemeAta, ix: creatorMemeAtaIx } =
+      await ensureAtaIx(wallet.publicKey, memeMintBuild.mint, wallet.publicKey, false);
+
+    // optional: user WOODENG / LP ATAs (for AMM)
+    let userWoodAta: PublicKey;
+let userWoodAtaIx: TransactionInstruction | null = null;
+let wrapIxs: TransactionInstruction[] = [];
+
+if (quoteToken === 'SOL') {
+  // We'll decide the required amount below in each path and fill wrapIxs there
+  // For now we only know the ATA address:
+  userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey, false);
+} else {
+  const res = await ensureAtaIx(wallet.publicKey, QUOTE_MINT, wallet.publicKey, false);
+  userWoodAta   = res.ata;
+  userWoodAtaIx = res.ix;
+}
+
+    const { ata: userLpAta,   ix: userLpAtaIx } =
+      await ensureAtaIx(wallet.publicKey, lpMintBuild.mint, wallet.publicKey, false);
+
+    // price params
+    const P1_UI = 35 / 44_000_000;
+    const DEFAULT_P0_UI = Math.min(0.00000070, 0.95 * P1_UI);
+    const p0Lamports = new BN(Math.floor(DEFAULT_P0_UI * 10 ** QUOTE_DECIMALS));
+
+
+    // anchor ixs instead of .rpc
+    const initIx = await poolProgram.methods
+      .initializeSoundMemeAndPool(
+        p0Lamports,
+        poolType === 'bonding',
+        new BN(threshold),
+      )
       .accounts({
-        authority:     wallet.publicKey,
-        config:        configPda,
-        memeMint:      memeMintKey,
+        authority: wallet.publicKey,
+        config: configPda,
+        memeMint: memeMintBuild.mint,
         poolMemeVault,
         poolWoodengVault,
-        lpMint:        lpMintKey,
-        woodengMint:   WOODENG_MINT,
-        tokenProgram:  TOKEN_PROGRAM_ID,
+        lpMint: lpMintBuild.mint,
+        woodengMint: QUOTE_MINT,
+        lpFeeVault,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
-        rent:          SYSVAR_RENT_PUBKEY,
+        rent: SYSVAR_RENT_PUBKEY,
       })
-      .rpc();
+      .instruction();
 
-    // ---------- STEP 7 – add initial liquidity (AMM only) ----------
-    if (poolType === 'amm') {
-      setStepModal({ open:true, step:"Step 7/7: Adding initial liquidity…" });
+    // compute budget (help avoid CU errors)
+    const computeIxs = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2_000 }), // bump if needed
+    ];
 
-      const userWoodengAta = await ensureAtaExists(
-        wallet.publicKey, WOODENG_MINT, wallet.publicKey, wallet, false);
-      const userLpAta = await ensureAtaExists(
-        wallet.publicKey, lpMintKey, wallet.publicKey, wallet, false);
 
-      await poolProgram.methods
-        .addLiquidity(
-          new BN(initialMemeLiquidity    * 10 ** MEME_DECIMALS),
-          new BN(initialWoodengLiquidity * 10 ** WOODENG_DECIMALS),
-        )
-        .accounts({
-          config:          configPda,
-          poolMemeVault,
-          poolWoodengVault,
-          user:            wallet.publicKey,
-          userMemeAta:     creatorMemeAta,
-          userWoodengAta,
-          lpMint:          lpMintKey,
-          userLpAta,
-          tokenProgram:    TOKEN_PROGRAM_ID,
-        })
-        .rpc();
+
+
+
+    // PHASE 1: create everything (+ seed meme + metadata).
+const ixsPhase1: TransactionInstruction[] = [
+  ...computeIxs,
+  ...memeMintBuild.ixs,
+  ...lpMintBuild.ixs,
+  lpFeeVaultIx,
+  creatorMemeAtaIx,
+  mdIx,
+];
+
+const signersPhase1 = [...memeMintBuild.signers, ...lpMintBuild.signers];
+
+// Founder pre-buy (bonding)
+const projectWalletAta = lpFeeVault;
+const founderQty = founderBuyTokens;
+
+if (poolType === 'amm') {
+  // 1) Mint MEME to creator *before* init (wallet is still mint authority)
+  const mintMemeIx = buildMintToIx(
+    memeMintBuild.mint,
+    creatorMemeAta,
+    wallet.publicKey!,
+    initialMemeLiquidity * 10 ** MEME_DECIMALS
+  );
+  ixsPhase1.push(mintMemeIx, userLpAtaIx);
+
+  // 2) Fund quote (wrap SOL or ensure quote ATA)
+  if (quoteToken === 'SOL') {
+  const lamportsNeeded = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
+  if (lamportsNeeded > 0) {
+    const w = await buildWrapSolIxs(wallet.publicKey!, lamportsNeeded);
+    userWoodAta = w.ata;
+    ixsPhase1.push(...w.ixs);
+  } else {
+    // still need the ATA address even if we don't fund it
+    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
+  }
+} else if (userWoodAtaIx) {
+  ixsPhase1.push(userWoodAtaIx);
+}
+
+}
+
+// 3) Now initialize (takes mint authorities)
+ixsPhase1.push(initIx);
+
+// 4) Pool-specific action after init
+if (poolType === 'bonding' && founderQty > 0) {
+  const founderMinOut = new BN(0);
+  const lamportsInBN  = p0Lamports.mul(new BN(founderQty)).muln(300).divn(100);
+  const lamportsInNum = Number(lamportsInBN.toString());
+
+  if (quoteToken === 'SOL') {
+  if (lamportsInNum > 0) {
+    const w = await buildWrapSolIxs(wallet.publicKey!, lamportsInNum);
+    userWoodAta = w.ata;
+    ixsPhase1.push(...w.ixs);
+  } else {
+    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
+  }
+} else if (userWoodAtaIx) {
+  ixsPhase1.push(userWoodAtaIx);
+}
+
+
+  const founderBuyIx = await poolProgram.methods
+    .buy(lamportsInBN, founderMinOut)
+    .accounts({
+      config:           configPda,
+      memeMint:         memeMintBuild.mint,
+      poolMemeVault,
+      poolWoodengVault,
+      buyer:            wallet.publicKey!,
+      buyerMemeAta:     creatorMemeAta,
+      buyerWoodengAta:  userWoodAta,
+      projectWalletAta: lpFeeVault,
+      lpFeeVault,
+      tokenProgram:     TOKEN_PROGRAM_ID,
+      systemProgram:    SystemProgram.programId,
+    })
+    .instruction();
+  ixsPhase1.push(founderBuyIx);
+}
+
+if (poolType === 'amm') {
+  const addLiqIx = await poolProgram.methods
+    .addLiquidity(
+      new BN(initialMemeLiquidity * 10 ** MEME_DECIMALS),
+      new BN(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS),
+    )
+    .accounts({
+      config:          configPda,
+      poolMemeVault,
+      poolWoodengVault,
+      user:            wallet.publicKey!,
+      userMemeAta:     creatorMemeAta,
+      userWoodengAta:  userWoodAta,
+      lpMint:          lpMintBuild.mint,
+      userLpAta,
+      tokenProgram:    TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+
+  ixsPhase1.push(addLiqIx);
+}
+
+
+    // 3) ONE signature attempt (bonding = always one; amm = usually one)
+    setStepModal({ open:true, step:"Sign once to create everything…" });
+    try {
+      await sendIxsOnce(connection, wallet, ixsPhase1, signersPhase1);
+      setStepModal({ open:false, step:"" });
+      setTradeModal({ open:true, memeMint: memeMintBuild.mint, configPda });
+      setStatus("Sound Meme & Pool created!");
+      return;
+    } catch (err: any) {
+      const msg = (err?.message || '').toLowerCase();
+      const tooBig = msg.includes('transaction too large') || msg.includes('account input limit') || msg.includes('max');
+      if (!(poolType === 'amm' && tooBig)) {
+        throw err; // bonding should never need split; non-size errors bubble
+      }
     }
 
-    // ---------- finished ----------
-    setStepModal({ open:false, step:"" });
-    setTradeModal({ open:true, memeMint:memeMintKey, configPda });
-    setStatus("Sound Meme & Pool created!");
-  } catch (e: any) {
-    setStepModal({ open:true, step:"❌ Error: " + (e.message ?? e) });
-    setStatus("Error: " + (e.message ?? e));
+   let ixsP1: TransactionInstruction[] = [
+  ...computeIxs,
+  ...memeMintBuild.ixs,
+  ...lpMintBuild.ixs,
+  lpFeeVaultIx,
+  creatorMemeAtaIx,
+  mdIx,
+];
+
+if (poolType === 'amm') {
+  // Mint before init (wallet still mint authority)
+  ixsP1.push(
+    buildMintToIx(
+      memeMintBuild.mint,
+      creatorMemeAta,
+      wallet.publicKey!,
+      initialMemeLiquidity * 10 ** MEME_DECIMALS
+    ),
+    userLpAtaIx,
+  );
+
+  // Wrap SOL or ensure quote ATA
+  if (quoteToken === 'SOL') {
+  const lamportsNeeded = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
+  if (lamportsNeeded > 0) {
+    const w = await buildWrapSolIxs(wallet.publicKey!, lamportsNeeded);
+    userWoodAta = w.ata;
+    ixsP1.push(...w.ixs);
+  } else {
+    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
+  }
+} else if (userWoodAtaIx) {
+  ixsP1.push(userWoodAtaIx);
+}
+
+}
+
+// Now init
+ixsP1.push(initIx);
+
+// Bonding founder buy in split phase
+if (poolType !== 'amm') {
+  const founderQtyP1 = founderBuyTokens;
+  if (founderQtyP1 > 0) {
+    const founderMinOutP1 = new BN(0);
+    const lamportsInP1    = p0Lamports.mul(new BN(founderQtyP1)).muln(300).divn(100);
+    const lamportsInNum   = Number(lamportsInP1.toString());
+
+    if (quoteToken === 'SOL') {
+  if (lamportsInNum > 0) {
+    const w = await buildWrapSolIxs(wallet.publicKey!, lamportsInNum);
+    userWoodAta = w.ata;
+    ixsP1.push(...w.ixs);
+  } else {
+    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
+  }
+} else if (userWoodAtaIx) {
+  ixsP1.push(userWoodAtaIx);
+}
+
+
+    const founderBuyIxP1 = await poolProgram.methods
+      .buy(lamportsInP1, founderMinOutP1)
+      .accounts({
+        config:           configPda,
+        memeMint:         memeMintBuild.mint,
+        poolMemeVault,
+        poolWoodengVault,
+        buyer:            wallet.publicKey!,
+        buyerMemeAta:     creatorMemeAta,
+        buyerWoodengAta:  userWoodAta,
+        projectWalletAta: lpFeeVault,
+        lpFeeVault,
+        tokenProgram:     TOKEN_PROGRAM_ID,
+        systemProgram:    SystemProgram.programId,
+      })
+      .instruction();
+
+    ixsP1.push(founderBuyIxP1);
   }
 }
+
+setStepModal({ open:true, step:"Step 1/2: Creating mints & pool…" });
+await sendIxsOnce(connection, wallet, ixsP1, signersPhase1);
+
+// Phase 2 (AMM only): add liquidity (wrapping was already done in P1)
+if (poolType === 'amm') {
+  const addLiqIx2 = await poolProgram.methods
+    .addLiquidity(
+      new BN(initialMemeLiquidity * 10 ** MEME_DECIMALS),
+      new BN(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS),
+    )
+    .accounts({
+      config:          configPda,
+      poolMemeVault,
+      poolWoodengVault,
+      user:            wallet.publicKey!,
+      userMemeAta:     creatorMemeAta,
+      userWoodengAta:  userWoodAta,
+      lpMint:          lpMintBuild.mint,
+      userLpAta,
+      tokenProgram:    TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+
+  setStepModal({ open:true, step:"Step 2/2: Seeding initial liquidity…" });
+  await sendIxsOnce(
+    connection,
+    wallet,
+    [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), addLiqIx2]
+  );
+}
+
+
+
+    setStepModal({ open:false, step:"" });
+    setTradeModal({ open:true, memeMint: memeMintBuild.mint, configPda });
+    setStatus("Sound Meme & Pool created!");
+  } catch (e: any) {
+  let extra = '';
+  try {
+    if (e instanceof SendTransactionError) {
+      const logs = await e.getLogs(connection);
+      if (logs?.length) extra = '\n' + logs.join('\n');
+    } else if (e?.logs) {
+      extra = '\n' + (e.logs as string[]).join('\n');
+    }
+  } catch {}
+  setStepModal({ open:true, step: `❌ Error: ${e.message ?? e}${extra}` });
+  setStatus(`Error: ${e.message ?? e}`);
+}
+
+}
+
 
 
   // ====== SEARCH BAR LOGIC: fetch meme by address ======
@@ -697,7 +1001,7 @@ const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
   // =========== UI ===========
 
   return (
-    <div className="bg-[#181920] text-white min-h-screen py-12 px-2 flex flex-col items-center">
+    <div className="bg-[#181920] text-white min-h-screen py-8 sm:py-12 px-4 sm:px-6 flex flex-col items-center">
       <StepModal open={stepModal.open} step={stepModal.step} onClose={() => setStepModal({ open: false, step: "" })} />
       {tradeModal.open && tradeModal.memeMint && (
   <div
@@ -705,8 +1009,9 @@ const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
     onClick={() => setTradeModal({ open: false })}
   >
     <div
-      className="relative bg-[#1b1c20] rounded-xl p-8 w-full max-w-sm text-center"
-      onClick={e => e.stopPropagation()}   // block inner clicks
+      className="relative bg-[#1b1c20] rounded-xl p-6 sm:p-8 w-full max-w-sm text-center"
+      onClick={(e) => { e.stopPropagation(); /* block inner clicks */ }}
+
     >
       <button
         className="absolute top-4 right-4"
@@ -758,8 +1063,9 @@ const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
           </p>
         </div>
         <div className="mb-4 md:mb-0 flex justify-end">
-          <WalletMultiButton />
-        </div>
+  <WalletMultiButton className="w-full sm:w-auto" />
+</div>
+
       </div>
 
       {/* Form container with rainbow border only, no outer black */}
@@ -780,7 +1086,7 @@ const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
                   <input className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2 mb-3" value={memeName} onChange={e => setMemeName(e.target.value)} maxLength={32} />
                   <label className="block mb-1 font-medium">Ticker</label>
                   <input className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2 mb-3" value={memeSymbol} onChange={e => setMemeSymbol(e.target.value)} maxLength={10} />
-                  <div className="grid grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                     <div>
                       <label className="block mb-1 font-medium">Total Supply</label>
                       <input
@@ -828,19 +1134,105 @@ const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
                   <Coins className="w-5 h-5 text-[#FFE66D]" />
                   <h2 className="text-xl font-semibold">Pool Settings</h2>
                 </div>
-                <div className="flex gap-6 mb-3">
+                <div className="flex flex-col sm:flex-row gap-2 sm:gap-6 mb-3">
                   <label>
                     <input type="radio" checked={poolType === 'bonding'} onChange={() => setPoolType('bonding')} />
                     <span className="ml-1">Bonding (Fairlaunch)</span>
                   </label>
                   <label>
                     <input type="radio" checked={poolType === 'amm'} onChange={() => setPoolType('amm')} />
-                    <span className="ml-1">AMM (XYK)</span>
+                    <span className="ml-1">AMM (You add the liquidity)</span>
                   </label>
                 </div>
+
+                {/* Launch currency (card picker) */}
+<div className="mb-4">
+  <div className="flex items-center justify-between mb-2">
+    <span className="font-medium">Launch currency</span>
+  </div>
+
+  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    {[
+      {
+        key: 'WOODENG' as const,
+        title: 'WOODENG',
+        blurb: 'Use the ecosystem token for a better promotion of the trading pool of your sound meme.',
+      },
+      {
+        key: 'SOL' as const,
+        title: 'SOL',
+        blurb: 'Fund with SOL — we auto-wrap to wSOL under the hood.',
+      },
+    ].map((opt) => {
+      const active = quoteToken === opt.key;
+      return (
+        <button
+          key={opt.key}
+          type="button"
+          onClick={() => setQuoteToken(opt.key)}
+          className={[
+            'text-left rounded-xl border p-4 bg-[#1a1b22] hover:bg-[#1f2128] transition',
+            active ? 'border-[#ffc371] ring-2 ring-[#ffc371]/30' : 'border-[#2b2d35]'
+          ].join(' ')}
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-semibold">{opt.title}</span>
+            {active && (
+              <span className="text-[10px] px-2 py-1 rounded bg-[#ffc371] text-black">
+                Selected
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-[#9aa1af] mt-1">{opt.blurb}</p>
+        </button>
+      );
+    })}
+  </div>
+
+  <p className="text-[11px] text-[#8d95a5] mt-2">
+    This sets the currency paired with your meme at launch. Traders will buy your token with <b>{quoteLabel}</b>.
+  </p>
+</div>
+
+
+
+
+                {/* ⬇️ PASTE THIS BLOCK RIGHT HERE ⬇️ */}
+  {poolType === 'bonding' && (
+    <div className="mt-4 p-4 rounded-lg bg-[#1a1b22] border border-[#2b2d35]">
+      <div className="flex items-center gap-2 mb-2">
+        <Volume2 className="w-4 h-4 text-[#FFE66D]" />
+        <span className="font-medium">Creator pre-buy (max 1%)</span>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={/* 0.01% steps */ 0.01}
+          value={founderBuyPct}
+          onChange={(e) => {
+            const v = Math.max(0, Math.min(1, Number(e.target.value)));
+            setFounderBuyPct(v);
+          }}
+          className="w-full accent-[#ffc371]"
+        />
+        <div className="w-16 text-right tabular-nums">
+          {founderBuyPct.toFixed(2)}%
+        </div>
+      </div>
+
+      <div className="mt-2 text-xs text-[#9aa1af]">
+        You’ll pre-buy <b>{fmt(founderBuyTokens)}</b> MEME (≈ {founderBuyPct.toFixed(2)}% of 444,000,000).
+      </div>
+    </div>
+  )}
+  
+
                {/* ─────────── Liquidity inputs ─────────── */}
 {poolType === 'amm' && (
-  <div className="grid grid-cols-2 gap-6">
+  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
     {/* Initial meme tokens */}
     <div>
       <label className="block mb-1 font-medium">Initial Meme Liquidity</label>
@@ -857,16 +1249,19 @@ const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
 
     {/* Initial WOODENG */}
     <div>
-      <label className="block mb-1 font-medium">Initial WOODENG Liquidity</label>
-      <input
-        type="number"
-        value={initialWoodengLiquidity}
-        onChange={e => setInitialWoodengLiquidity(Number(e.target.value) || 0)}
-        className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
-      />
-      <span className="text-xs text-[#aaa]">
-        Amount of WOODENG for pool
-      </span>
+      <label className="block mb-1 font-medium">
+  Initial {quoteLabel} Liquidity
+</label>
+<input
+  type="number"
+  value={initialQuoteLiquidity}
+  onChange={e => setInitialQuoteLiquidity(Number(e.target.value) || 0)}
+  className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
+/>
+<span className="text-xs text-[#aaa]">
+  Amount of {quoteLabel} for pool
+</span>
+
     </div>
   </div>
 )}
@@ -888,11 +1283,13 @@ const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
               </div>
 
               <LiquidChargeButton
-                type="submit"
-                disabled={!agreedOwn || !agreedTOS}
-              >
-                Create Sound Meme & Pool <span className="ml-2">🌊<span className="ml-1">🔔</span></span>
-              </LiquidChargeButton>
+  type="submit"
+  disabled={!agreedOwn || !agreedTOS}
+  className="w-full sm:w-auto"
+>
+  Create Sound Meme & Pool <span className="ml-2">🌊<span className="ml-1">🔔</span></span>
+</LiquidChargeButton>
+
             </form>
           </div>
         </div>
@@ -901,15 +1298,15 @@ const lpMintKey          = await createMintWithProvider(provider, 0, configPda);
         <div className="bg-gradient-to-r from-[#FF6B6B] via-[#4ECDC4] to-[#FFE66D] p-[2.5px] rounded-2xl">
           <div className="bg-[#181920] rounded-[14px] p-8">
             <h2 className="text-xl font-semibold mb-3">🔍 Find & Interact with a Meme Locker</h2>
-            <div className="flex gap-2 mb-4">
+            <div className="flex flex-col sm:flex-row gap-2 mb-4">
               <input
                 type="text"
                 placeholder="Paste Locker PDA"
                 value={searchAddress}
                 onChange={e => setSearchAddress(e.target.value)}
-                className="flex-1 px-3 py-2 rounded bg-[#1b1c20] border border-[#36373c] text-white"
+                className="flex-1 w-full px-3 py-2 rounded bg-[#1b1c20] border border-[#36373c] text-white"
               />
-              <button onClick={handleSearch} className="px-4 py-2 rounded bg-[#ffc371] text-black font-bold">Search</button>
+              <button onClick={handleSearch} className="w-full sm:w-auto px-4 py-2 rounded bg-[#ffc371] text-black font-bold">Search</button>
             </div>
             {searchResult && (
               <div className="border border-[#ffd700] rounded p-5 bg-[#222327] mb-4">

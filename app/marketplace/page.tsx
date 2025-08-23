@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 
 
@@ -9,6 +8,7 @@ import { loadMarketNfts } from '@/lib/loadMarketNfts';
 import { cn } from '@/lib/utils';
 import { NFTCard } from './NFTCard';
 import { Grid, List, ChevronDown, Package, Layers, LineChart } from 'lucide-react';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
@@ -52,6 +52,17 @@ export default function MarketplacePage() {
   const router = useRouter();
   const { publicKey } = useWallet();
 
+
+
+  const searchParams = useSearchParams();
+const queryRaw = (searchParams.get('q') || '').trim();
+const query    = queryRaw.toLowerCase();
+
+
+
+  
+
+
   const [nfts, setNfts] = useState<NFT[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
   const [view, setView] = useState<'grid' | 'list'>('grid');
@@ -67,6 +78,25 @@ export default function MarketplacePage() {
     source: '' | 'amm' | 'direct';
   }>({ type: [], token: [], source: '' });
 
+  const pathname = usePathname();
+
+  useEffect(() => {
+  const stopAll = () => {
+    // Pause & reset every <audio> on the page
+    document.querySelectorAll('audio').forEach((el) => {
+      try {
+        el.pause();
+        el.currentTime = 0;
+      } catch {}
+    });
+    // Tell any custom audio players to stop
+    window.dispatchEvent(new Event('app:stop-audio'));
+  };
+
+  stopAll();        // stop when arriving here
+  return stopAll;   // also stop when leaving
+}, [pathname]);
+
  
 
   /* -------------- fetch once ------------- */
@@ -77,37 +107,101 @@ export default function MarketplacePage() {
     })();
   }, []);
 
-  /* -------------- derived list ----------- */
-  const visibleNfts = useMemo(() => {
-    const filtered = nfts.filter((n) => {
-      if (filters.type.length && !filters.type.includes(n.type)) return false;
-      if (filters.token.length && !filters.token.includes(n.tokenType))
-        return false;
-      if (filters.source === 'amm' && !n.hasPool) return false;
-      if (filters.source === 'direct' && n.hasPool) return false;
-      return true;
-    });
+/* -------------- derived list ----------- */
+const visibleNfts = useMemo(() => {
+  // lightweight Solana address check (no imports, no RPC)
+  const isAddress = (s: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
 
-    /* keep pool listing if duplicate */
-    const byId = new Map<string, NFT>();
-    filtered.forEach((n) => {
-      const existing = byId.get(n.id);
-      if (!existing || (!existing.hasPool && n.hasPool)) byId.set(n.id, n);
-    });
+  // scoring based ONLY on symbol/ticker and title/name
+  const scoreOf = (n: NFT): number => {
+    if (!query) return 0;
 
-    return [...byId.values()].sort((a, b) => {
-      switch (sort) {
-        case 'date':
-          return +new Date(b.createdAt) - +new Date(a.createdAt);
-        case 'popularity':
-          return b.popularity - a.popularity;
-        case 'price-asc':
-          return a.price[a.tokenType] - b.price[b.tokenType];
-        case 'price-desc':
-          return b.price[b.tokenType] - a.price[a.tokenType];
-      }
+    // symbol/ticker (optional field; we check a few possible props)
+    const sym = String((n as any).symbol || (n as any).ticker || '').toLowerCase();
+    const name = String(n.title || '').toLowerCase();
+
+    let s = 0;
+
+    // symbol priority
+    if (sym) {
+      if (sym === query)            s += 1000;
+      else if (sym.startsWith(query)) s += 800;
+      else if (sym.includes(query))  s += 600;
+    }
+
+    // name/title secondary
+    if (name) {
+      if (name === query)             s += 500;
+      else if (name.startsWith(query))  s += 300;
+      else if (name.includes(query))   s += 200;
+    }
+
+    return s;
+  };
+
+  // 1) apply pills/switches first
+  const filteredPass1 = nfts.filter((n) => {
+    if (filters.type.length && !filters.type.includes(n.type)) return false;
+    if (filters.token.length && !filters.token.includes(n.tokenType)) return false;
+    if (filters.source === 'amm' && !n.hasPool) return false;
+    if (filters.source === 'direct' && n.hasPool) return false;
+    return true;
+  });
+
+  // 2) address-only or score filter
+  const filtered = query
+    ? (
+        isAddress(queryRaw)
+          ? filteredPass1.filter(n => n.mint === queryRaw || n.poolPda === queryRaw)
+          : filteredPass1.filter(n => scoreOf(n) > 0)
+      )
+    : filteredPass1;
+
+  // 3) collapse duplicates (prefer the pool listing)
+  const byId = new Map<string, NFT>();
+  for (const n of filtered) {
+    const prev = byId.get(n.id);
+    if (!prev || (!prev.hasPool && n.hasPool)) byId.set(n.id, n);
+  }
+
+  // 4) sort: best match first, then your chosen sort mode
+  const arr = [...byId.values()];
+  arr.sort((a, b) => {
+    const sa = scoreOf(a);
+    const sb = scoreOf(b);
+    if (sa !== sb) return sb - sa;
+
+    switch (sort) {
+      case 'date':       return +new Date(b.createdAt) - +new Date(a.createdAt);
+      case 'popularity': return b.popularity - a.popularity;
+      case 'price-asc':  return a.price[a.tokenType] - b.price[b.tokenType];
+      case 'price-desc': return b.price[b.tokenType] - a.price[a.tokenType];
+      default:           return 0;
+    }
+  });
+
+  return arr;
+}, [nfts, filters, sort, query, queryRaw]);
+
+
+
+
+
+useEffect(() => {
+  const stopAll = () => {
+    // Stop any <audio> tags (if you ever render some)
+    document.querySelectorAll('audio').forEach((el) => {
+      try { el.pause(); el.currentTime = 0; } catch {}
     });
-  }, [nfts, filters, sort]);
+    // Tell useAudio() players to stop too
+    window.dispatchEvent(new Event('woodeng:audio:stop-all'));
+  };
+
+  stopAll();        // when arriving here
+  return stopAll;   // and when leaving
+}, [pathname]);
+
+
 
   const pageNfts = visibleNfts.slice(0, page * 12);
 
