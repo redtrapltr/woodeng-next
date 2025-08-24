@@ -15,6 +15,25 @@ import idl            from '@/idl/idl.json';
 import { PROGRAM_ID }  from '@/lib/constants';
 import { NFT }         from '@/types/nft';
 
+
+
+// Identify the quote token from a mint
+const WSOL = new PublicKey('So11111111111111111111111111111111111111112');
+// set your real WOODENG mint here (or via env)
+const WOODENG = new PublicKey(process.env.NEXT_PUBLIC_WOODENG_MINT || PublicKey.default.toBase58());
+
+const normTokenFromMint = (mint: PublicKey): 'sol' | 'woodeng' =>
+  mint.equals(WSOL) ? 'sol' : mint.equals(WOODENG) ? 'woodeng' : 'woodeng';
+
+// generic XYK buy price (quote has 9 decimals)
+function xykBuyPrice(x: number, y: number): number {
+  // buy 1: (sum_x -> sum_x - 1), cost = new_y - y
+  if (x <= 1) return Infinity;
+  const k  = BigInt(x) * BigInt(y);
+  const y1 = Number(k / BigInt(x - 1));
+  return (y1 - y) / 1e9;
+}
+
 /* ------------------------------------------------------------------ */
 /* URL helpers – identical rules as the detail page / Web3Media.jsx   */
 /* ------------------------------------------------------------------ */
@@ -81,8 +100,13 @@ export async function loadMarketNfts(): Promise<NFT[]> {
 
     if (pool.kind.single === undefined) continue;            // skip bundles
 
-    const priceWdg = poolBuyPrice(pool);
-    if (!Number.isFinite(priceWdg)) continue;
+    const x0 = Number(pool.nftReserves?.[0] ?? 0) + Number(pool.vx ?? 0);
+const y0 = Number(pool.tokenReserve ?? 0)     + Number(pool.vy ?? 0);
+const buy = xykBuyPrice(x0, y0);
+if (!Number.isFinite(buy)) continue;
+
+const tokenType = normTokenFromMint(new PublicKey(pool.tokenMint));
+
 
     const mint      = new PublicKey(pool.nftMints[0]);
     const nftModel  = await mx.nfts().findByMint({ mintAddress: mint });
@@ -111,10 +135,15 @@ export async function loadMarketNfts(): Promise<NFT[]> {
       title:      nftModel.name,
       imageUrl:   toHttp(rawImg) || '/blank.png',
       audioUrl:   toHttp(rawAudio),
-      price:      { sol: 0, woodeng: priceWdg, usd: 0 },
-      status:     'available',
-      type:       'single',
-      tokenType:  'woodeng',
+      price: {
+  sol:     tokenType === 'sol'     ? buy : 0,
+  woodeng: tokenType === 'woodeng' ? buy : 0,
+  usd: 0,
+},
+status:     'available',
+type:       'single',
+tokenType,
+
       nftType:    'music',
       hasPool:    true,
       popularity: 0,
@@ -135,6 +164,87 @@ export async function loadMarketNfts(): Promise<NFT[]> {
       },
     });
   }
+
+
+  /* ---------- 2) AMM bundles (BundleConfig) ----------------------- */
+const bundleDisc = anchorUtils.bytes.bs58.encode(
+  BorshAccountsCoder.accountDiscriminator('BundleConfig'),
+);
+
+const rawBundles = await conn.getProgramAccounts(PROGRAM_ID, {
+  filters: [{ memcmp: { offset: 0, bytes: bundleDisc } }],
+});
+
+for (const { pubkey, account } of rawBundles) {
+  let cfg: any;
+  try { cfg = coder.accounts.decode('BundleConfig', account.data); }
+  catch { continue; }
+
+  // Σx across all bundle mints (include vx)
+  const sumX = Number(cfg.vx ?? 0) + (cfg.nftReserves || []).reduce((a: number, b: any) => a + Number(b || 0), 0);
+  const sumY = Number(cfg.tokenReserve ?? 0) + Number(cfg.vy ?? 0);
+  const buy  = xykBuyPrice(sumX, sumY);
+  if (!Number.isFinite(buy)) continue;
+
+  const tokenType = normTokenFromMint(new PublicKey(cfg.tokenMint));
+
+  // choose a representative mint (prefer one with reserve > 0)
+  const mintStrs: string[] = (cfg.mints || []).map((m: any) => new PublicKey(m).toBase58());
+  const reserves: number[] = (cfg.nftReserves || []).map((n: any) => Number(n || 0));
+  const liveIdx = reserves.findIndex((r) => r > 0);
+  const repMint = liveIdx >= 0 && mintStrs[liveIdx] ? new PublicKey(mintStrs[liveIdx]) :
+                  mintStrs[0] ? new PublicKey(mintStrs[0]) : null;
+
+  // derive a title/cover/audio from a representative mint (best effort)
+  let title = `Bundle ${pubkey.toBase58().slice(0, 6)}…`;
+  let imageUrl = '/blank.png';
+  let audioUrl = '';
+
+  if (repMint) {
+    try {
+      const rep = await mx.nfts().findByMint({ mintAddress: repMint });
+      title = rep.name || title;
+
+      let meta: any = rep.json ?? null;
+      if (!meta) {
+        const uri = rep.uri;
+        const cid = uri.startsWith('ipfs://') ? uri.slice(7) : '';
+        for (let i = 0; i < 3 && !meta; i++) {
+          try {
+            const url = cid ? gateways[i](cid) : uri;
+            meta = await fetch(url).then(r => r.json());
+          } catch {/* try next */}
+        }
+      }
+      meta ||= {};
+      imageUrl = toHttp(String(meta.image) || '') || imageUrl;
+      audioUrl = toHttp(String(meta.properties?.audio) || String(meta.animation_url) || '');
+    } catch {/* ignore */}
+  }
+
+  out.push({
+    id:        pubkey.toBase58(),      // unique id for bundle
+    title,
+    imageUrl,
+    audioUrl,
+    price: {
+      sol:     tokenType === 'sol'     ? buy : 0,
+      woodeng: tokenType === 'woodeng' ? buy : 0,
+      usd: 0,
+    },
+    status:     'available',
+    type:       'bundle',
+    tokenType,
+    nftType:    'soundmeme',           // adjust to your taxonomy if needed
+    hasPool:    true,
+    pool:       pubkey.toBase58(),     // <- lets UI detect a “pool”
+    popularity: 0,
+    createdAt:  new Date().toISOString(),
+    collection: { name: 'Bundle', verified: false, floorPrice: 0, volume24h: 0 },
+    metadata:   { artist: 'Various', genre: 'N/A', duration: 0 },
+  } as NFT);
+}
+
 
   /* ---------- 2) fixed-price orders ------------------------------ */
   const orderDisc = anchorUtils.bytes.bs58.encode(

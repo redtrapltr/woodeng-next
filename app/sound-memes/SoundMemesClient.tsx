@@ -211,51 +211,70 @@ function MobileVerticalSection({
       </div>
 
       <div className="relative">
-        {/* rocket progress rail */}
-        <div className="pointer-events-none absolute right-1 top-0" style={{ height: railH, width: 8, zIndex: 10 }}>
-          <div className="relative h-full w-full rounded bg-white/10 overflow-hidden">
-            <div
-              className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#6c47e2] to-[#b484ff] transition-[height] duration-200"
-              style={{ height: `${progress * 100}%` }}
-            />
-            <Rocket
-              className="absolute right-[-6px] opacity-90"
-              style={{
-                bottom: `calc(${progress * 100}% - 10px)`,
-                transform: 'rotate(90deg)',
-                width: 16,
-                height: 16,
-              }}
-            />
-          </div>
-        </div>
+        
 
-        {/* slider */}
-        <div
-          ref={scrollRef}
-          onScroll={onScroll}
-          className="no-scrollbar px-4 pr-10 snap-y snap-mandatory scroll-smooth touch-pan-y overscroll-y-contain"
-          style={{ height: railH }}
-        >
-          {itemsBestFirst.map((p, i) => (
-            <div
-              key={p.pubkey.toBase58()}
-              ref={(el) => { cardRefs.current[i] = el; }} // <-- return void, no TS2322
-              className="h-[calc(100dvh-160px)] flex-none snap-center pb-4"
-            >
-              <MiniVerticalCard
-                pool={p}
-                rank={i + 1}
-                onOpen={onOpen}
-                onBuy={onBuy}
-                onSell={onSell}
-                change24h={change24hFor(p.memeMint.toBase58())}
-                active={i === activeIdx}
-              />
-            </div>
-          ))}
-        </div>
+        <div className="relative">
+  {/* rocket + exhaust rail */}
+  <div
+    className="pointer-events-none absolute top-0 right-3"
+    style={{ height: railH, width: 26, zIndex: 20 }}
+  >
+    <div className="relative h-full w-full rounded-full bg-white/12 overflow-hidden ring-1 ring-white/15">
+      {/* exhaust (progress) — grows from the BOTTOM as you scroll UP */}
+      <div
+        className="absolute bottom-0 left-0 right-0 transition-[height] duration-150 bg-gradient-to-t from-yellow-300 via-orange-400 to-fuchsia-600"
+        style={{ height: `${Math.max(0, Math.min(1, progress)) * 100}%` }}
+      />
+      {/* rocket — centered, vertical, sits on top of the exhaust */}
+      {/* keep the rocket inside the rail without changing rail width */}
+<div
+  className="absolute inset-x-1 flex justify-center pointer-events-none"
+  style={{
+    bottom: `calc(${Math.max(0, Math.min(1, progress)) * 100}% - 9px)`, // center 18px icon
+  }}
+>
+  <Rocket
+    className="drop-shadow-sm opacity-95"
+    style={{
+      width: 18,              // smaller than the 26px rail
+      height: 18,
+      transform: 'rotate(-45deg)',
+      transformOrigin: 'center',
+    }}
+    aria-hidden
+  />
+</div>
+
+    </div>
+  </div>
+
+  {/* slider */}
+  <div
+    ref={scrollRef}
+    onScroll={onScroll}
+    className="no-scrollbar px-4 pr-[48px] snap-y snap-mandatory overflow-y-auto overscroll-y-contain touch-pan-y"
+    style={{ height: railH, WebkitOverflowScrolling: 'touch' as any }}
+  >
+    {itemsBestFirst.map((p, i) => (
+      <div
+        key={p.pubkey.toBase58()}
+        ref={(el) => { cardRefs.current[i] = el; }}
+        className="h-[calc(100dvh-160px)] flex-none snap-center pb-4"
+      >
+        <MiniVerticalCard
+          pool={p}
+          rank={i + 1}
+          onOpen={onOpen}
+          onBuy={onBuy}
+          onSell={onSell}
+          change24h={change24hFor(p.memeMint.toBase58())}
+          active={i === activeIdx}
+        />
       </div>
+    ))}
+  </div>
+</div>
+</div> {/* close the outer .relative */}
     </section>
   );
 }

@@ -59,6 +59,8 @@ const QUOTE_DECIMALS = 9;            // WOODENG and wSOL both use 9
 
 
 
+
+
 // ──────────────────────────────────────────────────────────────
 
 // replace your SignerWallet with this:
@@ -334,33 +336,57 @@ async function mintToWithProvider(
   await sendTx(provider.connection, provider.wallet, tx)
 }
 
-function StepModal({ open, step, onClose }: StepModalProps) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60 overflow-y-auto">
-      <div
-        className="relative mx-4 w-full max-w-sm md:max-w-md lg:max-w-lg bg-[#1b1c20] rounded-xl shadow-lg p-6 sm:p-8 flex flex-col items-center my-16"
+type TxStep = {
+  open: boolean;
+  step: number;      // 1-based
+  total: number;     // total steps
+  title: string;     // short "what you're approving"
+  details?: string;  // optional longer blurb
+};
 
-        style={{ maxHeight: '90vh' }}
-      >
-        <span className="text-3xl mb-4">🚀</span>
-        <p className="text-lg font-bold mb-4 text-center break-words">{step}</p>
-        <button
-          className="mt-2 text-sm px-4 py-2 rounded bg-[#fe9063] hover:bg-[#fd6e5a] text-white"
-          onClick={onClose}
-        >
-          Close
-        </button>
+function StepModal({
+  open, step, total, title, details, onClose,
+}: TxStep & { onClose?: () => void }) {
+  if (!open) return null;
+  const pct = Math.max(0, Math.min(100, Math.round((step / Math.max(1,total)) * 100)));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="relative w-[min(92vw,420px)] rounded-xl bg-[#1b1c20] p-6 shadow-2xl">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-sm text-[#9aa1af]">Step {step} of {total}</div>
+          <button className="text-[#9aa1af] hover:text-white" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="w-full h-2 bg-[#262735] rounded overflow-hidden mb-4">
+          <div className="h-full bg-[#ffc371]" style={{ width: `${pct}%` }} />
+        </div>
+
+        <div className="text-lg font-bold mb-1">{title}</div>
+        {details && <div className="text-sm text-[#c9cbd6] whitespace-pre-line">{details}</div>}
+
+        <div className="mt-4 text-xs text-[#8d95a5]">
+          Keep this window open while you approve wallet prompts.
+        </div>
       </div>
     </div>
-  )
+  );
 }
+
 
 // ------- MAIN COMPONENT --------
 
 export default function MemeLockerFactory() {
   const wallet = useWallet()
-  const [stepModal, setStepModal] = useState<{ open: boolean, step: string }>({ open: false, step: "" })
+  // AFTER
+const [txStep, setTxStep] = useState<TxStep>({ open: false, step: 0, total: 0, title: "" });
+
+const showStep = (step: number, total: number, title: string, details?: string) =>
+  setTxStep({ open: true, step, total, title, details });
+
+const closeSteps = () => setTxStep(s => ({ ...s, open: false }));
+
+
   const [status, setStatus] = useState<string>("")
   const [searchAddress, setSearchAddress] = useState("")
   const [searchResult, setSearchResult] = useState<LockerResult>(null)
@@ -377,6 +403,9 @@ export default function MemeLockerFactory() {
 
   // Pool Settings
   const [poolType, setPoolType] = useState<'bonding' | 'amm'>('bonding')
+
+ const isAmm = poolType === 'amm';
+const isBonding = !isAmm;
 
   const [quoteToken, setQuoteToken] = useState<'WOODENG' | 'SOL'>('WOODENG');
 const QUOTE_MINT  = quoteToken === 'WOODENG' ? WOODENG_MINT : WSOL_MINT;
@@ -398,7 +427,7 @@ const fmt = (n: number) => n.toLocaleString();
 
     /* ── si on repasse sur Bonding on force la liq. meme à 0 ── */
 useEffect(() => {
-  if (poolType === 'bonding') {
+  if (isBonding) {
     setInitialMemeLiquidity(0);
     setInitialQuoteLiquidity(0);
   }
@@ -406,7 +435,7 @@ useEffect(() => {
 
 
 useEffect(() => {
-  if (poolType === 'bonding') {
+  if (isBonding) {
     setTotalSupply(444_000_000);
   }
 }, [poolType]);
@@ -566,21 +595,30 @@ async function handleCreateAll() {
     const poolProgram = new Program(poolIdlJson as Idl, POOL_PROGRAM_ID, provider);
 
     // 1) Off-chain uploads (unchanged)
-    setStepModal({ open:true, step:"Uploading media & metadata…" });
+    showStep(1, 3, "Upload media & metadata", "Pinning cover + audio + metadata.json to IPFS…");
+
     const imgCid   = coverImageUri;
     const audioCid = audioUri;
     const metaJson = { name: memeName, symbol: memeSymbol, description: memeDescription, image: imgCid, animation_url: audioCid, attributes: [{ trait_type:"Category", value:"Sound Meme" }] };
     const metaUri = await pinFile(new File([JSON.stringify(metaJson)], "metadata.json", { type:"application/json" }));
 
     // 2) Build on-chain instructions (we’ll sign ONCE)
-    setStepModal({ open:true, step:"Preparing on-chain creation…" });
+    showStep(2, 3, "Preparing on-chain creation", "Deriving PDAs, creating mints, ATAs & metadata…");
+
 
     // mints
     const memeMintBuild = await buildCreateMintIx(wallet.publicKey, MEME_DECIMALS, wallet.publicKey);
     const lpMintBuild   = await buildCreateMintIx(wallet.publicKey, 0, wallet.publicKey);
 
     // metadata for MEME
-    const mdIx = buildMetadataIx(wallet.publicKey, memeMintBuild.mint, metaUri, memeName, memeSymbol);
+const mdIx = buildMetadataIx(wallet.publicKey, memeMintBuild.mint, metaUri, memeName, memeSymbol);
+
+// placeholders for things we’ll send in Phase-2 (bonding)
+let mdIxPhase2: TransactionInstruction | null = null;
+let founderBuyIxPhase2: TransactionInstruction | null = null;
+let userWoodAtaIxPhase2: TransactionInstruction | null = null;
+let creatorMemeAtaIxPhase2: TransactionInstruction | null = null;
+
 
     // PDAs
     const [configPda]        = await getConfigPda(memeMintBuild.mint);
@@ -606,9 +644,9 @@ if (quoteToken === 'SOL') {
   // For now we only know the ATA address:
   userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey, false);
 } else {
-  const res = await ensureAtaIx(wallet.publicKey, QUOTE_MINT, wallet.publicKey, false);
-  userWoodAta   = res.ata;
-  userWoodAtaIx = res.ix;
+  // bonding: defer creating the ATA to Phase-2
+  userWoodAta = await getAssociatedTokenAddress(QUOTE_MINT, wallet.publicKey, false);
+  // userWoodAtaIx will be built (and sent) in Phase-2
 }
 
     const { ata: userLpAta,   ix: userLpAtaIx } =
@@ -624,7 +662,7 @@ if (quoteToken === 'SOL') {
     const initIx = await poolProgram.methods
       .initializeSoundMemeAndPool(
         p0Lamports,
-        poolType === 'bonding',
+        isBonding,
         new BN(threshold),
       )
       .accounts({
@@ -644,9 +682,11 @@ if (quoteToken === 'SOL') {
 
     // compute budget (help avoid CU errors)
     const computeIxs = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2_000 }), // bump if needed
-    ];
+  ComputeBudgetProgram.setComputeUnitLimit({ units: isBonding ? 400_000 : 600_000 }),
+  ...(isAmm ? [ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2_000 })] : []),
+];
+
+
 
 
 
@@ -658,9 +698,17 @@ const ixsPhase1: TransactionInstruction[] = [
   ...memeMintBuild.ixs,
   ...lpMintBuild.ixs,
   lpFeeVaultIx,
-  creatorMemeAtaIx,
-  mdIx,
+  // (bonding) creatorMemeAtaIx + mdIx go to Phase-2
 ];
+
+// AMM keeps these in Phase-1, bonding defers them
+if (isAmm) {
+  ixsPhase1.push(creatorMemeAtaIx, mdIx);
+} else {
+  creatorMemeAtaIxPhase2 = creatorMemeAtaIx;
+  mdIxPhase2 = mdIx;
+}
+
 
 const signersPhase1 = [...memeMintBuild.signers, ...lpMintBuild.signers];
 
@@ -668,56 +716,54 @@ const signersPhase1 = [...memeMintBuild.signers, ...lpMintBuild.signers];
 const projectWalletAta = lpFeeVault;
 const founderQty = founderBuyTokens;
 
-if (poolType === 'amm') {
+if (isAmm) {
   // 1) Mint MEME to creator *before* init (wallet is still mint authority)
-  const mintMemeIx = buildMintToIx(
+   const mintMemeIx = buildMintToIx(
     memeMintBuild.mint,
     creatorMemeAta,
     wallet.publicKey!,
     initialMemeLiquidity * 10 ** MEME_DECIMALS
   );
-  ixsPhase1.push(mintMemeIx, userLpAtaIx);
+  ixsPhase1.push(mintMemeIx);
+  // NOTE: userLpAtaIx will be sent in Phase 2
+
 
   // 2) Fund quote (wrap SOL or ensure quote ATA)
-  if (quoteToken === 'SOL') {
-  const lamportsNeeded = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
-  if (lamportsNeeded > 0) {
-    const w = await buildWrapSolIxs(wallet.publicKey!, lamportsNeeded);
-    userWoodAta = w.ata;
-    ixsPhase1.push(...w.ixs);
-  } else {
-    // still need the ATA address even if we don't fund it
+    if (quoteToken === 'SOL') {
+    // We will wrap SOL in Phase 2 right before addLiquidity
     userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
+  } else {
+    // We will create the WOODENG ATA idempotently in Phase 2
   }
-} else if (userWoodAtaIx) {
-  ixsPhase1.push(userWoodAtaIx);
-}
+
 
 }
 
 // 3) Now initialize (takes mint authorities)
 ixsPhase1.push(initIx);
 
-// 4) Pool-specific action after init
-if (poolType === 'bonding' && founderQty > 0) {
+// 4) Pool-specific (bonding) — prepare for Phase-2 only
+if (isBonding && founderQty > 0) {
   const founderMinOut = new BN(0);
   const lamportsInBN  = p0Lamports.mul(new BN(founderQty)).muln(300).divn(100);
-  const lamportsInNum = Number(lamportsInBN.toString());
 
   if (quoteToken === 'SOL') {
-  if (lamportsInNum > 0) {
-    const w = await buildWrapSolIxs(wallet.publicKey!, lamportsInNum);
-    userWoodAta = w.ata;
-    ixsPhase1.push(...w.ixs);
+    // you selected WOODENG, so this branch won’t run; kept for completeness
+    const lamportsInNum = Number(lamportsInBN.toString());
+    if (lamportsInNum > 0) {
+      const w = await buildWrapSolIxs(wallet.publicKey!, lamportsInNum);
+      userWoodAta = w.ata;
+      // push in Phase-2
+      wrapIxs = w.ixs;
+    }
   } else {
-    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
+    // WOODENG: ensure user ATA in Phase-2
+    const res = await ensureAtaIx(wallet.publicKey!, QUOTE_MINT, wallet.publicKey!, false);
+    userWoodAta   = res.ata;
+    userWoodAtaIxPhase2 = res.ix;
   }
-} else if (userWoodAtaIx) {
-  ixsPhase1.push(userWoodAtaIx);
-}
 
-
-  const founderBuyIx = await poolProgram.methods
+  founderBuyIxPhase2 = await poolProgram.methods
     .buy(lamportsInBN, founderMinOut)
     .accounts({
       config:           configPda,
@@ -733,11 +779,12 @@ if (poolType === 'bonding' && founderQty > 0) {
       systemProgram:    SystemProgram.programId,
     })
     .instruction();
-  ixsPhase1.push(founderBuyIx);
 }
 
-if (poolType === 'amm') {
-  const addLiqIx = await poolProgram.methods
+
+let addLiqIxPhase2: TransactionInstruction | null = null;
+if (isAmm) {
+  addLiqIxPhase2 = await poolProgram.methods
     .addLiquidity(
       new BN(initialMemeLiquidity * 10 ** MEME_DECIMALS),
       new BN(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS),
@@ -754,23 +801,97 @@ if (poolType === 'amm') {
       tokenProgram:    TOKEN_PROGRAM_ID,
     })
     .instruction();
-
-  ixsPhase1.push(addLiqIx);
+  // DO NOT push here; we'll send in Phase 2
 }
 
 
     // 3) ONE signature attempt (bonding = always one; amm = usually one)
-    setStepModal({ open:true, step:"Sign once to create everything…" });
+    showStep(
+  1, 1,
+  "Create + Init",
+  [
+    "This approval will:",
+    "• Create MEME + LP mints",
+    ...(isAmm ? ["• Write token metadata"] : ["• (Bonding) Metadata in Step 2"]),
+    ...(isAmm ? ["• Create idempotent ATAs (creator + fee vault)"] : ["• Create idempotent ATAs (fee vault)"]),
+    "• Initialize the pool (takes authorities)",
+    isAmm
+      ? "• (AMM) Liquidity will be a second approval"
+      : `• (Bonding) Optional creator pre-buy: ${founderBuyPct.toFixed(2)}%`,
+  ].join("\n")
+);
+
+
+
     try {
       await sendIxsOnce(connection, wallet, ixsPhase1, signersPhase1);
-      setStepModal({ open:false, step:"" });
-      setTradeModal({ open:true, memeMint: memeMintBuild.mint, configPda });
-      setStatus("Sound Meme & Pool created!");
-      return;
+      closeSteps();
+
+      closeSteps();
+
+// BONDING: Phase-2 = metadata + creator MEME ATA + WOODENG ATA + founder buy
+if (isBonding) {
+  const phase2Bonding: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+  ];
+  if (mdIxPhase2)             phase2Bonding.push(mdIxPhase2);
+  if (creatorMemeAtaIxPhase2) phase2Bonding.push(creatorMemeAtaIxPhase2);
+  if (userWoodAtaIxPhase2)    phase2Bonding.push(userWoodAtaIxPhase2);
+  if (wrapIxs.length)         phase2Bonding.push(...wrapIxs);
+  if (founderBuyIxPhase2)     phase2Bonding.push(founderBuyIxPhase2);
+
+  showStep(
+  2, 2,
+  founderBuyIxPhase2 ? "Step 2/2: Metadata + Founder pre-buy" : "Step 2/2: Write metadata",
+  founderBuyIxPhase2
+    ? `Writes token metadata and executes your ${founderBuyPct.toFixed(2)}% pre-buy in WOODENG.`
+    : "Writes token metadata to chain."
+);
+
+
+  await sendIxsOnce(connection, wallet, phase2Bonding);
+  closeSteps();
+}
+
+// AMM: Phase 2 = wrap/create quote ATA + create LP ATA + add liquidity
+if (isAmm && addLiqIxPhase2) {
+  const phase2Ixs: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+  ];
+
+  // Ensure user's LP ATA
+  phase2Ixs.push(userLpAtaIx);
+
+  // Ensure/fund quote side
+  if (quoteToken === 'SOL') {
+    const lamportsNeeded = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
+    if (lamportsNeeded > 0) {
+      const w2 = await buildWrapSolIxs(wallet.publicKey!, lamportsNeeded);
+      userWoodAta = w2.ata;
+      phase2Ixs.push(...w2.ixs);
+    }
+  } else if (userWoodAtaIx) {
+    phase2Ixs.push(userWoodAtaIx);
+  }
+
+  // Finally add liquidity
+  phase2Ixs.push(addLiqIxPhase2);
+
+  showStep(2, 2, "Step 2/2: Seed initial liquidity", `Deposit ${initialMemeLiquidity} ${memeSymbol} + ${initialQuoteLiquidity} ${quoteLabel}`);
+  await sendIxsOnce(connection, wallet, phase2Ixs);
+  closeSteps();
+}
+
+setTradeModal({ open:true, memeMint: memeMintBuild.mint, configPda });
+setStatus("Sound Meme & Pool created!");
+return;
+
+
     } catch (err: any) {
       const msg = (err?.message || '').toLowerCase();
       const tooBig = msg.includes('transaction too large') || msg.includes('account input limit') || msg.includes('max');
-      if (!(poolType === 'amm' && tooBig)) {
+      if (!(isAmm && tooBig)) {
+
         throw err; // bonding should never need split; non-size errors bubble
       }
     }
@@ -780,35 +901,31 @@ if (poolType === 'amm') {
   ...memeMintBuild.ixs,
   ...lpMintBuild.ixs,
   lpFeeVaultIx,
-  creatorMemeAtaIx,
-  mdIx,
 ];
 
-if (poolType === 'amm') {
+if (isAmm) {
+  ixsP1.push(creatorMemeAtaIx, mdIx);
+} else {
+  creatorMemeAtaIxPhase2 = creatorMemeAtaIx;
+  mdIxPhase2 = mdIx;
+}
+
+
+if (isAmm) {
   // Mint before init (wallet still mint authority)
-  ixsP1.push(
+    ixsP1.push(
     buildMintToIx(
       memeMintBuild.mint,
       creatorMemeAta,
       wallet.publicKey!,
       initialMemeLiquidity * 10 ** MEME_DECIMALS
     ),
-    userLpAtaIx,
   );
-
-  // Wrap SOL or ensure quote ATA
+  // LP ATA + quote funding will be sent in Phase 2
   if (quoteToken === 'SOL') {
-  const lamportsNeeded = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
-  if (lamportsNeeded > 0) {
-    const w = await buildWrapSolIxs(wallet.publicKey!, lamportsNeeded);
-    userWoodAta = w.ata;
-    ixsP1.push(...w.ixs);
-  } else {
     userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
   }
-} else if (userWoodAtaIx) {
-  ixsP1.push(userWoodAtaIx);
-}
+
 
 }
 
@@ -816,52 +933,68 @@ if (poolType === 'amm') {
 ixsP1.push(initIx);
 
 // Bonding founder buy in split phase
-if (poolType !== 'amm') {
+if (isBonding) {
   const founderQtyP1 = founderBuyTokens;
   if (founderQtyP1 > 0) {
     const founderMinOutP1 = new BN(0);
     const lamportsInP1    = p0Lamports.mul(new BN(founderQtyP1)).muln(300).divn(100);
     const lamportsInNum   = Number(lamportsInP1.toString());
 
-    if (quoteToken === 'SOL') {
+   if (quoteToken === 'SOL') {
+  // not your path here, kept for completeness
   if (lamportsInNum > 0) {
     const w = await buildWrapSolIxs(wallet.publicKey!, lamportsInNum);
     userWoodAta = w.ata;
-    ixsP1.push(...w.ixs);
-  } else {
-    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
+    wrapIxs = w.ixs; // send in Phase-2
   }
-} else if (userWoodAtaIx) {
-  ixsP1.push(userWoodAtaIx);
+} else {
+  const res = await ensureAtaIx(wallet.publicKey!, QUOTE_MINT, wallet.publicKey!, false);
+  userWoodAta   = res.ata;
+  userWoodAtaIxPhase2 = res.ix; // send in Phase-2
 }
 
+founderBuyIxPhase2 = await poolProgram.methods
+  .buy(lamportsInP1, founderMinOutP1)
+  .accounts({
+    config:           configPda,
+    memeMint:         memeMintBuild.mint,
+    poolMemeVault,
+    poolWoodengVault,
+    buyer:            wallet.publicKey!,
+    buyerMemeAta:     creatorMemeAta,
+    buyerWoodengAta:  userWoodAta,
+    projectWalletAta: lpFeeVault,
+    lpFeeVault,
+    tokenProgram:     TOKEN_PROGRAM_ID,
+    systemProgram:    SystemProgram.programId,
+  })
+  .instruction();
 
-    const founderBuyIxP1 = await poolProgram.methods
-      .buy(lamportsInP1, founderMinOutP1)
-      .accounts({
-        config:           configPda,
-        memeMint:         memeMintBuild.mint,
-        poolMemeVault,
-        poolWoodengVault,
-        buyer:            wallet.publicKey!,
-        buyerMemeAta:     creatorMemeAta,
-        buyerWoodengAta:  userWoodAta,
-        projectWalletAta: lpFeeVault,
-        lpFeeVault,
-        tokenProgram:     TOKEN_PROGRAM_ID,
-        systemProgram:    SystemProgram.programId,
-      })
-      .instruction();
-
-    ixsP1.push(founderBuyIxP1);
   }
 }
 
-setStepModal({ open:true, step:"Step 1/2: Creating mints & pool…" });
+showStep(1, 2, "Step 1/2: Create mints + init", "Creates mints/metadata/ATAs and initializes the pool.");
+
 await sendIxsOnce(connection, wallet, ixsP1, signersPhase1);
 
+
+// Bonding Phase-2 (metadata + ATAs + founder buy)
+if (isBonding) {
+  const phase2BondingSplit: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+  ];
+  if (mdIxPhase2)             phase2BondingSplit.push(mdIxPhase2);
+  if (creatorMemeAtaIxPhase2) phase2BondingSplit.push(creatorMemeAtaIxPhase2);
+  if (userWoodAtaIxPhase2)    phase2BondingSplit.push(userWoodAtaIxPhase2);
+  if (wrapIxs.length)         phase2BondingSplit.push(...wrapIxs);
+  if (founderBuyIxPhase2)     phase2BondingSplit.push(founderBuyIxPhase2);
+
+  showStep(2, 2, founderBuyIxPhase2 ? "Step 2/2: Metadata + Founder pre-buy" : "Step 2/2: Write metadata");
+  await sendIxsOnce(connection, wallet, phase2BondingSplit);
+}
+
 // Phase 2 (AMM only): add liquidity (wrapping was already done in P1)
-if (poolType === 'amm') {
+if (isAmm) {
   const addLiqIx2 = await poolProgram.methods
     .addLiquidity(
       new BN(initialMemeLiquidity * 10 ** MEME_DECIMALS),
@@ -880,17 +1013,37 @@ if (poolType === 'amm') {
     })
     .instruction();
 
-  setStepModal({ open:true, step:"Step 2/2: Seeding initial liquidity…" });
-  await sendIxsOnce(
-    connection,
-    wallet,
-    [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), addLiqIx2]
-  );
+    const phase2IxsSplit: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+  ];
+
+  // Ensure user's LP ATA
+  phase2IxsSplit.push(userLpAtaIx);
+
+  // Ensure/fund quote side
+  if (quoteToken === 'SOL') {
+    const lamportsNeeded2 = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
+    if (lamportsNeeded2 > 0) {
+      const w2 = await buildWrapSolIxs(wallet.publicKey!, lamportsNeeded2);
+      userWoodAta = w2.ata;
+      phase2IxsSplit.push(...w2.ixs);
+    }
+  } else if (userWoodAtaIx) {
+    phase2IxsSplit.push(userWoodAtaIx);
+  }
+
+  // Add liquidity
+  phase2IxsSplit.push(addLiqIx2);
+
+  showStep(2, 2, "Step 2/2: Seed initial liquidity", `Deposit ${initialMemeLiquidity} ${memeSymbol} + ${initialQuoteLiquidity} ${quoteLabel}`);
+  await sendIxsOnce(connection, wallet, phase2IxsSplit);
+
 }
 
 
 
-    setStepModal({ open:false, step:"" });
+    closeSteps();
+
     setTradeModal({ open:true, memeMint: memeMintBuild.mint, configPda });
     setStatus("Sound Meme & Pool created!");
   } catch (e: any) {
@@ -903,7 +1056,8 @@ if (poolType === 'amm') {
       extra = '\n' + (e.logs as string[]).join('\n');
     }
   } catch {}
-  setStepModal({ open:true, step: `❌ Error: ${e.message ?? e}${extra}` });
+  showStep(1, 1, "❌ Error", (e?.message ?? String(e)) + extra);
+
   setStatus(`Error: ${e.message ?? e}`);
 }
 
@@ -978,6 +1132,10 @@ if (poolType === 'amm') {
       const lockerMemeAccount = await ensureAtaExists(lockerPda, memeMint, wallet.publicKey,wallet, true)
       const userNftToken = await ensureAtaExists(wallet.publicKey, nftMint, wallet.publicKey,wallet, false)
 
+
+
+      
+
       const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" })
       const program = new Program(idlJson as Idl, PROGRAM_ID, provider)
       await program.methods
@@ -1002,7 +1160,15 @@ if (poolType === 'amm') {
 
   return (
     <div className="bg-[#181920] text-white min-h-screen py-8 sm:py-12 px-4 sm:px-6 flex flex-col items-center">
-      <StepModal open={stepModal.open} step={stepModal.step} onClose={() => setStepModal({ open: false, step: "" })} />
+      <StepModal
+  open={txStep.open}
+  step={txStep.step}
+  total={txStep.total}
+  title={txStep.title}
+  details={txStep.details}
+  onClose={() => setTxStep(s => ({ ...s, open: false }))}
+/>
+
       {tradeModal.open && tradeModal.memeMint && (
   <div
     className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center"
@@ -1094,10 +1260,10 @@ if (poolType === 'amm') {
   className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
   value={totalSupply}
   onChange={e => setTotalSupply(Number(e.target.value) || 0)}
-  disabled={poolType === 'bonding'}
+  disabled={isBonding}
 />
 <span className="text-xs text-[#aaa]">
-  {poolType === 'bonding'
+  {isBonding
     ? 'Fixed at 444,000,000 for bonding fairlaunch'
     : 'Set the supply for your meme coin'}
 </span>
@@ -1136,11 +1302,11 @@ if (poolType === 'amm') {
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2 sm:gap-6 mb-3">
                   <label>
-                    <input type="radio" checked={poolType === 'bonding'} onChange={() => setPoolType('bonding')} />
+                    <input type="radio" checked={isBonding} onChange={() => setPoolType('bonding')} />
                     <span className="ml-1">Bonding (Fairlaunch)</span>
                   </label>
                   <label>
-                    <input type="radio" checked={poolType === 'amm'} onChange={() => setPoolType('amm')} />
+                    <input type="radio" checked={isAmm} onChange={() => setPoolType('amm')} />
                     <span className="ml-1">AMM (You add the liquidity)</span>
                   </label>
                 </div>
@@ -1198,7 +1364,7 @@ if (poolType === 'amm') {
 
 
                 {/* ⬇️ PASTE THIS BLOCK RIGHT HERE ⬇️ */}
-  {poolType === 'bonding' && (
+  {isBonding && (
     <div className="mt-4 p-4 rounded-lg bg-[#1a1b22] border border-[#2b2d35]">
       <div className="flex items-center gap-2 mb-2">
         <Volume2 className="w-4 h-4 text-[#FFE66D]" />
@@ -1285,49 +1451,17 @@ if (poolType === 'amm') {
               <LiquidChargeButton
   type="submit"
   disabled={!agreedOwn || !agreedTOS}
-  className="w-full sm:w-auto"
+  className="w-full"
 >
   Create Sound Meme & Pool <span className="ml-2">🌊<span className="ml-1">🔔</span></span>
 </LiquidChargeButton>
+
 
             </form>
           </div>
         </div>
 
-        {/* --- Search Section --- */}
-        <div className="bg-gradient-to-r from-[#FF6B6B] via-[#4ECDC4] to-[#FFE66D] p-[2.5px] rounded-2xl">
-          <div className="bg-[#181920] rounded-[14px] p-8">
-            <h2 className="text-xl font-semibold mb-3">🔍 Find & Interact with a Meme Locker</h2>
-            <div className="flex flex-col sm:flex-row gap-2 mb-4">
-              <input
-                type="text"
-                placeholder="Paste Locker PDA"
-                value={searchAddress}
-                onChange={e => setSearchAddress(e.target.value)}
-                className="flex-1 w-full px-3 py-2 rounded bg-[#1b1c20] border border-[#36373c] text-white"
-              />
-              <button onClick={handleSearch} className="w-full sm:w-auto px-4 py-2 rounded bg-[#ffc371] text-black font-bold">Search</button>
-            </div>
-            {searchResult && (
-              <div className="border border-[#ffd700] rounded p-5 bg-[#222327] mb-4">
-                <div className="mb-2 font-bold">Meme Name: {searchResult.memeName || 'Unknown'}</div>
-                <div className="mb-2">Meme Mint: <span className="break-all">{typeof searchResult.memeMint?.toBase58 === 'function' ? searchResult.memeMint.toBase58() : String(searchResult.memeMint)}</span></div>
-                <div className="mb-2">NFT Mint: <span className="break-all">{typeof searchResult.nftMint?.toBase58 === 'function' ? searchResult.nftMint.toBase58() : String(searchResult.nftMint)}</span></div>
-                <div className="mb-2">Threshold: {searchResult.threshold?.toString?.() ?? String(searchResult.threshold)}</div>
-                <div className="mb-2">Locker PDA: <span className="break-all">{typeof searchResult.lockerPda?.toBase58 === 'function' ? searchResult.lockerPda.toBase58() : String(searchResult.lockerPda)}</span></div>
-                <div className="flex gap-3 mt-4">
-                  <button className="bg-[#ffd700] text-black font-bold px-4 py-2 rounded" onClick={() => lockTokensForMeme(searchResult)}>
-                    Lock tokens & Mint NFT
-                  </button>
-                  <button className="bg-[#fd6e5a] text-white font-bold px-4 py-2 rounded" onClick={() => burnNftAndUnlockTokens(searchResult)}>
-                    Burn NFT & Unlock tokens
-                  </button>
-                </div>
-              </div>
-            )}
-            {status && <div className="text-center mt-2">{status}</div>}
-          </div>
-        </div>
+       
       </div>
     </div>
   )

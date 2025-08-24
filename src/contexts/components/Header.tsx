@@ -3,17 +3,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
+
+
 import {
-  Home,
-  Waves,
-  Music,
-  ShieldCheck,
-  User as UserIcon,
-  Search as SearchIcon,
-  ChevronRight,
-  Menu,           // NEW
-  X,              // NEW
+  Home, Waves, Music, ShieldCheck, User as UserIcon,
+  Search as SearchIcon, ChevronRight, X
 } from "lucide-react";
+
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -23,6 +19,10 @@ import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 const DEVNET = new Connection("https://api.devnet.solana.com", "confirmed");
 const AMM_PROGRAM_ID = new PublicKey("FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS");
 const WOODENG_MINT = "CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad";
+
+
+
+
 
 /* ───── tiny icon for Sound Memes ───────────────────────────────────────── */
 export function AnimatedSoundWaveIcon() {
@@ -60,6 +60,12 @@ type Suggestion = {
   highPriority?: boolean;
 };
 
+
+
+
+
+
+
 export default function Header() {
   const wallet = useWallet();
   const router = useRouter();
@@ -75,6 +81,12 @@ export default function Header() {
 
   // MOBILE drawer state
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const [mounted, setMounted] = useState(false);
+useEffect(() => setMounted(true), []);
+
+
+  const searchRefMobile = useRef<HTMLInputElement | null>(null);
 
   const isOnSoundMemes = pathname?.startsWith("/sound-memes") ?? false;
 
@@ -96,6 +108,28 @@ export default function Header() {
     };
     run();
   }, [wallet.publicKey]);
+
+
+  useEffect(() => {
+  if (mobileOpen) {
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = overflow; };
+  }
+}, [mobileOpen]);
+
+
+
+
+useEffect(() => {
+  if (mobileOpen) {
+    // small delay so the panel finishes sliding in
+    const t = setTimeout(() => searchRefMobile.current?.focus(), 100);
+    return () => clearTimeout(t);
+  }
+}, [mobileOpen]);
+
+
 
   /* ───── address detection (debounced + cached) ───────────────────────── */
   const cacheRef = useRef<Map<string, ResolvedKind>>(new Map());
@@ -224,29 +258,39 @@ export default function Header() {
 
   /* layout styles */
   const headerContainer: React.CSSProperties = {
-    width: "100%",
-    background: "#0a0a12",
-    borderBottom: "1px solid #1a1a22",
-    position: "sticky",
-    top: 0,
-    zIndex: 20,
-    left: 0,
-    right: 0,
-    boxSizing: "border-box",
-  };
+  width: "100%",
+  background: "#0a0a12",
+  borderBottom: "1px solid #1a1a22",
+  position: "fixed",          // was "sticky"
+  top: 0,
+  left: 0,
+  right: 0,
+  zIndex: 60,                 // a bit higher than the drawer overlay
+  boxSizing: "border-box",
+};
 
-  const contentWrapper: React.CSSProperties = {
-    width: "100%",
-    margin: "0 auto",
-    maxWidth: 1800,
-    minHeight: 64,
-    display: "flex",
-    flexWrap: "nowrap",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "10px 16px",
-    gap: 12,
-  };
+
+
+
+
+
+
+  // contentWrapper: was "space-between"
+const contentWrapper: React.CSSProperties = {
+  width: "100%",
+  margin: "0 auto",
+  maxWidth: 1800,
+  minHeight: 64,
+  display: "flex",
+  flexWrap: "nowrap",
+  alignItems: "center",
+  justifyContent: "flex-start",   // <- change
+  padding: "10px 16px",
+  gap: 12,
+};
+
+
+
 
   const leftSection: React.CSSProperties = {
     display: "flex",
@@ -288,209 +332,252 @@ export default function Header() {
   };
 
   /* Reusable search box (desktop + mobile drawer share this) */
-  const SearchBox = ({ compact = false }: { compact?: boolean }) => (
-    <div
-      style={{
-        ...searchWrapBase,
-        flex: compact ? "1 1 auto" : searchWrapBase.flex,
-        maxWidth: compact ? undefined : searchWrapBase.maxWidth,
-      }}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setTimeout(() => setOpen(false), 120)}
-    >
-      <form
-        onSubmit={(e) => { e.preventDefault(); onSubmit(); }}
-      >
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={`Search by name, symbol, or address…`}
-          autoCorrect="off"
-          spellCheck={false}
-          autoComplete="off"
-          onFocus={() => setOpen(true)}
-          style={{
-            background: "#181929",
-            color: "#e6e6ff",
-            border: "1px solid #232332",
-            borderRadius: 14,
-            padding: "8px 36px 8px 12px",
-            width: "100%",
-            fontSize: 14,
-            outline: "none",
-          }}
-        />
-        <button
-          type="submit"
-          aria-label="Search"
-          title="Search"
-          style={{
-            position: "absolute",
-            right: 6,
-            top: 0,
-            bottom: 0,
-            margin: "auto",
-            height: 30,
-            width: 32,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-            color: "#b8baff",
-          }}
-        >
-          <SearchIcon size={18} />
-        </button>
-      </form>
+  /* Reusable search box (desktop + mobile drawer share this) */
+const SearchBox = ({
+  compact = false,
+  inputRef,
+}: {
+  compact?: boolean;
+  inputRef?: React.Ref<HTMLInputElement>;
 
-      {/* Suggestions dropdown */}
-      {open && query.trim() && (
-        <div
-          style={{
-            position: "absolute",
-            top: "calc(100% + 6px)",
-            left: 0,
-            right: 0,
-            background: "#11131e",
-            border: "1px solid #232332",
-            borderRadius: 12,
-            boxShadow: "0 8px 30px rgba(0,0,0,.4)",
-            overflow: "hidden",
-            zIndex: 50,
-          }}
-        >
-          {loading && (
-            <div
+}) => (
+  <div
+    style={{
+      ...searchWrapBase,
+      flex: compact ? "1 1 auto" : (searchWrapBase as any).flex,
+      maxWidth: compact ? undefined : searchWrapBase.maxWidth,
+    }}
+    onFocus={() => setOpen(true)}
+    onBlur={() => setTimeout(() => setOpen(false), 120)}
+  >
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit();
+      }}
+    >
+      <input
+        ref={inputRef}                            // << focusable on mobile
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search by name, symbol, or address…"
+        autoCorrect="off"
+        spellCheck={false}
+        autoComplete="off"
+        onFocus={() => setOpen(true)}
+        style={{
+          background: "#181929",
+          color: "#e6e6ff",
+          border: "1px solid #232332",
+          borderRadius: 14,
+          padding: "8px 36px 8px 12px",
+          width: "100%",
+          fontSize: 14,
+          outline: "none",
+        }}
+      />
+      <button
+        type="submit"
+        aria-label="Search"
+        title="Search"
+        style={{
+          position: "absolute",
+          right: 6,
+          top: 0,
+          bottom: 0,
+          margin: "auto",
+          height: 30,
+          width: 32,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          color: "#b8baff",
+        }}
+      >
+        <SearchIcon size={18} />
+      </button>
+    </form>
+
+    {/* Suggestions dropdown */}
+    {open && query.trim() && (
+      <div
+        style={{
+          position: "absolute",
+          top: "calc(100% + 6px)",
+          left: 0,
+          right: 0,
+          background: "#11131e",
+          border: "1px solid #232332",
+          borderRadius: 12,
+          boxShadow: "0 8px 30px rgba(0,0,0,.4)",
+          overflow: "hidden",
+          zIndex: 50,
+        }}
+      >
+        {loading && (
+          <div
+            style={{
+              padding: "10px 14px",
+              fontSize: 12,
+              color: "#9aa0b6",
+              borderBottom: suggestions.length ? "1px solid #232332" : undefined,
+            }}
+          >
+            Checking address…
+          </div>
+        )}
+
+        {suggestions.map((s) => (
+          <Link href={s.href} key={s.key} legacyBehavior>
+            <a
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setMobileOpen(false)}
               style={{
-                padding: "10px 14px",
-                fontSize: 12,
-                color: "#9aa0b6",
-                borderBottom: suggestions.length ? "1px solid #232332" : undefined,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "10px 12px",
+                color: "#e6e6ff",
+                textDecoration: "none",
+                fontSize: 14,
+                borderTop: "1px solid #191c29",
               }}
             >
-              Checking address…
-            </div>
-          )}
-
-          {suggestions.map((s) => (
-            <Link href={s.href} key={s.key} legacyBehavior>
-              <a
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setMobileOpen(false)}
+              <span
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "10px 12px",
-                  color: "#e6e6ff",
-                  textDecoration: "none",
-                  fontSize: 14,
-                  borderTop: "1px solid #191c29",
+                  fontSize: 11,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  background:
+                    s.badge === "Music NFT"
+                      ? "#2b364c"
+                      : s.badge === "Sound Meme"
+                      ? "#2b3f2e"
+                      : "#2b2b3b",
+                  color:
+                    s.badge === "Music NFT"
+                      ? "#90b4ff"
+                      : s.badge === "Sound Meme"
+                      ? "#9af2a1"
+                      : "#b8baff",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
                 }}
               >
-                <span
+                {s.badge}
+              </span>
+
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div
                   style={{
-                    fontSize: 11,
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    background:
-                      s.badge === "Music NFT"
-                        ? "#2b364c"
-                        : s.badge === "Sound Meme"
-                        ? "#2b3f2e"
-                        : "#2b2b3b",
-                    color:
-                      s.badge === "Music NFT"
-                        ? "#90b4ff"
-                        : s.badge === "Sound Meme"
-                        ? "#9af2a1"
-                        : "#b8baff",
+                    fontWeight: 700,
+                    fontSize: 14,
                     whiteSpace: "nowrap",
-                    flexShrink: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
                   }}
                 >
-                  {s.badge}
-                </span>
-
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div
-                    style={{
-                      fontWeight: 700,
-                      fontSize: 14,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {s.title}
-                  </div>
-                  {s.subtitle && (
-                    <div style={{ fontSize: 12, color: "#9aa0b6" }}>{s.subtitle}</div>
-                  )}
+                  {s.title}
                 </div>
+                {s.subtitle && (
+                  <div style={{ fontSize: 12, color: "#9aa0b6" }}>{s.subtitle}</div>
+                )}
+              </div>
 
-                <ChevronRight size={16} style={{ opacity: 0.6 }} />
-              </a>
-            </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+              <ChevronRight size={16} style={{ opacity: 0.6 }} />
+            </a>
+          </Link>
+        ))}
+      </div>
+    )}
+  </div>
+);
+
 
   return (
     <header style={headerContainer}>
+      {/* global fixes */}
+  <style jsx global>{`
+    html, body { overflow-x: hidden; }
+    @supports (padding: max(0px)) {
+      .safe-top { padding-top: env(safe-area-inset-top); }
+    }
+  `}</style>
       {/* small CSS just to hide/show chunks responsively */}
+
       <style jsx>{`
-        .hide-on-mobile { display: flex; }
-        .show-on-mobile { display: none; }
-        @media (max-width: 860px) {
-          .hide-on-mobile { display: none !important; }
-          .show-on-mobile { display: flex !important; }
-        }
-      `}</style>
+  .hide-on-mobile { display: flex; }
+  .show-on-mobile { display: none; }
+  @media (max-width: 860px) {
+    .hide-on-mobile { display: none !important; }
+    .show-on-mobile { display: inline-flex !important; } /* <- inline-flex is safer here */
+  }
+  .menu-btn svg { display: block; }
+`}</style>
+
+
 
       <div style={contentWrapper}>
         {/* Left: Logo, Search, Nav */}
         <div style={leftSection}>
-          {/* MOBILE: hamburger */}
-         <button
-  className="show-on-mobile"
-  aria-label="Open menu"
-  aria-controls="mobile-drawer"
-  aria-expanded={mobileOpen}
-  onClick={() => setMobileOpen(true)}
-  style={{
-    alignItems: "center",
-    justifyContent: "center",
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    border: "1px solid #232332",
-    background: "#181929",
-    color: "#e6e6ff",
-    cursor: "pointer",
-  }}
->
-  {/* primary icon */}
-  <Menu size={22} strokeWidth={2.2} />
+          
 
-  {/* guaranteed fallback (3 bars) */}
-  <svg width="0" height="0" aria-hidden="true" focusable="false">
-    <rect width="0" height="0" />
-  </svg>
-</button>
+
+
+          {mounted && (
+  <button
+    type="button"
+    className="show-on-mobile menu-btn"
+    aria-label="Open menu"
+    aria-controls="mobile-drawer"
+    aria-expanded={mobileOpen}
+    onClick={() => setMobileOpen(true)}
+    style={{
+      position: "relative",
+      zIndex: 120,
+      alignItems: "center",
+      justifyContent: "center",
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      border: "1px solid #232332",
+      background: "#181929",
+      color: "#e6e6ff",
+      cursor: "pointer",
+    }}
+  >
+    <svg
+  aria-hidden="true"
+  width="20"
+  height="20"
+  viewBox="0 0 24 24"
+  style={{ display: "block" }}
+>
+  <path
+    d="M3 6h18M3 12h18M3 18h18"
+    stroke="#e6e6ff"
+    strokeWidth="2"
+    strokeLinecap="round"
+    fill="none"
+  />
+</svg>
+
+  </button>
+)}
+
 
 
           {/* Logo */}
           <img
-            src="https://i.postimg.cc/hPSvz1KS/Woo-logo1.png"
-            alt="Woodeng logo"
-            style={{ height: 24, width: "auto", flexShrink: 0 }}
-          />
+  src="https://i.postimg.cc/hPSvz1KS/Woo-logo1.png"
+  alt="" aria-hidden="true" draggable={false}
+  style={{ height: 24, width: "auto", flexShrink: 0 }}
+/>
+
 
           {/* Desktop search */}
           <div className="hide-on-mobile" style={{ flex: "1 1 auto" }}>
@@ -528,7 +615,10 @@ export default function Header() {
         </div>
 
         {/* Right: Create, WOODENG, Profile, Wallet (hidden on mobile) */}
-        <div className="hide-on-mobile" style={{ display: "flex", alignItems: "center", gap: 18, flexShrink: 0 }}>
+        <div
+  className="hide-on-mobile"
+  style={{ display: "flex", alignItems: "center", gap: 18, flexShrink: 0, marginLeft: "auto" }} // <- add marginLeft
+>
           <Link href="/create" legacyBehavior>
             <a style={createButtonStyle}>+ Create</a>
           </Link>
@@ -588,63 +678,128 @@ export default function Header() {
         </div>
       </div>
 
-      {/* MOBILE: slide-in drawer */}
-      <div
-        aria-hidden={!mobileOpen}
-        onClick={() => setMobileOpen(false)}
-        style={{
-          position: "fixed",
-          inset: 0,
-          background: mobileOpen ? "rgba(0,0,0,0.6)" : "transparent",
-          transition: "background .18s ease",
-          pointerEvents: mobileOpen ? "auto" : "none",
-          zIndex: 40,
-        }}
-        className="show-on-mobile"
-      >
-        {/* Panel */}
-        <aside
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            height: "100%",
-            width: "min(86vw, 420px)",
-            background: "#0b0c14",
-            borderLeft: "1px solid #1a1a22",
-            transform: `translateX(${mobileOpen ? "0%" : "100%"})`,
-            transition: "transform .22s ease",
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-            padding: "14px 14px 18px",
-          }}
-        >
-          {/* header row in drawer */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <img
-                src="https://i.postimg.cc/hPSvz1KS/Woo-logo1.png"
-                alt="Woodeng logo"
-                style={{ height: 22, width: "auto" }}
-              />
-            </div>
-            <button
-              onClick={() => setMobileOpen(false)}
-              aria-label="Close menu"
-              style={{
-                width: 40, height: 40,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                borderRadius: 12, border: "1px solid #232332", background: "#181929", color: "#e6e6ff",
-              }}
-            >
-              <X size={18} />
-            </button>
-          </div>
+
+
+
+
+      
+<div
+  aria-hidden={!mobileOpen}
+  onClick={() => setMobileOpen(false)}
+  className="show-on-mobile"
+  style={{
+    position: "fixed",
+    inset: 0,
+    background: mobileOpen ? "rgba(0,0,0,0.6)" : "transparent",
+    transition: "background .18s ease",
+    pointerEvents: mobileOpen ? "auto" : "none",
+    zIndex: 50,                   // overlay above header
+    overscrollBehaviorY: "contain",
+  }}
+>
+
+
+<aside
+  id="mobile-drawer"
+  onClick={(e) => e.stopPropagation()}
+  style={{
+    position: "absolute",
+    top: 0,
+    left: 0,
+    height: "100dvh",
+    width: "min(calc(100vw - 16px), 420px)",  // never wider than screen
+    boxSizing: "border-box",
+    background: "#0b0c14",
+    borderRight: "1px solid #1a1a22",
+    transform: `translate3d(${mobileOpen ? "0%" : "-100%"}, 0, 0)`, // GPU
+    transition: "transform .22s ease",
+    willChange: "transform",
+    contain: "layout paint size",
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+    padding: "14px 14px 18px",
+  }}
+>
+
+
+{/* drawer top bar (sticky) */}
+<div
+  style={{
+    position: "sticky",
+    top: 0,
+    zIndex: 2,
+    background: "#0b0c14",
+    paddingBottom: 10,
+    marginBottom: 8,
+    borderBottom: "1px solid #1a1a22",
+  }}
+>
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+    <img src="/woodeng-logo.png" alt="" aria-hidden="true" draggable={false}
+     style={{ height: 22, width: "auto", display: "block" }} />
+
+    <button
+      onClick={() => setMobileOpen(false)}
+      aria-label="Close menu"
+      style={{
+        height: 40, width: 40, display: "flex", alignItems: "center", justifyContent: "center",
+        borderRadius: 12, border: "1px solid #232332", background: "#181929", color: "#e6e6ff",
+      }}
+    >
+      <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" style={{ display: "block" }}>
+  <path d="M5 5L19 19M19 5L5 19" stroke="#ffffff" strokeWidth="2.6" strokeLinecap="round" fill="none" />
+</svg>
+
+    </button>
+  </div>
+</div>
+
+
+
+
+{/* actions row ABOVE search */}
+<div style={{ display: "flex", gap: 10, margin: "8px 0 6px" }}>
+  <Link href="/profile" legacyBehavior>
+    <a
+      onClick={() => setMobileOpen(false)}
+      aria-label="Your profile"
+      style={{
+        height: 44,
+        width: 44,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 12,
+        background: "#181929",
+        color: "#e6e6ff",
+        border: "1px solid #232332",
+        flex: "0 0 44px",
+      }}
+    >
+      <UserIcon size={18} />
+    </a>
+  </Link>
+
+  <WalletMultiButton
+    style={{
+      flex: 1,
+      borderRadius: 12,
+      background: "#a088fa",
+      color: "#fff",
+      padding: "10px 16px",
+      fontWeight: 700,
+      fontSize: "15px",
+      lineHeight: 1,
+    }}
+  />
+</div>
+
+
 
           {/* search (compact) */}
-          <SearchBox compact />
+<SearchBox compact inputRef={searchRefMobile} />
+
 
           {/* section shortcuts (use hashes; add matching ids on target page) */}
           {isOnSoundMemes && (
@@ -745,42 +900,6 @@ export default function Header() {
             >
               <Waves size={18} style={{ color: "#a088fa" }} />
               {woodengBalance} WOODENG
-            </div>
-
-            <div style={{ display: "flex", gap: 10 }}>
-              <Link href="/profile" legacyBehavior>
-                <a
-                  onClick={() => setMobileOpen(false)}
-                  title="Your profile"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    height: 44,
-                    flex: "0 0 44px",
-                    borderRadius: 12,
-                    background: "#181929",
-                    color: "#e6e6ff",
-                    border: "1px solid #232332",
-                  }}
-                >
-                  <UserIcon size={18} />
-                </a>
-              </Link>
-
-              <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
-                <WalletMultiButton
-                  style={{
-                    borderRadius: 12,
-                    background: "#a088fa",
-                    color: "#fff",
-                    padding: "10px 16px",
-                    fontWeight: 700,
-                    fontSize: "15px",
-                    width: "100%",
-                  }}
-                />
-              </div>
             </div>
           </div>
         </aside>

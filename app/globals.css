@@ -218,5 +218,27 @@ a:hover, .link:hover {
   50% { opacity: 0.42; }
 }
 
+[id] { scroll-margin-top: 80px; } /* keeps sticky header from covering the section */
+
+
+:root {
+  /* match your header minHeight (64) */
+  --header-h: 64px;
+}
+
+/* body already has className="safe-top" in layout */
+.safe-top {
+  /* add space for the header AND iOS safe area */
+  padding-top: calc(var(--header-h) + env(safe-area-inset-top));
+}
+
+/* small fallback for browsers without env() support */
+@supports not (padding: max(0px)) {
+  .safe-top { padding-top: var(--header-h); }
+}
+
+/* helpful global */
+html, body { overflow-x: hidden; }
+
 
 
