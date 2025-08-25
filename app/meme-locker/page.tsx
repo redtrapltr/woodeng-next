@@ -827,7 +827,6 @@ if (isAmm) {
       await sendIxsOnce(connection, wallet, ixsPhase1, signersPhase1);
       closeSteps();
 
-      closeSteps();
 
 // BONDING: Phase-2 = metadata + creator MEME ATA + WOODENG ATA + founder buy
 if (isBonding) {
@@ -862,7 +861,8 @@ if (isAmm && addLiqIxPhase2) {
   // Ensure user's LP ATA
   phase2Ixs.push(userLpAtaIx);
 
-  // Ensure/fund quote side
+ 
+    // Ensure/fund quote side (robust for fresh wallets)
   if (quoteToken === 'SOL') {
     const lamportsNeeded = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
     if (lamportsNeeded > 0) {
@@ -870,12 +870,15 @@ if (isAmm && addLiqIxPhase2) {
       userWoodAta = w2.ata;
       phase2Ixs.push(...w2.ixs);
     }
-  } else if (userWoodAtaIx) {
-    phase2Ixs.push(userWoodAtaIx);
+  } else {
+    // WOODENG: always ensure the user's ATA (idempotent)
+    const res = await ensureAtaIx(wallet.publicKey!, QUOTE_MINT, wallet.publicKey!, false);
+    userWoodAta = res.ata;
+    phase2Ixs.push(res.ix);
   }
 
-  // Finally add liquidity
-  phase2Ixs.push(addLiqIxPhase2);
+    phase2Ixs.push(addLiqIxPhase2);
+
 
   showStep(2, 2, "Step 2/2: Seed initial liquidity", `Deposit ${initialMemeLiquidity} ${memeSymbol} + ${initialQuoteLiquidity} ${quoteLabel}`);
   await sendIxsOnce(connection, wallet, phase2Ixs);
@@ -1022,7 +1025,7 @@ if (isAmm) {
   // Ensure user's LP ATA
   phase2IxsSplit.push(userLpAtaIx);
 
-  // Ensure/fund quote side
+    // Ensure/fund quote side (robust for fresh wallets)
   if (quoteToken === 'SOL') {
     const lamportsNeeded2 = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
     if (lamportsNeeded2 > 0) {
@@ -1030,9 +1033,13 @@ if (isAmm) {
       userWoodAta = w2.ata;
       phase2IxsSplit.push(...w2.ixs);
     }
-  } else if (userWoodAtaIx) {
-    phase2IxsSplit.push(userWoodAtaIx);
+  } else {
+    // WOODENG: always ensure the user's ATA (idempotent)
+    const res2 = await ensureAtaIx(wallet.publicKey!, QUOTE_MINT, wallet.publicKey!, false);
+    userWoodAta = res2.ata;
+    phase2IxsSplit.push(res2.ix);
   }
+
 
   // Add liquidity
   phase2IxsSplit.push(addLiqIx2);
