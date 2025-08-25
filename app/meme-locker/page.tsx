@@ -692,22 +692,22 @@ if (quoteToken === 'SOL') {
 
 
 
-    // PHASE 1: create everything (+ seed meme + metadata).
+// ALWAYS write metadata before init (AMM and Bonding)
 const ixsPhase1: TransactionInstruction[] = [
   ...computeIxs,
   ...memeMintBuild.ixs,
   ...lpMintBuild.ixs,
   lpFeeVaultIx,
-  // (bonding) creatorMemeAtaIx + mdIx go to Phase-2
+  mdIx,                       // ← metadata BEFORE init
 ];
 
-// AMM keeps these in Phase-1, bonding defers them
+// AMM needs creator’s MEME ATA in Phase-1; Bonding can defer it
 if (isAmm) {
-  ixsPhase1.push(creatorMemeAtaIx, mdIx);
+  ixsPhase1.push(creatorMemeAtaIx);
 } else {
-  creatorMemeAtaIxPhase2 = creatorMemeAtaIx;
-  mdIxPhase2 = mdIx;
+  creatorMemeAtaIxPhase2 = creatorMemeAtaIx; // keep for later if you want
 }
+
 
 
 const signersPhase1 = [...memeMintBuild.signers, ...lpMintBuild.signers];
@@ -896,19 +896,21 @@ return;
       }
     }
 
-   let ixsP1: TransactionInstruction[] = [
+  // In the split path, also ensure metadata happens before init
+let ixsP1: TransactionInstruction[] = [
   ...computeIxs,
   ...memeMintBuild.ixs,
   ...lpMintBuild.ixs,
   lpFeeVaultIx,
+  mdIx,                       // ← metadata BEFORE init here too
 ];
 
 if (isAmm) {
-  ixsP1.push(creatorMemeAtaIx, mdIx);
+  ixsP1.push(creatorMemeAtaIx);
 } else {
   creatorMemeAtaIxPhase2 = creatorMemeAtaIx;
-  mdIxPhase2 = mdIx;
 }
+
 
 
 if (isAmm) {
