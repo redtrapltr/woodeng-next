@@ -17,8 +17,8 @@ export default function Whitepaper() {
   /* ─── any helper fns you need ─── */
   const copyToClipboard = (txt: string) => navigator.clipboard.writeText(txt);
 
-  /* ─── the entire design you pasted lives INSIDE this return ─── */
-  return (<div className="max-w-7xl mx-auto px-4 py-12 space-y-16">
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-12 space-y-16">
       {/* Header */}
       <div className="text-center space-y-6">
         <div className="inline-flex p-4 rounded-full bg-primary/10 mb-4">
@@ -43,6 +43,7 @@ export default function Whitepaper() {
             "Market Analysis",
             "Woodeng Native Token",
             "Economic Model",
+            "Staking",
             "Roadmap"
           ].map((item, index) => (
             <li key={index}>
@@ -704,160 +705,255 @@ export default function Whitepaper() {
         </div>
       </section>
 
-      {/* Market Analysis */}
-      <section id="section-6" className="space-y-6">
-        <h2 className="text-3xl font-bold">6. Market Analysis</h2>
-        <div className="bg-card border border-border rounded-lg p-6">
-          <div className="space-y-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div>
-                <h3 className="text-xl font-semibold mb-4">Market Opportunity</h3>
-                <div className="space-y-4">
-                  {[
-                    {
-                      metric: "$22.5B",
-                      label: "Global NFT Market",
-                      growth: "+127% YoY"
-                    },
-                    {
-                      metric: "$5.2B",
-                      label: "Music NFT Segment",
-                      growth: "+215% YoY"
-                    },
-                    {
-                      metric: "2.8M",
-                      label: "Active Collectors",
-                      growth: "+85% YoY"
-                    }
-                  ].map((stat, index) => (
-                    <div key={index} className="bg-muted/50 p-4 rounded-lg">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-2xl font-bold text-primary">{stat.metric}</span>
-                        <span className="text-sm text-green-500">{stat.growth}</span>
-                      </div>
-                      <p className="text-sm text-muted-foreground">{stat.label}</p>
-                    </div>
-                  ))}
+ {/* === Enhanced Market Analysis (no competitor table) === */}
+<section id="section-6" className="space-y-6">
+  <h2 className="text-3xl font-bold">6. Market Analysis</h2>
+
+  <div className="bg-card border border-border rounded-lg p-6">
+    <div className="space-y-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {/* Market Opportunity */}
+        <div>
+          <h3 className="text-xl font-semibold mb-4">Market Opportunity</h3>
+          <div className="space-y-4">
+            {[
+              { 
+                metric: "USD 47.7B", 
+                label: "Global NFT Market (2025)", 
+                growth: ["+34% YoY (2024 → 2025)", "CAGR 2025 → 2034: 34.5%"]
+              },  
+              { 
+                metric: "USD 3.72B", 
+                label: "Global Music NFT Market (2025)", 
+                growth: ["+29% YoY (2024 → 2025)", "CAGR 2025 → 2034: 28.8%"]
+              }, 
+              { 
+                metric: "USD 1.42B", 
+                label: "Royalty-Free Music NFT (2024)", 
+                growth: ["+21.5% YoY (2024 → 2025)"]
+              },
+              { 
+                metric: "USD 85B", 
+                label: "Memecoin Market (2025)", 
+                growth: ["+44% YoY (2024 → 2025)"]
+              }  
+            ].map((stat, index) => (
+              <div key={index} className="bg-muted/50 p-4 rounded-lg">
+                <div className="flex items-start justify-between mb-2">
+                  <span className="text-2xl font-bold text-primary">{stat.metric}</span>
+                  <div className="flex flex-col text-right">
+                    {Array.isArray(stat.growth) ? (
+                      stat.growth.map((line, i) => (
+                        <span key={i} className="text-sm text-green-500">{line}</span>
+                      ))
+                    ) : (
+                      <span className="text-sm text-green-500">{stat.growth}</span>
+                    )}
+                  </div>
+                </div>
+                <p className="text-sm text-muted-foreground">{stat.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Industry Challenges */}
+        <div>
+          <h3 className="text-xl font-semibold mb-4">Industry Insights</h3>
+          <div className="grid grid-cols-1 gap-4">
+            {[
+              {
+                pain: "Artist Compensation",
+                solution: "Direct monetization & instant on-chain payouts",
+                explain: "Optimize value capture for creators without intermediaries (automatic splits).",
+              },
+              {
+                pain: "Ownership Transparency",
+                solution: "On-chain provenance & verifiable rights",
+                explain: "Standardize metadata and proofs of origin to reduce rights disputes.",
+              },
+              {
+              pain: "Fan Engagement",
+              solution: "Token-gated access & collectible utilities",
+              explain: "Exclusive access, perks, and gamified retention loops.",
+              },
+              {
+              pain: "Technical Barriers",
+              solution: "Frictionless UX on Solana (low fees, fast finality)",
+              explain: "One-click flows (mint/list/buy), mobile-ready, with minimized costs.",
+              },
+            ].map((it, i) => (
+              <div
+                key={i}
+                className="bg-muted/50 p-4 rounded-lg border border-border hover:border-primary/40 transition"
+              >
+                <div className="flex items-start gap-2 mb-2">
+                  <AlertCircle className="w-4 h-4 text-primary mt-0.5" />
+                  <div>
+                    <h4 className="font-medium">{it.pain}</h4>
+                    <p className="text-xs text-muted-foreground">{it.explain}</p>
+                  </div>
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-sm">
+                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                  <p className="font-medium">{it.solution}</p>
                 </div>
               </div>
-              
-              <div>
-                <h3 className="text-xl font-semibold mb-4">Industry Challenges</h3>
-                <div className="space-y-4">
-                  {[
-                    {
-                      challenge: "Artist Compensation",
-                      solution: "Direct monetization and fair royalty distribution"
-                    },
-                    {
-                      challenge: "Ownership Transparency",
-                      solution: "Blockchain-verified ownership and provenance"
-                    },
-                    {
-                      challenge: "Fan Engagement",
-                      solution: "Direct artist-fan relationships and exclusive content"
-                    },
-                    {
-                      challenge: "Technical Barriers",
-                      solution: "User-friendly platform with low entry barriers"
-                    }
-                  ].map((item, index) => (
-                    <div key={index} className="bg-muted/50 p-4 rounded-lg">
-                      <div className="flex items-center gap-2 mb-1">
-                        <AlertCircle className="w-4 h-4 text-primary" />
-                        <h4 className="font-medium">{item.challenge}</h4>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <CheckCircle2 className="w-4 h-4 text-green-500" />
-                        <p>{item.solution}</p>
-                      </div>
-                    </div>
-                  ))}
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Ecosystem Snapshot */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Segments distribution */}
+        <div className="bg-muted/30 border border-border rounded-lg p-5">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xl font-semibold">Ecosystem Snapshot — Segments</h3>
+          </div>
+          <ul className="space-y-3">
+            {[
+              { name: "Gaming NFTs", value: 38 },
+              { name: "Art & Collectibles", value: 27 },
+              { name: "Music NFTs", value: 12 },
+              { name: "Memecoins (NFT-adjacent culture)", value: 15 },
+              { name: "Other (Loyalty, Tickets, IP)", value: 8 }
+            ].map((row, i) => (
+              <li key={i}>
+                <div className="flex justify-between text-sm mb-1">
+                  <span>{row.name}</span>
+                  <span className="text-muted-foreground">{row.value}%</span>
+                </div>
+                <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-2 bg-primary/80 rounded-full transition-all duration-500"
+                    style={{ width: `${row.value}%` }}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>      
+        </div>
+
+        {/* Chains distribution */}
+        <div className="bg-muted/30 border border-border rounded-lg p-5">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xl font-semibold">Ecosystem Snapshot — Chains</h3>
+          </div>
+          <ul className="space-y-3">
+            {[
+              { name: "Ethereum", value: 62, note: "Deep liquidity" },
+              { name: "Solana", value: 26, note: "Low fees / speed" },
+              { name: "Others (Polygon, BNB, etc.)", value: 12, note: "Scaling / niches" }
+            ].map((row, i) => (
+              <li key={i}>
+                <div className="flex justify-between text-sm mb-1">
+                  <span>{row.name}</span>
+                  <span className="text-muted-foreground">{row.value}%</span>
+                </div>
+                <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-2 bg-primary/80 rounded-full transition-all duration-500"
+                    style={{ width: `${row.value}%` }}
+                  />
+                </div>
+                <div className="text-[11px] text-muted-foreground mt-1">{row.note}</div>
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap gap-2 mt-3">
+            <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">Low fees: Solana</span>
+            <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">Deep liquidity: Ethereum</span>
+            <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">Scaling: L2 & sidechains</span>
+          </div>
+        </div>
+
+        {/* Adoption signals */}
+        <div className="bg-muted/30 border border-border rounded-lg p-5">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xl font-semibold">Adoption & Market Signals</h3>
+          </div>
+
+          <div className="space-y-3">
+            {[
+              { kpi: "Active collectors (est.)", value: "2.8M", trend: "YoY +" },
+              { kpi: "Monthly unique buyers (est.)", value: "1.2M", trend: "YoY +" },
+              { kpi: "Primary sales share", value: "≈ 40%", trend: "stable" },
+              { kpi: "Secondary sales share", value: "≈ 60%", trend: "↑ liquidity" }
+            ].map((k, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between bg-background/60 rounded-md px-3 py-2 hover:bg-background transition"
+              >
+                <div className="text-sm">{k.kpi}</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-primary">{k.value}</span>
+                  <span className="text-xs text-green-500">{k.trend}</span>
                 </div>
               </div>
+            ))}
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs text-muted-foreground">Creator revenue outlook</p>
+              <p className="text-lg font-semibold">↑ Sustainable</p>
             </div>
-            
-            <div>
-              <h3 className="text-xl font-semibold mb-4">Competitive Landscape</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b border-border">
-                      <th className="py-3 px-4 text-left">Feature</th>
-                      <th className="py-3 px-4 text-center">Woo</th>
-                      <th className="py-3 px-4 text-center">Sound.xyz</th>
-                      <th className="py-3 px-4 text-center">PumpFun</th>
-                      <th className="py-3 px-4 text-center">Audius</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      {   
-                        feature: "Zero Deployment costs",
-                        woo: true,
-                        compA: false,
-                        compB: true,
-                        compC: false
-                      },
-                      {
-                        feature: "Music NFTs",
-                        woo: true,
-                        compA: true,
-                        compB: false,
-                        compC: false
-                      },
-                      {
-                        feature: "Sound Memes",
-                        woo: true,
-                        compA: false,
-                        compB: false,
-                        compC: false
-                      },
-                      {
-                        feature: "Tokenized Ownership",
-                        woo: true,
-                        compA: false,
-                        compB: false,
-                        compC: false
-                      },
-                      {
-                        feature: "Automated Royalties",
-                        woo: true,
-                        compA: true,
-                        compB: true,
-                        compC: true
-                      },
-                      {
-                        feature: "Low Transaction Fees",
-                        woo: true,
-                        compA: false,
-                        compB: true,
-                        compC: true
-                      }
-                    ].map((row, index) => (
-                      <tr key={index} className="border-b border-border">
-                        <td className="py-3 px-4">{row.feature}</td>
-                        <td className="py-3 px-4 text-center">
-                          {row.woo ? <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" /> : <X className="w-5 h-5 text-red-500 mx-auto" />}
-                        </td>
-                        <td className="py-3 px-4 text-center">
-                          {row.compA ? <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" /> : <X className="w-5 h-5 text-red-500 mx-auto" />}
-                        </td>
-                        <td className="py-3 px-4 text-center">
-                          {row.compB ? <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" /> : <X className="w-5 h-5 text-red-500 mx-auto" />}
-                        </td>
-                        <td className="py-3 px-4 text-center">
-                          {row.compC ? <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" /> : <X className="w-5 h-5 text-red-500 mx-auto" />}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs text-muted-foreground">Regulatory trajectory</p>
+              <p className="text-lg font-semibold">↔ Fragmented</p>
             </div>
           </div>
         </div>
-      </section>
+      </div>
+
+      {/* Go-to-Market Signals */}
+      <div className="bg-muted/20 border border-border rounded-lg p-5">
+        <h3 className="text-xl font-semibold mb-4">Go-to-Market Signals</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {[
+            {
+              title: "Creator-first Economics",
+              bullets: [
+                "Automated on-chain royalty routing",
+                "Zero deployment costs for artists",
+                "Transparent splits & payouts"
+              ]
+            },
+            {
+              title: "Frictionless UX",
+              bullets: [
+                "One-click mint & list",
+                "Mobile-ready flows",
+                "Low fees (Solana) and fast settlement"
+              ]
+            },
+            {
+              title: "Community Flywheel",
+              bullets: [
+                "Token-gated access & perks",
+                "Collect-to-earn engagement loops",
+                "Curated drops & contests"
+              ]
+            }
+          ].map((col, i) => (
+            <div
+              key={i}
+              className="rounded-lg bg-background/70 border border-border p-4 hover:shadow-md hover:border-primary/40 transition"
+            >
+              <h4 className="font-medium mb-2">{col.title}</h4>
+              <ul className="text-sm space-y-1 list-disc list-inside text-muted-foreground">
+                {col.bullets.map((b, j) => (<li key={j}>{b}</li>))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
 
       {/* Woodeng Native Token */}
       <section id="section-7" className="space-y-6 w-full">
@@ -1019,19 +1115,13 @@ export default function Whitepaper() {
                     <div className="p-2 bg-primary/10 rounded-lg">
                       <Rocket className="w-5 h-5 text-primary" />
                     </div>
-                    <h4 className="font-semibold">Development Wallets (18%)</h4>
+                    <h4 className="font-semibold">Development Wallet (18%)</h4>
                   </div>
                   <div className="space-y-3">
                     <div className="bg-muted/50 p-3 rounded-lg">
                       <p className="font-mono text-xs break-all">
-                        <span className="block mb-2 text-sm font-medium text-primary">Wallet 1:</span>
-                        <span className="block overflow-x-auto whitespace-nowrap">D7CxjW737TjNbigtVUTovq7wGMvThf1AJKu6bd7VKAk</span>
-                      </p>
-                    </div>
-                    <div className="bg-muted/50 p-3 rounded-lg">
-                      <p className="font-mono text-xs break-all">
-                        <span className="block mb-2 text-sm font-medium text-primary">Wallet 2:</span>
-                        <span className="block overflow-x-auto whitespace-nowrap">J65nfjoufAqVKysRd8SLkc18AbF1TGDCqNodUVSpuGBw</span>
+                        <span className="block mb-2 text-sm font-medium text-primary">Multisig Wallet:</span>
+                        <span className="block overflow-x-auto whitespace-nowrap">2SUKCvy2HU4j7238UCQoANSgGf5y5k6f6ryv9vdTe3gh</span>
                       </p>
                     </div>
                   </div>
@@ -1344,6 +1434,10 @@ export default function Whitepaper() {
                         <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
                         <span>WOODENG or SOL pairing options with permanently locked liquidity</span>
                       </div>
+                       <div className="flex items-center gap-2 text-sm">
+                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
+                        <span>The creator may make the first purchase up to a maximum of 1% of the total supply.</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1547,9 +1641,164 @@ export default function Whitepaper() {
         </div>
       </section>
 
-      {/* Future Roadmap */}
+      {/* Staking */}
       <section id="section-9" className="space-y-6 w-full">
-        <h2 className="text-3xl font-bold">9. Roadmap</h2>
+        <h2 className="text-3xl font-bold">9. Staking</h2>
+        
+        <div className="space-y-6">
+          <p className="text-muted-foreground">
+            The Woodeng staking mechanism provides WOODENG token holders with passive income opportunities 
+            while contributing to platform stability and growth. Our staking system is designed to reward 
+            long-term commitment while maintaining flexibility for users.
+          </p>
+
+          <div className="bg-card border border-border rounded-lg p-6">
+            <h3 className="text-xl font-semibold mb-4">Staking Mechanism</h3>
+            <div className="space-y-4">
+              <div className="grid md:grid-cols-2 gap-6">
+                <div>
+                  <h4 className="font-medium mb-2">Staking</h4>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li>• Lock period : 3 months / 6 months or 1 year</li>
+                    <li>• Yield bonus based on the duration of the lock-in period</li>
+                    <li>• WOODENG & SOL rewards</li>
+                    <li>• Claiming rewards available</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4 className="font-medium mb-2">Flexible Staking</h4>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li>• 30-day minimum staking period for rewards</li>
+                    <li>• 10% penalty on early withdrawal</li>
+                    <li>• Stake and unstake at any time</li>
+                    <li>• WOODENG & SOL rewards</li>
+                    <li>• Claiming rewards available</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-lg p-6">
+            <h3 className="text-xl font-semibold mb-4">Yield Bonus (platform performance)</h3>
+            <div className="grid md:grid-cols-3 gap-6">
+              <div>
+                <h4 className="font-medium mb-2">Lock : 3 months</h4>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li>Up to 30%</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="font-medium mb-2">Lock : 6 months</h4>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li>Up to 80%</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="font-medium mb-2">Lock : 1 year</h4>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li>Up to 200%</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-lg p-6">
+            <h3 className="text-xl font-semibold mb-4">Reward Sources</h3>
+            <div className="space-y-4">
+              <p className="text-muted-foreground">
+                Staking rewards are funded by multiple revenue streams from platform activity:
+              </p>
+              <div className="grid md:grid-cols-2 gap-6">
+                <div>
+                  <h4 className="font-medium mb-2">Music NFT Revenue</h4>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li>• 20% from primary sales</li>
+                    <li>• 20% from secondary royalties</li>
+                    <li>• AMM trading fees</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4 className="font-medium mb-2">Sound Meme Revenue</h4>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li>• 0.1% from liquidity pool transactions</li>
+                    <li>• 1% from bonding curve (pre-migration)</li>
+                    <li>• 0.1% from bonding curve (post-migration)</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-lg p-6">
+            <h3 className="text-xl font-semibold mb-4">Reward Distribution</h3>
+            <div className="space-y-4">
+              <p className="text-muted-foreground">
+                Rewards are distributed proportionally based on staking participation and platform activity:
+              </p>
+              <div className="bg-muted/50 p-4 rounded-lg">
+                <h4 className="font-medium mb-2">Distribution Formula</h4>
+                <div className="font-mono text-sm bg-background p-3 rounded border">
+                  • Staking : User Reward = ((User Stake / Total Staked) × Pool Rewards × Time Factor) + Yield bonus)   
+                </div>
+                <div className="font-mono text-sm bg-background p-3 rounded border">
+                  • Flexible Staking : User Reward = (User Stake / Total Staked) × Pool Rewards × Time Factor
+                  </div>
+              </div>
+              <div className="grid md:grid-cols-2 gap-6">
+                <div>
+                  <h4 className="font-medium mb-2">WOODENG Rewards</h4>
+                  <p className="text-sm text-muted-foreground">
+                    Distributed based on WOODENG pool activity and platform fees collected in WOODENG tokens.
+                  </p>
+                </div>
+                <div>
+                  <h4 className="font-medium mb-2">SOL Rewards</h4>
+                  <p className="text-sm text-muted-foreground">
+                    Distributed based on SOL pool activity and platform fees collected in SOL tokens.
+                  </p>
+                </div> 
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-lg p-6">
+            <h3 className="text-xl font-semibold mb-4">Economic Benefits</h3>
+            <div className="grid md:grid-cols-3 gap-6">
+              <div>
+                <h4 className="font-medium mb-2">For Token Holders</h4>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li>• Passive income generation</li>
+                  <li>• Platform governance participation</li>
+                  <li>• Reduced token circulation</li>
+                  <li>• Long-term value appreciation</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="font-medium mb-2">For the Platform</h4>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li>• Increased token utility</li>
+                  <li>• Enhanced ecosystem stability</li>
+                  <li>• Community engagement</li>
+                  <li>• Sustainable tokenomics</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="font-medium mb-2">For Creators</h4>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li>• Stable platform ecosystem</li>
+                  <li>• Increased token demand</li>
+                  <li>• Community support</li>
+                  <li>• Long-term sustainability</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      {/* Future Roadmap */}
+      <section id="section-10" className="space-y-6 w-full">
+        <h2 className="text-3xl font-bold">10. Roadmap</h2>
         
         {/* Development Milestones / Current Roadmap */}
       <section id="section-7-milestones" className="space-y-6 w-full">
@@ -1608,6 +1857,39 @@ export default function Whitepaper() {
                   "NFT Airdrop Campaign",
                   "Marketing Campaign"
                 ]
+              },
+              {
+                milestone: "Q4 2025: Expansion",
+                description: "Woodeng Ecosystem Exposure",
+                items: [
+                  "Core platform expansion",
+                  "Artist verification system",
+                  "Multi Cryptocurrencies support",
+                  "First major artist & creator partnerships"
+                ]
+              },
+              {
+                milestone: "2026: Ecosystem Growth",
+                description: "Ecosystem Growth",
+                items: [
+                  "Developer API and SDK",
+                  "Mobile application development",
+                  "Revenue Dashboard Release",
+                  "Advanced royalty distribution",
+                  "Enhanced analytics dashboard",
+                  "Investment coverage integration"
+                ]
+              },
+               {
+                milestone: "2027: Industry Integration",
+                description: "Mass Evolution",
+                items: [
+                  "Major label partnerships",
+                  "Cross-chain integration",
+                  "Live event integration",
+                  "Metaverse presence",
+                  "Global expansion"
+                ]
               }
             ].map((item, index) => (
               <div key={index} className="bg-muted/50 p-6 rounded-lg">
@@ -1629,69 +1911,6 @@ export default function Whitepaper() {
           </div>
         </div>
       </section>
-        
-        <div className="bg-card border border-border rounded-lg p-6 w-full">
-          <div className="space-y-8">
-            <div className="relative">
-              <div className="absolute left-8 top-8 bottom-0 w-0.5 bg-border"></div>
-              <div className="space-y-12">
-                {[
-                  {
-                    year: "2025",
-                    title: "Platform Launch & Expansion",
-                    items: [
-                      "Core platform launch",
-                      "Artist verification system",
-                      "Multi Cryptocurrencies support",
-                      "First major artist & creator partnerships"
-                    ]
-                  },
-                  {
-                    year: "2026",
-                    title: "Ecosystem Growth",
-                    items: [
-                      "Developer API and SDK",
-                      "Mobile application development",
-                      "Revenue Dashboard Release",
-                      "Advanced royalty distribution",
-                      "Enhanced analytics dashboard"
-                    ]
-                  },
-                  {
-                    year: "2027",
-                    title: "Industry Integration",
-                    items: [
-                      "Major label partnerships",
-                      "Cross-chain integration",
-                      "Live event integration",
-                      "Metaverse presence",
-                      "Global expansion"
-                    ]
-                  }
-                ].map((phase, index) => (
-                  <div key={index} className="relative pl-16">
-                    <div className="absolute left-0 top-0 w-16 h-16 flex items-center justify-center">
-                      <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center z-10">
-                        <Rocket className="w-4 h-4 text-primary-foreground" />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-primary font-medium">{phase.year}</div>
-                      <h3 className="text-xl font-semibold mb-3">{phase.title}</h3>
-                      <ul className="space-y-2">
-                        {phase.items.map((item, i) => (
-                          <li key={i} className="flex items-center gap-2 text-muted-foreground">
-                            <ChevronRight className="w-4 h-4 text-primary" />
-                            <span>{item}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            
             <div className="bg-gradient-to-r from-primary/10 via-secondary/10 to-primary/10 rounded-lg p-6 mt-8">
               <div className="flex items-center gap-3 mb-4">
                 <Lightbulb className="w-6 h-6 text-primary" />
@@ -1704,9 +1923,8 @@ export default function Whitepaper() {
                Through continuous innovation and community-driven development, the Woo platform aims to become an alternative decentralised space where creators and users benefit equally.
               </p>
             </div>
-          </div>
-        </div>
       </section>
+    </section>
     </div>
   );
 }

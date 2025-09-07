@@ -5,321 +5,274 @@ import { ChevronDown, Search, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
-/* ──────────────────────────────────────────
-   TYPES
-────────────────────────────────────────── */
-type QA       = { q: string; a: string };
-type Category = { title: string; questions: QA[] };
-
-/* ──────────────────────────────────────────
-   FULL FAQ DATA  (unchanged wording)
-────────────────────────────────────────── */
-const faqCategories: Category[] = [
-  {
-    title: 'Getting Started',
-    questions: [
-      {
-        q: 'What is Woo?',
-        a:
-          'Woo is a decentralized platform that enables creators to create, sell, and distribute their music as NFTs and sound memes on the Solana blockchain. We provide tools for artists to monetize their work directly while giving fans new ways to support and connect with their favorite creators through blockchain technology and fair economics.',
-      },
-      {
-        q: 'How do I create an account?',
-        a:
-          "To create an account, you'll need a compatible crypto wallet (like Phantom). Click the 'Connect Wallet' button, and you're ready to start using Woo. The entire process takes less than a minute.",
-      },
-      {
-        q: 'What cryptocurrencies are supported?',
-        a:
-          'We use our native token Woodeng and Solana for all transactions on the platform. Woodeng is built on the Solana blockchain, providing fast and low-cost transactions for our users.',
-      },
-      {
-        q: 'What makes Woodeng different from other music platforms?',
-        a:
-          'Woodeng revolutionizes music distribution through blockchain technology, offering both Music NFTs and SPL404 Sound Memes. Our platform features automated market makers (AMM) for dynamic pricing, permanently locked liquidity, and a fair revenue distribution model that benefits creators, token holders, and the ecosystem.',
-      },
-    ],
-  },
-  {
-    title: 'Music NFTs',
-    questions: [
-      {
-        q: 'What is a music NFT?',
-        a:
-          'A music NFT is a unique digital asset that represents ownership of a piece of music on the blockchain. It can include the audio file, artwork, and exclusive perks defined by the artist. On Woo, music NFTs can be created with either fixed pricing and royalties or with automated market makers (AMM) for dynamic pricing.',
-      },
-      {
-        q: 'How do I create a music NFT?',
-        a:
-          "After connecting your wallet, go to the 'Create' section, select 'Music NFT', upload your audio file and artwork, set your pricing in Woodeng tokens or SOL, choose between royalties or AMM pool, and click 'Mint'. Your NFT will be created on the blockchain and listed on our marketplace. For AMM pools, you'll need to set an initial deposit to provide liquidity.",
-      },
-      {
-        q: 'What are the fees and revenue distribution for music NFTs?',
-        a:
-          'For music NFT sales without AMM, the revenue is distributed as follows: 80% goes to the Creator and 20% to Woodeng Holders. For secondary sales, creators can set royalties up to 15%, with 80% going to the original Creator and 20% to Woodeng Holders. For NFTs with AMM, there are no royalties, but creators benefit from price appreciation as NFTs are purchased from the pool.',
-      },
-      {
-        q: "What's the difference between NFTs with and without AMM?",
-        a:
-          'NFTs with AMM (Automated Market Maker) use dynamic pricing based on supply and demand, with no royalties. Instead, creators benefit from price appreciation as NFTs are purchased from the pool. NFTs without AMM use fixed pricing and can have royalties up to 15% on secondary sales. The choice between these options is made at minting time and cannot be changed later.',
-      },
-    ],
-  },
-  {
-    title: 'Sound Memes',
-    questions: [
-      {
-        q: 'What is a sound meme NFT?',
-        a:
-          'A sound meme NFT is a short, viral audio clip turned into a unique digital asset using the SPL404 standard on Solana. These can be funny sounds, catchy phrases, or memorable musical moments that can be collected and traded with tokenized ownership, allowing multiple people to own a piece of the same sound meme.',
-      },
-      {
-        q: 'How do I create a sound meme NFT?',
-        a:
-          "Choose 'Sound Meme' in the Create section, upload your audio clip (max 30 seconds), add a title and description, set your pricing in Woodeng tokens or Solana, choose between liquidity pool or bonding curve deployment, and mint. For liquidity pools, you'll need to make an initial deposit. For bonding curves, no initial deposit is required.",
-      },
-      {
-        q: 'What are tokens in sound memes?',
-        a:
-          'Tokens represent fractional ownership in a sound meme NFT. When you create a sound meme, you specify the total supply of tokens. These tokens can be bought and sold individually, allowing multiple people to own a piece of the same sound meme.',
-      },
-      {
-        q: 'What are the fees for sound memes?',
-        a:
-          'For sound meme transactions with liquidity pools, there is a 0.3% transaction fee, with 0.2% going to the Sound Meme Creator and 0.1% to Woodeng Holders. For bonding curves, there is a 1.5% fee pre-migration (1% to Woodeng Holders, 0.5% to Creator) and 0.3% post-migration (0.2% to Creator, 0.1% to Woodeng Holders).',
-      },
-      {
-        q: "What's the difference between liquidity pools and bonding curves for sound memes?",
-        a:
-          'Sound memes with liquidity pools require an initial deposit and have immediate trading in WOODENG or SOL with a 0.3% transaction fee. Bonding curves do not require initial liquidity; price automatically increases as tokens are purchased. They start with a 1.5% fee and drop to 0.3% after automatic migration to DEX at a $44 k market cap.',
-      },
-    ],
-  },
-  {
-    title: 'Rewards & Staking',
-    questions: [
-      {
-        q: 'How does the reward pool work?',
-        a:
-          'The reward pool is funded by multiple sources: 20% from Music NFT primary sales, 20% from Music NFT secondary royalties, 0.1% from Sound Meme liquidity transactions, 1% from Sound Meme bonding curve transactions (pre-migration), and 0.1% from Sound Meme bonding curve transactions (post-migration). This pool is distributed to users who participate in our staking program.',
-      },
-      {
-        q: 'How does staking work?',
-        a:
-          'You can stake your Woodeng tokens to earn rewards from platform activity. There is no mandatory lock period, but you must wait 30 days before claiming rewards in WOODENG or SOL.',
-      },
-      {
-        q: 'Can I withdraw my staked tokens early?',
-        a:
-          'Yes. You can withdraw anytime, but withdrawing before the 30-day reward-claim period incurs a 10 % penalty on unclaimed rewards, which is returned to the reward pool.',
-      },
-      {
-        q: 'How are rewards calculated?',
-        a:
-          'Rewards are distributed proportionally based on your share of the total staking pool. The more tokens you stake—and the longer you keep them—the larger your reward.',
-      },
-      {
-        q: 'What types of rewards can I earn?',
-        a:
-          'You can earn both WOODENG and SOL. Distribution depends on the proportion of pools using each token and overall platform fees.',
-      },
-    ],
-  },
-  {
-    title: 'Trading & Marketplace',
-    questions: [
-      {
-        q: 'How do I buy NFTs?',
-        a:
-          "Browse the marketplace, find an NFT you like, make sure you have enough Woodeng tokens or SOL, then click 'Buy Now' or place a bid. The NFT transfers to your wallet after purchase.",
-      },
-      {
-        q: 'How do I buy sound meme tokens?',
-        a:
-          "Go to the Sound Memes section, select a meme, click 'Buy Tokens', enter the amount, and confirm. Tokens arrive in your wallet after the transaction.",
-      },
-      {
-        q: 'Can I resell my NFTs?',
-        a:
-          'Yes. Music NFTs without AMM pay the creator royalties (up to 15 %) on each resale: 80 % to the creator, 20 % to Woodeng Holders. NFTs with AMM and sound memes use the standard transaction-fee model.',
-      },
-      {
-        q: 'What trading tools are available?',
-        a:
-          'Woodeng offers Woo Swap (instant token swaps for WOODENG & SOL) and Woo Dex (real-time charts, liquidity tracking, and market analytics).',
-      },
-    ],
-  },
-  {
-    title: 'Pools & Liquidity',
-    questions: [
-      {
-        q: 'What is a liquidity pool in Woodeng?',
-        a:
-          'A liquidity pool is an AMM that lets NFTs trade without direct buyer-seller matches. Price adjusts automatically with supply/demand.',
-      },
-      {
-        q: 'How do I create a pool for my NFT?',
-        a:
-          "During mint, pick 'Create and Seed Pool', choose WOODENG or SOL, and deposit initial liquidity. The AMM pool goes live immediately.",
-      },
-      {
-        q: "What's the difference between NFTs with and without pools?",
-        a:
-          "Pool NFTs have dynamic AMM pricing and no royalties; creators earn from price appreciation. Non-pool NFTs have fixed price and optional royalties (up to 15 %).",
-      },
-      {
-        q: 'Can I convert between pool and non-pool NFTs?',
-        a:
-          'No. The decision is made at minting time and is permanent.',
-      },
-      {
-        q: 'Is liquidity locked in the pools?',
-        a:
-          'Yes. All liquidity is permanently locked in our Smart Contract Locker. Users can add more liquidity but can never withdraw it.',
-      },
-    ],
-  },
-  {
-    title: 'Rights & Ownership',
-    questions: [
-      {
-        q: 'What rights do I get when buying an NFT?',
-        a:
-          'You own the token representing that piece of music. This usually includes personal listening and resale rights. Commercial rights depend on the artist.',
-      },
-      {
-        q: 'As an artist, do I keep my copyright?',
-        a:
-          'Yes. Minting an NFT does not transfer copyright. You retain full rights.',
-      },
-      {
-        q: 'How are royalties handled?',
-        a:
-          'Royalties are distributed automatically by smart contract. Music NFTs without AMM can set up to 15 % royalties (80 % creator / 20 % Woodeng Holders). NFTs with AMM rely on price appreciation instead of royalties.',
-      },
-      {
-        q: 'Do I need to be verified to distribute music?',
-        a:
-          'Verification is required for artists working with labels, agents, or copyrighted material. Independent artists may publish without verification.',
-      },
-    ],
-  },
-  {
-    title: 'Technical',
-    questions: [
-      {
-        q: 'How is the content stored?',
-        a:
-          'Audio and artwork live on decentralized storage (IPFS). Metadata is on chain (Solana).',
-      },
-      {
-        q: 'What happens if I lose access to my wallet?',
-        a:
-          'NFTs are tied to your wallet address. Keep your seed phrase safe—losing the wallet means losing the NFTs.',
-      },
-      {
-        q: 'Is my content safe?',
-        a:
-          'Yes. Multiple IPFS nodes replicate the data, while blockchain records guarantee integrity.',
-      },
-      {
-        q: 'What is SPL404?',
-        a:
-          'SPL404 is a Solana token standard for sound memes, allowing fractionalised ownership via fungible tokens recorded publicly on-chain.',
-      },
-      {
-        q: 'What security measures are in place?',
-        a:
-          'Woodeng uses audited smart contracts, decentralized storage, automated royalty distribution, permanent liquidity locking, secure wallet connections, and anti-sniper protection.',
-      },
-    ],
-  },
-];
-
-/* ──────────────────────────────────────────
-   COMPONENT
-────────────────────────────────────────── */
 export default function FAQ() {
-  const [query,    setQuery]    = useState('');
-  const [opened,   setOpened]   = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expandedQuestions, setExpandedQuestions] = useState<string[]>([]);
 
-  const toggle = (q: string) =>
-    setOpened(prev =>
-      prev.includes(q) ? prev.filter(x => x !== q) : [...prev, q],
+  const faqCategories = [
+    {
+      title: 'Getting Started',
+      questions: [
+        {
+          q: 'What is Woo?',
+          a: "Woo is a decentralized platform that enables creators to create, sell, and distribute their music as NFTs and sound memes on the Solana blockchain. We provide tools for artists to monetize their work directly while giving fans new ways to support and connect with their favorite creators through blockchain technology and fair economics.",
+        },
+        {
+          q: 'How do I create an account?',
+          a: "To create an account, you'll need a compatible crypto wallet (like Phantom). Click the 'Connect Wallet' button, and you're ready to start using Woo. The entire process takes less than a minute.",
+        },
+        {
+          q: 'What cryptocurrencies are supported?',
+          a: 'We use our native token Woodeng and Solana for all transactions on the platform. Woodeng is built on the Solana blockchain, providing fast and low-cost transactions for our users.',
+        },
+        {
+          q: 'What makes Woodeng different from other music platforms?',
+          a: 'Woodeng revolutionizes music distribution through blockchain technology, offering both Music NFTs and SPL404 Sound Memes. Our platform features automated market makers (AMM) for dynamic pricing, permanently locked liquidity, and a fair revenue distribution model that benefits creators, token holders, and the ecosystem.',
+        },
+      ],
+    },
+    {
+      title: 'Music NFTs',
+      questions: [
+        {
+          q: 'What is a music NFT?',
+          a: "A music NFT is a unique digital asset that represents ownership of a piece of music on the blockchain. It can include the audio file, artwork, and exclusive perks defined by the artist. On Woo, music NFTs can be created with either fixed pricing and royalties or with automated market makers (AMM) for dynamic pricing.",
+        },
+        {
+          q: 'How do I create a music NFT?',
+          a: "After connecting your wallet, go to the 'Create' section, select 'Music NFT', upload your audio file and artwork, set your pricing in Woodeng tokens or SOL, choose between royalties or AMM pool, and click 'Mint'. Your NFT will be created on the blockchain and listed on our marketplace. For AMM pools, you'll need to set an initial deposit to provide liquidity.",
+        },
+        {
+          q: 'What are the fees and revenue distribution for music NFTs?',
+          a: 'For music NFT sales without AMM, the revenue is distributed as follows: 80% goes to the Creator and 20% to Woodeng Holders. For secondary sales, creators can set royalties up to 15%, with 80% going to the original Creator and 20% to Woodeng Holders. For NFTs with AMM, there are no royalties, but creators benefit from price appreciation as NFTs are purchased from the pool.',
+        },
+        {
+          q: "What's the difference between NFTs with and without AMM?",
+          a: "NFTs with AMM (Automated Market Maker) use dynamic pricing based on supply and demand, with no royalties. Instead, creators benefit from price appreciation as NFTs are purchased from the pool. NFTs without AMM use fixed pricing and can have royalties up to 15% on secondary sales. The choice between these options is made at minting time and cannot be changed later.",
+        },
+      ],
+    },
+    {
+      title: 'Sound Memes',
+      questions: [
+        {
+          q: 'What is a sound meme NFT?',
+          a: 'A sound meme NFT is a short, viral audio clip turned into a unique digital asset using the SPL404 standard on Solana. These can be funny sounds, catchy phrases, or memorable musical moments that can be collected and traded with tokenized ownership, allowing multiple people to own a piece of the same sound meme.',
+        },
+        {
+          q: 'How do I create a sound meme NFT?',
+          a: "Choose 'Sound Meme' in the Create section, upload your audio clip (max 30 seconds), add a title and description, set your pricing in Woodeng tokens or Solana, choose between liquidity pool or bonding curve deployment, and mint. For liquidity pools, you'll need to make an initial deposit. For bonding curves, no initial deposit is required.",
+        },
+        {
+          q: 'What are tokens in sound memes?',
+          a: 'Tokens represent fractional ownership in a sound meme NFT. When you create a sound meme, you specify the total supply of tokens. These tokens can be bought and sold individually, allowing multiple people to own a piece of the same sound meme.',
+        },
+        {
+          q: 'What are the fees for sound memes?',
+          a: "For sound meme transactions with liquidity pools, there is a 0.3% transaction fee, with 0.2% going to the Sound Meme Creator and 0.1% to Woodeng Holders. For bonding curves, there's a 1.5% fee pre-migration (1% to Woodeng Holders, 0.5% to Creator) and 0.3% post-migration (0.2% to Creator, 0.1% to Woodeng Holders).",
+        },
+        {
+          q: "What's the difference between liquidity pools and bonding curves for sound memes?",
+          a: "Sound memes with liquidity pools require an initial deposit and have immediate trading in WOODENG or SOL with a 0.3% transaction fee. Bonding curves don't require initial liquidity, with price automatically increasing as tokens are purchased. They have a 1.5% fee pre-migration and 0.3% post-migration, with automatic migration to DEX at $44K market cap.",
+        },
+      ],
+    },
+    {
+      title: 'Rewards & Staking',
+      questions: [
+        {
+          q: 'How does the reward pool work?',
+          a: 'The reward pool is funded by multiple sources: 20% from Music NFT primary sales, 20% from Music NFT secondary royalties, 0.1% from Sound Meme liquidity transactions, 1% from Sound Meme bonding curve transactions (pre-migration), and 0.1% from Sound Meme bonding curve transactions (post-migration). This pool is distributed to users who participate in our staking program with rewards in both WOODENG and SOL tokens.',
+        },
+        {
+          q: 'How does staking work?',
+          a: "You can stake your Woodeng tokens to earn rewards from the platform's activity. We offer two staking options: Flexible staking with no mandatory lock period (but 30-day reward claim period and 10% penalty for early withdrawal), and Lock staking with fixed periods (3 months, 6 months, or 1 year) that provide yield bonuses depending on the lock duration.",
+        },
+        {
+          q: 'Can I withdraw my staked tokens early?',
+          a: 'For flexible staking, yes, you can withdraw your staked tokens at any time. However, if you withdraw before the 30-day reward claim period, a 10% penalty will be applied to your unclaimed rewards. For lock staking, tokens are locked for the chosen period (3, 6, or 12 months) and cannot be withdrawn early, but you earn higher yields with bonus rates depending on the lock duration.',
+        },
+        {
+          q: 'How are rewards calculated?',
+          a: 'Rewards are distributed proportionally based on your stake in the total staking pool and the staking type you choose. Flexible staking earns base rewards, while lock staking earns additional yield bonuses: higher bonuses for longer lock periods. The more Woodeng tokens you stake and the longer your commitment, the more rewards you can earn from platform activity.',
+        },
+        {
+          q: 'What types of rewards can I earn?',
+          a: 'You can earn both WOODENG and SOL rewards through staking. The distribution depends on the proportion of pools using each token type. Rewards come from platform fees and transaction activity across both Music NFTs and Sound Memes. Lock staking provides additional yield bonuses on top of base rewards, with higher bonuses for longer commitment periods.',
+        },
+        {
+          q: 'What are the differences between flexible and lock staking?',
+          a: 'Flexible staking allows you to withdraw tokens anytime but has a 30-day reward claim period and 10% penalty for early withdrawal of rewards. Lock staking requires you to commit tokens for 3, 6, or 12 months but provides yield bonuses depending on the lock duration - the longer the lock period, the higher the bonus yield you earn on top of base staking rewards.',
+        },
+        {
+          q: 'What yield bonuses do I get with lock staking?',
+          a: 'Lock staking provides additional yield bonuses on top of base staking rewards. The bonus percentage increases with longer lock periods: 3-month lock provides a moderate bonus, 6-month lock provides a higher bonus, and 12-month lock provides the maximum yield bonus. These bonuses are applied to both WOODENG and SOL rewards earned during the lock period.',
+        },
+      ],
+    },
+    {
+      title: 'Trading & Marketplace',
+      questions: [
+        {
+          q: 'How do I buy NFTs?',
+          a: "Browse the marketplace, find an NFT you like, ensure you have sufficient Woodeng tokens or Solana in your wallet, and click 'Buy Now' or place a bid. The NFT will be transferred to your wallet upon successful purchase.",
+        },
+        {
+          q: 'How do I buy sound meme tokens?',
+          a: "Navigate to the Sound Memes section, select a meme you're interested in, click 'Buy Tokens', enter the number of tokens you want to purchase, and confirm the transaction. You'll receive the tokens in your wallet after the transaction is processed.",
+        },
+        {
+          q: 'Can I resell my NFTs?',
+          a: 'Yes, you can resell your NFTs on our secondary marketplace. For music NFTs without AMM, the original artist will receive their set royalty percentage (up to 15%) from each sale, with 80% going to the original Creator and 20% to Woodeng Holders. For NFTs with AMM and sound memes, the standard transaction fees apply.',
+        },
+        {
+          q: 'What trading tools are available on the platform?',
+          a: 'Woodeng offers integrated trading tools including Woo Swap for seamless token swaps directly within the platform (supporting WOODENG and SOL pairings) and Woo Dex for advanced DEX visualization with real-time price charts, market data, and liquidity pool monitoring.',
+        },
+      ],
+    },
+    {
+      title: 'Pools & Liquidity',
+      questions: [
+        {
+          q: 'What is a liquidity pool in Woodeng?',
+          a: "A liquidity pool is an automated market maker (AMM) that allows for the trading of NFTs without needing a direct buyer-seller match. When you create an NFT with a pool, you're setting up a system where the price automatically adjusts based on supply and demand.",
+        },
+        {
+          q: 'How do I create a pool for my NFT?',
+          a: "When minting your music NFT, you'll have the option to 'Create and Seed Pool'. You'll need to specify the token type (Woodeng or Solana) and make an initial deposit to provide liquidity. This creates an AMM pool where others can buy your NFT directly.",
+        },
+        {
+          q: "What's the difference between NFTs with and without pools?",
+          a: "NFTs with pools use an automated market maker for pricing and don't have royalties. Instead, the creator benefits from price appreciation as NFTs are purchased from the pool. NFTs without pools use fixed pricing and can have royalties of up to 15% on secondary sales.",
+        },
+        {
+          q: 'Can I convert between pool and non-pool NFTs?',
+          a: 'No, the decision to create a pool is made at the time of minting and cannot be changed later. Choose carefully based on your monetization preferences.',
+        },
+        {
+          q: 'Is liquidity locked in the pools?',
+          a: 'Yes, all liquidity is permanently locked in our Smart Contract Locker with no possibility of withdrawal. This ensures long-term stability for the platform. Users may voluntarily add additional liquidity at any time.',
+        },
+      ],
+    },
+    {
+      title: 'Rights & Ownership',
+      questions: [
+        {
+          q: 'What rights do I get when buying an NFT?',
+          a: 'When you purchase a music NFT, you own the token that represents the piece of music. This typically includes personal listening rights and the ability to resell the NFT. Commercial usage rights vary by artist.',
+        },
+        {
+          q: 'As an artist, do I keep my copyright?',
+          a: 'Yes, creating an NFT does not transfer your copyright. You retain all rights to your original work while selling NFTs that represent the work.',
+        },
+        {
+          q: 'How are royalties handled?',
+          a: 'Royalties are automatically distributed through smart contracts in Woodeng tokens or Solana. For music NFTs without AMM, creators can set royalties up to 15% for secondary sales, with 80% going to the original Creator and 20% to Woodeng Holders. NFTs with AMM don\'t have royalties but benefit from price appreciation.',
+        },
+        {
+          q: 'Do I need to be verified to distribute music?',
+          a: "Verification is required for artists with record labels, agents, or applicable copyright protection. If you want to distribute protected music, you must request verification through your profile settings. Self-published artists may use the platform without verification.",
+        },
+      ],
+    },
+    {
+      title: 'Technical',
+      questions: [
+        {
+          q: 'How is the content stored?',
+          a: 'All content is stored on decentralized storage networks (IPFS) to ensure permanence and accessibility. The NFT metadata is stored on the Solana blockchain.',
+        },
+        {
+          q: 'What happens if I lose access to my wallet?',
+          a: "Your NFTs are tied to your wallet address. Make sure to keep your seed phrase safe. If you lose access to your wallet, you'll lose access to your NFTs.",
+        },
+        {
+          q: 'Is my content safe?',
+          a: 'Yes, we use decentralized storage solutions and blockchain technology to ensure your content remains secure and accessible. Multiple backup nodes maintain content integrity.',
+        },
+        {
+          q: 'What is SPL404?',
+          a: 'SPL404 is a token standard on Solana specifically designed for sound memes. It allows for the creation of tokenized NFTs where ownership can be divided among multiple people through tokens. This makes sound memes more accessible and tradeable compared to traditional NFTs. Token ownership is recorded on the Solana blockchain, with transaction history and balances publicly visible.',
+        },
+        {
+          q: 'What security measures are in place?',
+          a: 'Woodeng employs industry-standard security measures including smart contracts for secure transactions, decentralized storage on IPFS, automated payments with claimed fee distribution, secure wallet connections, permanent liquidity locking, and anti-sniper protection to prevent bot manipulation.',
+        },
+      ],
+    },
+  ];
+
+  const toggleQuestion = (question: string) => {
+    setExpandedQuestions(prev =>
+      prev.includes(question) ? prev.filter(q => q !== question) : [...prev, question],
     );
+  };
 
-  const filtered = faqCategories
-    .map(cat => ({
-      ...cat,
-      questions: cat.questions.filter(
-        qa =>
-          qa.q.toLowerCase().includes(query.toLowerCase()) ||
-          qa.a.toLowerCase().includes(query.toLowerCase()),
+  const filteredCategories = faqCategories
+    .map(category => ({
+      ...category,
+      questions: category.questions.filter(
+        q =>
+          q.q.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          q.a.toLowerCase().includes(searchQuery.toLowerCase()),
       ),
     }))
-    .filter(cat => cat.questions.length);
+    .filter(category => category.questions.length > 0);
 
   return (
-    <div className="py-12 space-y-12">
+    <div className="py-12 space-y-12 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       {/* Header */}
-      <header className="text-center space-y-6">
+      <div className="text-center space-y-6">
         <h1 className="text-4xl font-bold">Frequently Asked Questions</h1>
         <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-          Find answers to common questions about Woodeng&rsquo;s music&nbsp;NFT and
-          sound&nbsp;meme platform
+          Find answers to common questions about Woodeng&apos;s music NFT and sound meme platform
         </p>
-      </header>
+      </div>
 
       {/* Search */}
       <div className="max-w-2xl mx-auto">
         <div className="relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
           <input
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="Search questions…"
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search questions..."
             className="w-full pl-12 pr-4 py-3 bg-background border border-border rounded-lg focus:border-primary transition-colors"
           />
         </div>
       </div>
 
-      {/* Categories */}
+      {/* FAQ Categories */}
       <div className="space-y-8">
-        {filtered.map(cat => (
-          <div key={cat.title}>
-            <h2 className="text-2xl font-bold mb-6">{cat.title}</h2>
+        {filteredCategories.map((category, categoryIndex) => (
+          <div key={categoryIndex}>
+            <h2 className="text-2xl font-bold mb-6">{category.title}</h2>
             <div className="space-y-4">
-              {cat.questions.map(item => (
-                <div
-                  key={item.q}
-                  className="border border-border rounded-lg overflow-hidden"
-                >
+              {category.questions.map((item, questionIndex) => (
+                <div key={questionIndex} className="border border-border rounded-lg overflow-hidden">
                   <button
-                    onClick={() => toggle(item.q)}
+                    onClick={() => toggleQuestion(item.q)}
                     className="w-full px-6 py-4 flex items-center justify-between hover:bg-muted/50 transition-colors"
                   >
                     <span className="font-medium text-left">{item.q}</span>
                     <ChevronDown
                       className={cn(
                         'w-5 h-5 transition-transform duration-200',
-                        opened.includes(item.q) && 'rotate-180',
+                        expandedQuestions.includes(item.q) && 'rotate-180',
                       )}
                     />
                   </button>
-
                   <div
                     className={cn(
                       'grid transition-all duration-200',
-                      opened.includes(item.q)
-                        ? 'grid-rows-[1fr]'
-                        : 'grid-rows-[0fr]',
+                      expandedQuestions.includes(item.q) ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
                     )}
                   >
                     <div className="overflow-hidden">
-                      <p className="px-6 py-4 text-muted-foreground border-t border-border">
-                        {item.a}
-                      </p>
+                      <p className="px-6 py-4 text-muted-foreground border-t border-border">{item.a}</p>
                     </div>
                   </div>
                 </div>
@@ -328,26 +281,22 @@ export default function FAQ() {
           </div>
         ))}
 
-        {/* No results */}
-        {filtered.length === 0 && (
+        {filteredCategories.length === 0 && (
           <div className="text-center py-12">
             <div className="inline-flex p-4 rounded-full bg-muted mb-4">
               <AlertCircle className="w-6 h-6 text-muted-foreground" />
             </div>
             <h3 className="text-xl font-semibold mb-2">No results found</h3>
-            <p className="text-muted-foreground">
-              Try different keywords or browse all categories
-            </p>
+            <p className="text-muted-foreground">Try adjusting your search terms or browse all categories</p>
           </div>
         )}
       </div>
 
-      {/* Contact CTA */}
+      {/* Contact Support */}
       <div className="bg-card border border-border rounded-lg p-8 text-center">
         <h2 className="text-2xl font-bold mb-4">Still have questions?</h2>
         <p className="text-muted-foreground mb-6">
-          Can&rsquo;t find the answer you&rsquo;re looking for? Our support team is here to
-          help.
+          Can&apos;t find the answer you&apos;re looking for? Our support team is here to help.
         </p>
         <Link
           href="/contact"
