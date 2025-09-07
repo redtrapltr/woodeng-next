@@ -189,7 +189,9 @@ export default function CreateNFT() {
   );
 
   return (
-    <div className="min-h-screen bg-[#181920] py-8 sm:py-12 md:py-16">
+    <div className="min-h-screen bg-[#181920] pt-[calc(116px+env(safe-area-inset-top))] md:pt-[calc(148px+env(safe-area-inset-top))] pb-10 sm:pb-14 md:pb-20">
+
+
       <div className="mx-auto max-w-4xl px-4 sm:px-6">
         <h1 className="text-balance text-2xl sm:text-3xl md:text-4xl font-bold mb-5 sm:mb-8 text-white">
           Pick a creation type

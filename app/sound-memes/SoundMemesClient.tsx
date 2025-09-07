@@ -13,7 +13,8 @@ import {
 } from "@solana/web3.js";
 
 import { useWallet } from "@solana/wallet-adapter-react";
-import { Program, AnchorProvider, BN, Idl } from "@project-serum/anchor";
+import type { Idl } from "@project-serum/anchor";
+import { Program, AnchorProvider, BN } from "@project-serum/anchor";
 import {
   TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
@@ -23,11 +24,9 @@ import {
 
 import {
   Play, Pause, Loader2, ArrowUpRight, ArrowDownRight,
-  CheckCircle2, AlertCircle, Info, X, Pickaxe
+  CheckCircle2, AlertCircle, Info, X, Pickaxe, Copy   // ← add Copy here
 } from "lucide-react";
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Brush, Legend, ReferenceLine
-} from 'recharts';
+
 
 
 
@@ -39,9 +38,148 @@ import { useSearchParams } from "next/navigation";
 import { getMint, NATIVE_MINT, createSyncNativeInstruction, createCloseAccountInstruction } from "@solana/spl-token";
 
 import { Rocket } from "lucide-react";
+import { Metadata } from "@metaplex-foundation/mpl-token-metadata";
+
+import NextDynamic from 'next/dynamic';
+
+
+import { Globe, Send, Twitter } from 'lucide-react';
+import { PROGRAM_ID as METADATA_PROGRAM_ID } from "@metaplex-foundation/mpl-token-metadata";
+
+
+
+
+
+
+// ───── Candles helpers (timeframe-driven) ─────
+type Timeframe = '15m' | '30m' | '1h' | '4h' | '24h';
+
+const TF_MS: Record<Timeframe, number> = {
+  '15m': 15 * 60_000,
+  '30m': 30 * 60_000,
+  '1h':   60 * 60_000,
+  '4h':  4 * 60 * 60_000,
+  '24h': 24 * 60 * 60_000,
+};
+
+
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// ── keep TF_MS and DAY_MS as you have ──
+function bucketStart(t: number, tf: Timeframe): number {
+  // Always align to UTC, including the daily frame
+  if (tf === '24h') {
+    // UTC midnight
+    return Math.floor(t / DAY_MS) * DAY_MS;
+  }
+  // 15m / 30m / 1h / 4h align to absolute UTC epoch grid
+  const ms = TF_MS[tf];
+  return Math.floor(t / ms) * ms;
+}
+
+
+export function SocialLinksBar({
+  socials,
+  className = ""
+}: {
+  socials?: { x?: string; telegram?: string; website?: string };
+  className?: string;
+}) {
+  if (!socials) return null;
+  const links = [
+    { href: socials.x,        Icon: Twitter, label: 'X' },
+    { href: socials.telegram, Icon: Send,    label: 'Telegram' },
+    { href: socials.website,  Icon: Globe,   label: 'Website' },
+  ].filter(x => !!x.href);
+
+  if (!links.length) return null;
+
+  return (
+    <div className={`flex items-center gap-3 mt-3 ${className}`}>
+      {links.map(({ href, Icon, label }) => (
+        <a
+          key={label}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[#1f2128] hover:bg-[#262a33] border border-[#2b2d35]"
+          title={label}
+        >
+          <Icon className="w-4 h-4 text-[#c9cbd6]" />
+        </a>
+      ))}
+    </div>
+  );
+}
+
+const CandleChart = NextDynamic(
+  () => import('../../src/contexts/components/CandleChart'),
+  { ssr: false }
+);
+
+
+
+
+const clean = (s?: string) =>
+  (s ?? "").replace(/\0/g, "").replace(/[\x00-\x1F\x7F]/g, "").trim();
 
 
 const isAmm = (p: { poolType: 0 | 1 }) => p.poolType === 1;
+
+
+const format6 = (v: number) =>
+  Number.isFinite(v) ? v.toFixed(6).replace(/\.?0+$/, "") : "0";
+
+// short "4…4" formatter for addresses
+const shortAddr = (s: string, chars = 4) => (s ? `${s.slice(0, chars)}…${s.slice(-chars)}` : "");
+
+function TinyPrice({
+  value,
+  maxNormalDp = 6,          // show up to 6 dp for normal values
+  tinyThreshold = 1e-6,     // only compress really tiny numbers
+  sigDigits = 6,            // show up to 6 significant digits after the zeros
+  className = "",
+}: {
+  value: number;
+  maxNormalDp?: number;
+  tinyThreshold?: number;
+  sigDigits?: number;
+  className?: string;
+}) {
+  if (!Number.isFinite(value) || value <= 0) return <span className={className}>0</span>;
+
+  // Normal formatting (up to 6 decimals, strip trailing zeros)
+  if (value >= tinyThreshold) {
+    const s = value.toFixed(maxNormalDp).replace(/\.?0+$/, "");
+    return <span className={`tabular-nums ${className}`}>{s}</span>;
+  }
+
+  // Compress zeros for ultra-small numbers: 0.0<sup>k</sup> + first significant digits
+  const exp = Number(value).toExponential();               // e.g. "7.6e-11"
+  const m = /^(\d)(?:\.(\d+))?e-(\d+)$/.exec(exp);         // 1st digit, rest, exponent
+  if (!m) {
+    const s = value.toFixed(maxNormalDp).replace(/\.?0+$/, "");
+    return <span className={`tabular-nums ${className}`}>{s}</span>;
+  }
+
+  const first = m[1];
+  const rest  = m[2] || "";
+  const e     = Number(m[3]);                              // decimals shift
+  const zeroCount = Math.max(0, e - 1);                    // zeros after "0."
+  const digits = (first + rest).slice(0, sigDigits);       // show up to 6 sig digits
+
+  return (
+    <span className={`tabular-nums ${className}`}>
+      0.0<sup className="align-super text-[10px] opacity-75">{zeroCount}</sup>{digits}
+    </span>
+  );
+}
+
+
+
+
+
 /* ───────── MOBILE: vertical climb sections ───────── */
 
 // ADD props for buy/sell to MiniVerticalCard
@@ -64,20 +202,29 @@ function MiniVerticalCard({
 }) {
   const up = change24h >= 0;
   return (
-    <button
-      onClick={() => onOpen(pool)}
-      className="
-        snap-center w-full h-full text-left
-        bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl
-        overflow-hidden flex flex-col
-        transition-transform duration-300 active:scale-[0.995]
-      "
-      style={{
-        // subtle 'pop' for the active card (wired up below)
-        transform: active ? 'scale(1.0)' : 'scale(0.96)',
-        opacity: active ? 1 : 0.8,
-      }}
-    >
+  <div
+    role="button"
+    tabIndex={0}
+    onClick={() => onOpen(pool)}
+    onKeyDown={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onOpen(pool);
+      }
+    }}
+    className="
+      snap-center w-full h-full text-left
+      bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl
+      overflow-hidden flex flex-col
+      transition-transform duration-300 active:scale-[0.995]
+    "
+    style={{
+      transform: active ? 'scale(1.0)' : 'scale(0.96)',
+      opacity: active ? 1 : 0.8,
+    }}
+  >
+
+     
       {/* image */}
       <div className="relative flex-1 min-h-0">
         <img
@@ -95,9 +242,7 @@ function MiniVerticalCard({
         <div className="font-semibold truncate">{pool.name || 'Untitled Meme'}</div>
 
         <div className="mt-1 flex items-center gap-2">
-          <span className="text-[#ffc371] font-bold tabular-nums">
-            {Number(pool.price ?? 0).toFixed(5)}
-          </span>
+          <TinyPrice value={Number(pool.price ?? 0)} className="text-[#ffc371] font-bold" />
           <span className="text-xs text-[#ffc371]/90">{quoteLabelOf(pool)}</span>
           <span className={`ml-auto text-xs px-2 py-0.5 rounded ${up ? 'bg-green-600/20 text-green-300' : 'bg-red-600/20 text-red-300'}`}>
             {up ? '▲' : '▼'} {Math.abs(change24h).toFixed(2)}%
@@ -112,24 +257,31 @@ function MiniVerticalCard({
         )}
 
         {/* ACTIONS */}
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <button
-            onClick={(e) => { e.stopPropagation(); onBuy(pool); }}
-            className="h-9 rounded bg-[#ffc371] text-black font-semibold"
-          >
-            Buy
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onSell(pool); }}
-            disabled={!isAmm(pool)}
-            className="h-9 rounded bg-[#ff5656] text-white font-semibold disabled:opacity-40"
-            title={isAmm(pool) ? '' : 'Sell available after AMM migration'}
-          >
-            Sell
-          </button>
-        </div>
+<div className="mt-3 grid grid-cols-2 gap-2">
+  <button
+    type="button"
+    onClick={(e) => { e.stopPropagation(); onBuy(pool); }}
+    className="h-9 rounded bg-[#ffc371] text-black font-semibold"
+  >
+    Buy
+  </button>
+
+  <button
+    type="button"
+    onClick={(e) => { e.stopPropagation(); onSell(pool); }}
+    disabled={!isAmm(pool)}
+    className="h-9 rounded bg-[#ff5656] text-white font-semibold disabled:opacity-40"
+    title={isAmm(pool) ? '' : 'Sell available after AMM migration'}
+  >
+    Sell
+  </button>
+</div>
+
+{/* ✅ Social links live outside buttons so they’re clickable */}
+<SocialLinksBar socials={pool.socials} className="mt-2" />
+
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -214,39 +366,7 @@ function MobileVerticalSection({
         
 
         <div className="relative">
-  {/* rocket + exhaust rail */}
-  <div
-    className="pointer-events-none absolute top-0 right-3"
-    style={{ height: railH, width: 26, zIndex: 20 }}
-  >
-    <div className="relative h-full w-full rounded-full bg-white/12 overflow-hidden ring-1 ring-white/15">
-      {/* exhaust (progress) — grows from the BOTTOM as you scroll UP */}
-      <div
-        className="absolute bottom-0 left-0 right-0 transition-[height] duration-150 bg-gradient-to-t from-yellow-300 via-orange-400 to-fuchsia-600"
-        style={{ height: `${Math.max(0, Math.min(1, progress)) * 100}%` }}
-      />
-      {/* rocket — centered, vertical, sits on top of the exhaust */}
-      {/* keep the rocket inside the rail without changing rail width */}
-<div
-  className="absolute inset-x-1 flex justify-center pointer-events-none"
-  style={{
-    bottom: `calc(${Math.max(0, Math.min(1, progress)) * 100}% - 9px)`, // center 18px icon
-  }}
->
-  <Rocket
-    className="drop-shadow-sm opacity-95"
-    style={{
-      width: 18,              // smaller than the 26px rail
-      height: 18,
-      transform: 'rotate(-45deg)',
-      transformOrigin: 'center',
-    }}
-    aria-hidden
-  />
-</div>
-
-    </div>
-  </div>
+  
 
   {/* slider */}
   <div
@@ -323,12 +443,21 @@ function MobileVerticalStacks({
     ),
     [pools, change24hFor]
   );
-  const newest = React.useMemo(
-    () => [...pools].sort(
-      (a, b) => createdAtFor(b.memeMint.toBase58()) - createdAtFor(a.memeMint.toBase58())
-    ),
-    [pools, createdAtFor]
-  );
+  
+
+
+  const newest = React.useMemo(() => {
+  return [...pools].sort((a, b) => {
+    const ta = createdAtFor(a.memeMint.toBase58()) || 0;
+    const tb = createdAtFor(b.memeMint.toBase58()) || 0;
+    if (tb !== ta) return tb - ta;
+    // tie-breakers to keep order stable
+    const ma = a.marketCap ?? 0, mb = b.marketCap ?? 0;
+    if (mb !== ma) return mb - ma;
+    return a.memeMint.toBase58().localeCompare(b.memeMint.toBase58());
+  });
+}, [pools, createdAtFor]);
+
 
   const current = mode === 'gainers' ? topGainers : mode === 'marketcap' ? topMcap : newest;
   const title   = mode === 'gainers' ? 'Top Gainers (24h)' : mode === 'marketcap' ? 'Top Market Cap' : 'Newest';
@@ -381,6 +510,9 @@ type PoolType = {
   volume24h?: number;        // (optional) display only, ok if undefined
   category?: string;         // derived from metadata trait
   quoteMint: PublicKey;   // WOODENG mint or wSOL (NATIVE_MINT)
+
+  socials?: { x?: string; telegram?: string; website?: string };
+
 
 
   /* metadata / UI -------------------------------------- */
@@ -456,17 +588,21 @@ async function sendIxsOnce(
     await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
     return sig;
   } catch (e) {
-    // fallback poll in case websocket confirm flaked but the tx actually landed
+    // Devnet/websocket flake: fall back to polling and accept any non-error status.
     const start = Date.now();
     while (Date.now() - start < 20_000) {
       const st = await connection.getSignatureStatuses([sig]);
       const s = st.value[0];
-      if (s?.confirmationStatus === 'confirmed' || s?.confirmationStatus === 'finalized') return sig;
+      if (s && !s.err) return sig; // processed/confirmed/finalized with NO error = success
       await new Promise(r => setTimeout(r, 500));
     }
     throw e;
   }
 }
+
+
+
+
 
 
 
@@ -528,6 +664,8 @@ export default function SoundMemesClient() {
   const [pools, setPools] = useState<PoolType[]>([]);
   const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
 
+  const [copied, setCopied] = useState<string | null>(null);
+
 
   const searchParams   = useSearchParams();
   const deepLinkedMint = searchParams.get("mint");
@@ -535,7 +673,51 @@ export default function SoundMemesClient() {
   const query    = queryRaw.toLowerCase();
 
 
+  const seededOnceRef = useRef<Set<string>>(new Set())
+
   
+const [firstSeenAtByMint, setFirstSeenAtByMint] = useState<Record<string, number>>({});
+
+const [showDetail, setShowDetail] = useState(false);
+const [detailPool, setDetailPool] = useState<PoolType | null>(null);
+const [selectedTimeRange, setSelectedTimeRange] = useState<Timeframe>('24h');
+
+  
+
+
+
+
+
+
+
+type ServerCandle = { t:number; o:number; h:number; l:number; c:number; v:number };
+const [serverCandles, setServerCandles] = useState<
+  Record<string, Record<Timeframe, ServerCandle[]>>
+>({});
+
+
+
+useEffect(() => {
+  if (!showDetail || !detailPool) return;
+  const mintKey = detailPool.memeMint.toBase58();
+
+  let stop = false;
+  (async () => {
+    try {
+      const r = await fetch(`/api/ohlc/${mintKey}?tf=${selectedTimeRange}&limit=1000`, { cache: 'no-store' });
+      const bars: ServerCandle[] = r.ok ? await r.json() : [];
+      if (!stop && Array.isArray(bars)) {
+        setServerCandles(prev => ({
+          ...prev,
+          [mintKey]: { ...(prev[mintKey] ?? {}), [selectedTimeRange]: bars }
+        }));
+      }
+    } catch {/* ignore transient */}
+  })();
+
+  return () => { stop = true; };
+}, [showDetail, detailPool, selectedTimeRange]);
+
 
 
 
@@ -547,6 +729,10 @@ type UserPoolNfts = Record<
 function assertWallet(wallet: WalletContextState): asserts wallet is WalletContextState & { publicKey: PublicKey } {
   if (!wallet.publicKey) throw new Error("Wallet not connected");
 }
+
+
+
+
 
 
 
@@ -595,40 +781,60 @@ const lockerIdl = lockerIdlJson as Idl;
 
 
 // -- Pinata Upload Helper --
-async function pinFile(file: File) {
-  const { jwt } = await fetch('/api/pinata-token')
-    .then(r => {
-      if (!r.ok) throw new Error('Could not fetch Pinata token');
-      return r.json();
-    });
+// Accepts Blob *or* File
+async function pinFile(data: Blob | File, filename?: string) {
+  const r = await fetch('/api/pinata-token');
+  if (!r.ok) throw new Error(`Pinata token failed: ${r.status} ${r.statusText}`);
+  const { jwt } = await r.json();
+
   const form = new FormData();
-  form.append('file', file, file.name);
-  const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+  form.append('file', data, (data as any)?.name ?? filename ?? 'upload.bin');
+
+  const res  = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
     method: 'POST',
     headers: { Authorization: `Bearer ${jwt}` },
     body: form,
   });
+
   const text = await res.text();
-  let body;
-  try { body = JSON.parse(text); } catch { throw new Error(`Pinata JSON parse error—raw body:\n${text}`); }
-  if (!res.ok) throw new Error(body.error || body.message || 'Pinata upload failed');
+  let body: any; try { body = JSON.parse(text); } catch {}
+
+  if (!res.ok || !body?.IpfsHash) {
+    const msg = body?.error?.message || body?.error || body?.message || `${res.status} ${res.statusText}`;
+    throw new Error(`Pinata upload failed: ${msg}`);
+  }
   return body.IpfsHash;
 }
 
 
+
+
 // Returns threshold for minting NFT (from pool/locker config)
+// Returns threshold for minting NFT (prefer metadata → attributes → fallback)
 function getMintThreshold(pool: PoolType): number {
-  const t = pool.nftThreshold ?? 0;         
-  return t > 0 ? t : 10_000;              // fallback
+  // 1) prefer the parsed numeric field we attach in the fetcher
+  const fromPool = Number((pool as any).nftThreshold);
+  if (Number.isFinite(fromPool) && fromPool > 0) return Math.floor(fromPool);
+
+  // 2) fallback: read an attribute named "Threshold"
+  const rawAttr = (pool.attributes ?? [])
+    .find?.((a: any) => String(a?.trait_type ?? '').toLowerCase() === 'threshold')
+    ?.value;
+  const parsedAttr = Number(String(rawAttr).replace(/[,_\s]/g, ''));
+  if (Number.isFinite(parsedAttr) && parsedAttr > 0) return Math.floor(parsedAttr);
+
+  // 3) last resort default
+  return 10_000;
 }
+
 
 const POOL_PROGRAM_ID = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV');
 const LOCKER_PROGRAM_ID = new PublicKey('cJcMJ8YWacxRPMG5r1E8GmVgxnS9KogUe6m7sN2TaHS');
-const METADATA_PROGRAM_ID   = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"); // ← NEW
+
 const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad');
 const PROJECT_WALLET = new PublicKey('34JBFxZnw7f6Ye9dsHpeLTnDjA1cU3HnJL1ABFVpjBMb');
 const connection = new Connection("https://api.devnet.solana.com", "confirmed");
-const metaplex = Metaplex.make(connection);
+
 
 const poolMcap = (p: PoolType) => p.ammReserves?.woodeng ?? 0;
 // 44 000 000 MEME (raw, i.e. decimals *not* applied)
@@ -660,35 +866,134 @@ const [priceSeriesByMint, setPriceSeriesByMint] = useState<
 >({});
 
 
+
+// Bumps whenever any mint gets a new last point — forces memo recomputes.
+const seriesTick = React.useMemo(() => {
+  let acc = 0;
+  for (const arr of Object.values(priceSeriesByMint)) {
+    const t = arr.length ? arr[arr.length - 1].time : 0;
+    acc = (acc * 9973 + t) | 0;
+  }
+  for (const arr of Object.values(persistedSeriesByMint)) {
+    const t = arr.length ? arr[arr.length - 1].time : 0;
+    acc = (acc * 9973 + t) | 0;
+  }
+  return acc;
+}, [priceSeriesByMint, persistedSeriesByMint]);
+
+
+
+
+// Merge server history + live points, optionally clipped to a time window.
+function mergedSeries(mintStr: string, windowMs?: number) {
+  const now = Date.now();
+  const live = (priceSeriesByMint[mintStr] ?? []).map(p => ({
+    time: Number(p.time),
+    price: Number(p.price),
+  }));
+  const persisted = (persistedSeriesByMint[mintStr] ?? []).map(p => ({
+    time: Number(p.time),
+    price: Number(p.price),
+  }));
+
+  const all = [...persisted, ...live]
+  .filter(p => Number.isFinite(p.time) && Number.isFinite(p.price) && p.price > 0)
+  .filter(p => (windowMs ? p.time >= now - windowMs : true))
+  .sort((a, b) => a.time - b.time);
+
+
+  // keep the most recent point inside each second bucket
+const buckets = new Map<number, { time: number; price: number }>();
+for (const pt of all) {
+  const key = Math.floor(pt.time / 1000);
+  const cur = buckets.get(key);
+  if (!cur || pt.time >= cur.time) buckets.set(key, pt);
+}
+return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
+
+}
+
+
+
+const latestPriceOf = (mint: string) => {
+  const s = mergedSeries(mint);
+  return s.length ? s[s.length - 1].price : 0;
+};
+
+
 const pushPricePoint = useCallback((mintStr: string, priceLamports: number) => {
+  if (!Number.isFinite(priceLamports) || priceLamports <= 0) return; // ← hard guard
+
   const priceUi = priceLamports / 10 ** WOODENG_DECIMALS; // lamports → WOODENG
+  const time = Date.now();
+
   setPriceSeriesByMint(prev => {
-    const arr = [...(prev[mintStr] ?? []), { time: Date.now(), price: priceUi }];
-    return { ...prev, [mintStr]: arr.slice(-500) }; // keep last 500 points
+    const arr = [...(prev[mintStr] ?? []), { time, price: priceUi }];
+    return { ...prev, [mintStr]: arr.slice(-500) };
   });
+
+  try {
+    // store only valid >0 prices
+    localStorage.setItem(`lastPrice:${mintStr}`, JSON.stringify({ time, priceLamports }));
+  } catch {}
+
+  persistPricePoint(mintStr, priceLamports, time);
 }, []);
 
 
-// Persist to server (throttled) so charts are shared across users
-const lastPostedRef = useRef<Map<string, number>>(new Map());
 
-async function persistPricePoint(mintStr: string, priceLamports: number) {
-  const now = Date.now();
-  const last = lastPostedRef.current.get(mintStr) ?? 0;
-  if (now - last < 10_000) return; // at most once / 10s per mint
-  lastPostedRef.current.set(mintStr, now);
 
-  try {
-    await fetch('/api/pricepoints/ingest', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mint: mintStr, priceLamports }),
-    });
-  } catch {
-    // ignore transient errors; we'll send again later
+
+
+// We always keep the most recent price and flush it shortly after the last update.
+// was: useRef<Map<string, { timer: any; last: number }>>(new Map())
+const flushTimersRef = useRef<Map<string, {
+  timer: ReturnType<typeof setTimeout>;
+  last: number;
+  atMs: number;
+}>>(new Map());
+
+async function persistPricePoint(mintStr: string, priceLamports: number, atMs: number) {
+  const existing = flushTimersRef.current.get(mintStr);
+  if (existing) {
+    existing.last = priceLamports;
+    existing.atMs = atMs;                 // ✅ tracked timestamp
+    clearTimeout(existing.timer);
   }
+
+  const timer = setTimeout(async () => {
+    const entry = flushTimersRef.current.get(mintStr);
+    if (!entry) return;
+    try {
+      await fetch('/api/pricepoints/ingest', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mint: mintStr, priceLamports: entry.last, at: entry.atMs }),
+      });
+    } finally {
+      flushTimersRef.current.delete(mintStr);
+    }
+  }, 1000);
+
+  flushTimersRef.current.set(mintStr, { timer, last: priceLamports, atMs });
 }
 
+
+
+async function fetchAsBlob(url: string): Promise<Blob> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Fetch failed ${r.status} ${r.statusText}`);
+  return await r.blob();
+}
+
+async function ensureIpfsUri(src?: string, filenameHint?: string) {
+  if (!src) return '';
+  if (src.startsWith('ipfs://')) return src;
+  // If it’s your local /ipfs/... proxy or a public gateway, re-pin it to your Pinata
+  const blob = await fetchAsBlob(src);
+  const cid  = await pinFile(blob, filenameHint || 'media.bin');
+  return `ipfs://${cid}`;
+}
 
 
 // put this near the other top-level utils
@@ -730,7 +1035,6 @@ const asNumber = (x?: BN | number) =>
 
 function rangeMs(range: string) {
   switch (range) {
-    case '1s':  return 1_000;
     case '1m':  return 60_000;
     case '5m':  return 5 * 60_000;
     case '30m': return 30 * 60_000;
@@ -747,24 +1051,99 @@ function rangeMs(range: string) {
 
 
 
-// % change over last 24h from persisted series (already fetched for all pools)
-const change24hFor = useCallback((mintStr: string): number => {
-  const series = priceSeriesByMint[mintStr] ?? [];
-  if (series.length < 2) return 0;
+
+/** Build OHLC candles from ALL ticks using the given timeframe.
+ *  GAP-FILLING: emits a candle for every bucket, even if no trades happened.
+ *  Caps to the last 1000 bars for sanity.
+ */
+function buildCandles(mintStr: string, tf: Timeframe) {
+  const bucketMs = TF_MS[tf];
+
+  const pts = mergedSeries(mintStr)
+    .sort((a, b) => a.time - b.time);
+
+  if (!pts.length) return [];
+
+  const firstBucket = bucketStart(pts[0].time, tf);
+  const lastBucket  = bucketStart(pts[pts.length - 1].time, tf);
+
+  const out: { t:number; o:number; h:number; l:number; c:number }[] = [];
+  let i = 0;
+  let lastClose = pts[0].price;
+
+  for (let t = firstBucket; t <= lastBucket; t += bucketMs) {
+    // Flat gap candle by default; override if trades exist in this bucket.
+    let o = lastClose, h = lastClose, l = lastClose, c = lastClose;
+    let saw = false;
+
+    while (i < pts.length && bucketStart(pts[i].time, tf) === t) {
+      const p = pts[i].price;
+      if (!saw) {
+        // OPEN = first trade inside the bucket
+        o = p; h = p; l = p; c = p;
+        saw = true;
+      } else {
+        if (p > h) h = p;
+        if (p < l) l = p;
+        c = p;
+      }
+      lastClose = c;
+      i++;
+    }
+
+    out.push({ t, o, h, l, c });
+  }
+
+  const MAX = 1000;
+  return out.length > MAX ? out.slice(out.length - MAX) : out;
+}
+
+
+
+
+
+
+
+// % change over last 24h — use merged (persisted + live + localStorage) data
+const change24hFor = React.useCallback((mintStr: string): number => {
+  const all = mergedSeries(mintStr);          // full history (persisted + live + local)
+  if (all.length < 2) return 0;
 
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  const last = series[series.length - 1].price;
-  // first point within 24h window (fallback to earliest)
-  const past = (series.find(p => p.time >= cutoff)?.price) ?? series[0].price;
-  if (!past) return 0;
-  return ((last - past) / past) * 100;
-}, [priceSeriesByMint]);
 
-// "Newest" ≈ first time we saw a pricepoint for the mint
+  // binary search: index of last point with time <= cutoff
+  let lo = 0, hi = all.length - 1, baseIdx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (all[mid].time <= cutoff) { baseIdx = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+
+  const base = (baseIdx >= 0 ? all[baseIdx].price : all[0].price);
+  const last = all[all.length - 1].price;
+
+  if (!Number.isFinite(base) || base <= 0) return 0;
+  const pct = ((last - base) / base) * 100;
+return Number.isFinite(pct) ? pct : 0;
+
+}, [persistedSeriesByMint, priceSeriesByMint]);
+
+
+
+
+
+
+// "Newest" ≈ first time 
 const createdAtFor = useCallback((mintStr: string): number => {
-  const s = priceSeriesByMint[mintStr] ?? [];
-  return s.length ? s[0].time : 0; // 0 pushes unknowns to the end
-}, [priceSeriesByMint]);
+  return (
+    firstSeenAtByMint[mintStr] ??
+    persistedSeriesByMint[mintStr]?.[0]?.time ??
+    priceSeriesByMint[mintStr]?.[0]?.time ??
+    0
+  );
+}, [firstSeenAtByMint, persistedSeriesByMint, priceSeriesByMint]);
+
+
 
 
 // helper once
@@ -800,7 +1179,7 @@ const filteredPools = React.useMemo(() => {
     return pools.filter(p => p.memeMint.toBase58() === queryRaw);
   }
   return pools.filter(p => scorePool(p) > 0);
-}, [pools, query, queryRaw]);
+}, [pools, query, queryRaw, seriesTick]);
 
 // 2) your existing sorting, but on the filtered set
 const sortedPools = React.useMemo(() => {
@@ -826,7 +1205,7 @@ const sortedPools = React.useMemo(() => {
       break;
   }
   return arr;
-}, [filteredPools, sortMode, change24hFor, createdAtFor]);
+}, [filteredPools, sortMode, change24hFor, createdAtFor, seriesTick]);
 
 // 3) paging stays the same, but uses sortedPools
 const totalPages  = Math.min(10, Math.max(1, Math.ceil(sortedPools.length / PER_PAGE)));
@@ -949,14 +1328,69 @@ async function stillOwnsNft(
 
 
 // ----- NFT LOCK/MINT LOGIC, FULLY FIXED -----
-// ----- NFT LOCK/MINT PREREQ: ensure counter + locker exist -----
+// ── Error helpers (drop-in) ────────────────────────────────────────────────
+function safeStringify(obj: any) {
+  const seen = new WeakSet();
+  try {
+    return JSON.stringify(
+      obj,
+      (k, v) => {
+        if (v instanceof PublicKey) return v.toBase58?.() ?? String(v);
+        if (typeof v?.toString === 'function' && v?.constructor?.name === 'BN') {
+          try { return v.toString(); } catch {}
+        }
+        if (typeof v === 'object' && v !== null) {
+          if (seen.has(v)) return '[Circular]';
+          seen.add(v);
+        }
+        return v;
+      },
+      2
+    );
+  } catch {
+    try { return JSON.stringify(String(obj)); } catch { return String(obj); }
+  }
+}
+
+async function renderError(e: any, connection: Connection) {
+  try {
+    // Web3 send error with logs
+    if (e instanceof SendTransactionError) {
+      const logs = await e.getLogs(connection).catch(() => null);
+      const body = e.message || 'SendTransactionError';
+      return logs && logs.length ? `${body}\n${logs.join('\n')}` : body;
+    }
+
+    // Common shapes
+    if (typeof e === 'string') return e;
+    if (e instanceof Error)     return e.message || e.toString();
+    if (e?.error?.errorMessage) return String(e.error.errorMessage);
+    if (e?.error?.message)      return String(e.error.message);
+    if (e?.message)             return String(e.message);
+    if (e?.reason)              return String(e.reason);
+    if (e?.status && e?.statusText) return `HTTP ${e.status} ${e.statusText}`;
+
+    // Anchor/IDL builder often throws plain objects; include keys + json
+    const keys = e && typeof e === 'object' ? Object.keys(e) : [];
+    if (keys.length) return `${Object.prototype.toString.call(e)} ${safeStringify(e)}`;
+
+    // Last resort
+    return String(e);
+  } catch {
+    return String(e);
+  }
+}
+
+
+
 async function ensureLockerInitialized(
   pool: PoolType & { nftMint: PublicKey },
   walletCtx: WalletContextState
 ) {
   const memeMint    = pool.memeMint;
   const nftMint     = pool.nftMint;
-  const threshold   = pool.nftThreshold ?? 10000;
+  const threshold   = getMintThreshold(pool);
+
   const meme_name   = pool.name   ?? "Meme";
   const meme_symbol = pool.symbol ?? "MEME";
   const meme_uri    = pool.imageUrl ?? "";
@@ -1001,21 +1435,23 @@ async function ensureLockerInitialized(
 
   // 6) Initialize the locker
   await lockerProgram.methods.initializeLocker(
-    new BN(threshold),
-    meme_name,
-    meme_symbol,
-    meme_uri,
-  ).accounts({
-    user: walletCtx.publicKey!,
-    counter: counterPda,
-    locker: lockerPda,
-    memeMint,
-    nftMint,
-    lockerMemeAccount,
-    systemProgram: SystemProgram.programId,
-    tokenProgram: TOKEN_PROGRAM_ID,
-    rent: SYSVAR_RENT_PUBKEY,
-  }).rpc();
+  new BN(threshold),
+  meme_name,
+  meme_symbol,
+  meme_uri,
+).accounts({
+  user: walletCtx.publicKey!,
+  counter: counterPda,
+  locker: lockerPda,
+  memeMint,
+  nftMint,
+  lockerMemeAccount,
+  systemProgram: SystemProgram.programId,
+  tokenProgram: TOKEN_PROGRAM_ID,
+  associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+  rent: SYSVAR_RENT_PUBKEY,
+}).rpc();
+
 }
 
 
@@ -1055,31 +1491,39 @@ async function lockTokens(
     const name   = pool.name   ?? "Meme";
     const symbol = pool.symbol ?? "MEME";
 
-    // -------- 0) off-chain uploads (no wallet popups) ----------
-    setStep(1, 3, "Uploading NFT metadata to IPFS…");
-    const imageUrl = pool.imageFile instanceof File
-      ? `ipfs://${await pinFile(pool.imageFile)}`
-      : pool.imageUrl ?? "";
-    const audioUrl = pool.audioFile instanceof File
-      ? `ipfs://${await pinFile(pool.audioFile)}`
-      : pool.audioUrl ?? "";
+   // -------- 0) off-chain uploads (no wallet popups) ----------
+setStep(1, 3, "Uploading NFT metadata to IPFS…");
 
-    const meta = {
-      name, symbol, description: pool.description ?? "",
-      image: imageUrl, animation_url: audioUrl,
-      attributes: [
-        ...(pool.attributes || []),
-        { trait_type: "MemeMint", value: memeMint.toBase58() },
-      ],
-      properties: { files: [
-        imageUrl ? { uri: imageUrl, type: "image/png" } : undefined,
-        audioUrl ? { uri: audioUrl, type: "audio/mpeg" } : undefined,
-      ].filter(Boolean) }
-    };
-    const cid = await pinFile(
-      new File([new Blob([JSON.stringify(meta)], { type: "application/json" })], "metadata.json")
-    );
-    const metaUri = `https://gateway.pinata.cloud/ipfs/${cid}`;
+const canUseFile = typeof File !== 'undefined';
+const imgIpfs = canUseFile && pool.imageFile instanceof File
+  ? `ipfs://${await pinFile(pool.imageFile)}`
+  : await ensureIpfsUri(pool.imageUrl, 'image');
+
+const audIpfs = canUseFile && pool.audioFile instanceof File
+  ? `ipfs://${await pinFile(pool.audioFile)}`
+  : await ensureIpfsUri(pool.audioUrl, 'audio');
+
+const meta = {
+  name, symbol, description: pool.description ?? "",
+  image: imgIpfs || "",
+  animation_url: audIpfs || "",
+  attributes: [
+    ...(pool.attributes || []),
+    { trait_type: "MemeMint", value: memeMint.toBase58() },
+  ],
+  properties: {
+    files: [
+      imgIpfs ? { uri: imgIpfs, type: "image/png" } : undefined,
+      audIpfs ? { uri: audIpfs, type: "audio/mpeg" } : undefined,
+    ].filter(Boolean)
+  }
+};
+
+const metaBlob = new Blob([JSON.stringify(meta)], { type: "application/json" });
+const cid = await pinFile(metaBlob, "metadata.json");
+const metaUri = `ipfs://${cid}`;
+
+
 
     // -------- 1) pre-derive things we need ----------------------
     setStep(2, 3, "Preparing accounts…");
@@ -1137,32 +1581,34 @@ async function lockTokens(
     }
 
     if (needInitLocker) {
-      ixs.push(
-        await lockerProgram.methods.initializeLocker(
-          new BN(threshold), name, symbol, pool.imageUrl ?? ""
-        )
-        .accounts({
-          user: wallet.publicKey,
-          counter: counterPda,
-          locker: lockerPda,
-          memeMint,
-          nftMint,                  // just-created mint
-          lockerMemeAccount,
-          systemProgram: SystemProgram.programId,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          rent: SYSVAR_RENT_PUBKEY,
-        })
-        .instruction()
-      );
-    }
+  ixs.push(
+    await lockerProgram.methods.initializeLocker(
+  new BN(threshold), name, symbol, metaUri
+)
+
+    .accounts({
+      user: wallet.publicKey,
+      counter: counterPda,
+      locker: lockerPda,
+      memeMint,
+      nftMint,                  // just-created mint
+      lockerMemeAccount,
+      systemProgram: SystemProgram.programId,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      rent: SYSVAR_RENT_PUBKEY,
+    })
+    .instruction()
+  );
+}
+
 
     // final mint (locks tokens & mints NFT, creates metadata inside the program)
-    const metadataPda = (
-      await PublicKey.findProgramAddress(
-        [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), nftMint.toBuffer()],
-        METADATA_PROGRAM_ID
-      )
-    )[0];
+    const [metadataPda] = PublicKey.findProgramAddressSync(
+  [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), nftMint.toBuffer()],
+  METADATA_PROGRAM_ID
+);
+
 
     ixs.push(
       await lockerProgram.methods
@@ -1184,29 +1630,44 @@ async function lockTokens(
     );
 
     // -------- 2) single signature send --------------------------
-    setStep(3, 3, "Sign once to mint your sound NFT…");
-    try {
-      await sendIxsOnce(connection, wallet, ixs, mintBuild.signers);
-    } catch (e: any) {
-      let logs = '';
-      try {
-        if (e instanceof SendTransactionError) {
-          const l = await e.getLogs(connection);
-          if (l?.length) logs = '\n' + l.join('\n');
-        }
-      } catch {}
-      throw new Error((e?.message ?? String(e)) + logs);
-    }
+setStep(3, 3, "Sign once to mint your sound NFT…");
 
-    setTxStep(null);
-    onMintSuccess?.({ mint: nftMint, memeMint: memeMint.toBase58(), lockId });
-    await refresh();
-    await refreshBalances();
-  } catch (err: any) {
-    setTxStep(null);
-    setStatus("NFT mint failed: " + (err.message ?? err.toString()));
-    throw err;
-  }
+let sig: string;
+try {
+  sig = await sendIxsOnce(connection, wallet, ixs, mintBuild.signers);
+} catch (e: any) {
+  setTxStep(null);
+  const msg = await renderError(e, connection);
+  console.error('Mint failed (post-send):', e);
+  setStatus(`NFT mint failed: ${msg}`);
+  throw e; // keep bubbling so outer refresh is skipped
+}
+
+
+// we minted — close the stepper and notify
+setTxStep(null);
+onMintSuccess?.({ mint: nftMint, memeMint: memeMint.toBase58(), lockId });
+
+// refresh UI, but don't treat failures here as mint failures
+try {
+  await refresh();
+  await refreshBalances();
+  setStatus(`Minted! Tx ${sig.slice(0, 8)}…`);
+} catch (e) {
+  console.warn("Mint succeeded but UI refresh failed:", e);
+  setStatus("Minted! UI may take a moment to update.");
+}
+
+
+} catch (err: any) {
+  setTxStep(null);
+  const msg = await renderError(err, connection);
+  console.error('Mint failed (pre-send):', err);
+  setStatus(`NFT mint failed (pre-send): ${msg}`);
+}
+
+
+
 }
 
 
@@ -1454,171 +1915,283 @@ const ata = await getAssociatedTokenAddress(memeMint, wallet.publicKey!);
 
 
 // ------ Fetch pools and calculate price from AMM reserves ------
-async function fetchSoundMemePoolsWithMetadata(poolProgram: Program) {
-  // 1️⃣ Let Anchor fetch and decode all SoundMemeConfig PDAs for us:
-   // derive your authority pubkey from the Anchor Program instance:
-// only pull down those configs *you* initialized
-// ── REPLACEMENT CODE ───────────────────────────────────────────
-// (1) pull every config that has the new size 8 + 249 bytes
-const rawConfigs = await connection.getProgramAccounts(
-  POOL_PROGRAM_ID,
-  {
-    
-    filters: [{ dataSize: 8 + 350 }],
-
-  }
-);
-
-const configs = rawConfigs
-  .map(({ pubkey, account: { data } }) => ({
-    publicKey: pubkey,
-    account  : poolProgram.coder.accounts.decode(
-                 "SoundMemeConfig",
-                 data,
-               ),
-  }))
-  
-  // NEW – accept ≥1
-.filter(c => c.account.version === CONFIG_VERSION)
-
-
-
-  
-
-
-
-
- 
-
-
- 
-
-
-
-
-    return await Promise.all(
-    configs.map(async (c: any) => {
-      let meta: any       = {};
-      let price = 0;
-      let reserves = { meme: 0, woodeng: 0 };
-      let decimals = 0;
-      // ← add these two so they're in-scope everywhere in this function
-      let totalSupply = 0;
-      let marketCap   = 0;
-
-      
-// 👇 add this before the try
-let quoteMintPk: PublicKey = WOODENG_MINT;
-
-      try {
-            // --- convert Anchor enum (object *or* number) to 0 | 1 ------------
-    const raw      = c.account.poolType as number | { bonding?: {}; amm?: {} };
-    const poolType = typeof raw === "number"
-      ? raw                             // already 0 | 1
-      : ("amm" in raw ? 1 : 0);         // object form
-        // ── 1) fetch the mint
-        const mintPubkey = new PublicKey(c.account.memeMint);
-        // quote mint stored on-chain as `woodengMint` in the config (can be WOODENG or wSOL)
-        quoteMintPk = new PublicKey((c.account as any).woodengMint);
-
-        const mintInfo   = await getMint(connection, mintPubkey);
-        decimals         = Number(mintInfo.decimals);
-
-
-
-
-        // 1. Get metadata
-        const nft = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
-        meta = {
-          imageUrl: nft.json?.image || "",
-          audioUrl: nft.json?.animation_url || "",
-          name: nft.name || "",
-          description: nft.json?.description || "",
-          symbol: nft.symbol || "",
-          attributes: nft.json?.attributes || [],
-          category: nft.json?.attributes?.find((a: any) => a.trait_type === "Category")?.value || "",
-        };
-        // 2. Get config PDA
-        const [configPda] = await getConfigPda(mintPubkey);
-
-        // 3. Get reserves from on-chain vault PDAs
-        const [poolMemeVault] = await PublicKey.findProgramAddress(
-          [Buffer.from('pool_meme_vault'), mintPubkey.toBuffer()],
-          POOL_PROGRAM_ID
-        );
-        const [poolWoodengVault] = await PublicKey.findProgramAddress(
-          [Buffer.from('pool_woodeng_vault'), mintPubkey.toBuffer()],
-          POOL_PROGRAM_ID
-        );
-
-        const memeAcct = await connection.getTokenAccountBalance(poolMemeVault);
-        const woodengAcct = await connection.getTokenAccountBalance(poolWoodengVault);
-        reserves = {
-          meme: Number(memeAcct.value.amount),
-          woodeng: Number(woodengAcct.value.amount)
-        };
-
-          // ── 3) compute price
-        // price (AMM path)
-if (poolType === 0) {
-  price = bondingSpotPrice({
-    vtokens:     asNumber((c.account as any).vtokens),
-    vwoodeng:    asNumber((c.account as any).vwoodeng),
-    bondingSold: asNumber((c.account as any).bondingSold),
-  });
-} else if (reserves.meme > 0 && reserves.woodeng > 0) {
-  price = (reserves.woodeng / 10 ** QUOTE_DECIMALS) / (reserves.meme / 10 ** decimals);
-} else {
-  price = 1;
+// ---- helpers used by the batched fetch --------------------------------
+function readU64LE(buf: Buffer, offset: number): number {
+  // token amounts & supply fit safely in JS number for this app
+  return Number(buf.readBigUInt64LE(offset));
 }
 
 
-        // ── 4) now that we know `price`, compute supply & marketCap
-        const supplyRaw = Number(mintInfo.supply);
-        totalSupply     = supplyRaw / 10 ** decimals;
-        marketCap       = price * totalSupply;
+function toHttp(url: string | undefined): string | undefined {
+  if (!url) return url;
+  if (url.startsWith('ipfs://')) {
+    const rest = url.slice(7).replace(/^ipfs\//, '');
+    return `/ipfs/${rest}`;
+  }
+  return url;
+}
 
-      } catch (err) {
-        console.warn("Pool metadata fetch failed – using defaults:", err);
+
+async function getMultiple(
+  keys: PublicKey[],
+  chunk = 100
+): Promise<(import("@solana/web3.js").AccountInfo<Buffer> | null)[]> {
+  const out: (import("@solana/web3.js").AccountInfo<Buffer> | null)[] = [];
+  for (let i = 0; i < keys.length; i += chunk) {
+    const part = keys.slice(i, i + chunk);
+    const infos = await connection.getMultipleAccountsInfo(part, "confirmed");
+    out.push(...infos);
+  }
+  return out;
+}
+async function mapLimit<T, R>(
+  arr: T[],
+  limit: number,
+  fn: (x: T, i: number) => Promise<R>
+): Promise<R[]> {
+  const ret: R[] = new Array(arr.length);
+  let i = 0;
+  const workers = new Array(Math.min(limit, arr.length)).fill(0).map(async () => {
+    while (i < arr.length) {
+      const idx = i++;
+      ret[idx] = await fn(arr[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return ret;
+}
+
+// ------ BATCHED & SCALABLE FETCH ---------------------------------------
+async function fetchSoundMemePoolsWithMetadata(poolProgram: Program) {
+  // 1) Pull raw configs once
+  const rawConfigs = await connection.getProgramAccounts(POOL_PROGRAM_ID, {
+    filters: [{ dataSize: 8 + 350 }], // your config size
+  });
+
+  const configs = rawConfigs
+    .map(({ pubkey, account: { data } }) => ({
+      publicKey: pubkey,
+      account: poolProgram.coder.accounts.decode("SoundMemeConfig", data),
+    }))
+    .filter((c: any) => (c.account as any).version === CONFIG_VERSION);
+
+  if (configs.length === 0) return [];
+
+  // 2) Derive all addresses we’ll need (CPU-only)
+  const memeMints = configs.map((c: any) => new PublicKey((c.account as any).memeMint));
+  const quoteMints = configs.map((c: any) => new PublicKey((c.account as any).woodengMint));
+
+  const memeVaults = await Promise.all(
+    memeMints.map(async (m) => (await PublicKey.findProgramAddress(
+      [Buffer.from("pool_meme_vault"), m.toBuffer()],
+      POOL_PROGRAM_ID
+    ))[0])
+  );
+  const woodVaults = await Promise.all(
+    memeMints.map(async (m) => (await PublicKey.findProgramAddress(
+      [Buffer.from("pool_woodeng_vault"), m.toBuffer()],
+      POOL_PROGRAM_ID
+    ))[0])
+  );
+  const metadataPDAs = await Promise.all(
+    memeMints.map(async (m) => (await PublicKey.findProgramAddress(
+      [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), m.toBuffer()],
+      METADATA_PROGRAM_ID
+    ))[0])
+  );
+
+  // 3) Batch-fetch mint accounts, token accounts, and metadata PDAs
+  const mintInfos = await getMultiple(memeMints);
+  const memeVaultInfos = await getMultiple(memeVaults);
+  const woodVaultInfos = await getMultiple(woodVaults);
+  const metadataInfos = await getMultiple(metadataPDAs);
+
+  // 4) Decode on-chain pieces (no extra RPC)
+  type DecodedOnChain = {
+    decimals: number;
+    supplyUi: number;
+    memeReserveRaw: number;
+    woodReserveLamports: number;
+    metaName: string;
+    metaSymbol: string;
+    metaUri?: string;
+  };
+
+  const decoded: DecodedOnChain[] = memeMints.map((_, i) => {
+    // Mint account (size 82)
+    const mi = mintInfos[i]?.data;
+    let decimals = 0;
+    let supplyUi = 0;
+    if (mi && mi.length >= 82) {
+      decimals = mi[44];
+      const supplyRaw = readU64LE(mi, 36);
+      supplyUi = supplyRaw / 10 ** decimals;
+    }
+
+    // Token vaults (size 165)
+    const memeAcc = memeVaultInfos[i]?.data;
+    const woodAcc = woodVaultInfos[i]?.data;
+    const memeReserveRaw = memeAcc ? readU64LE(memeAcc, 64) : 0;
+    const woodReserveLamports = woodAcc ? readU64LE(woodAcc, 64) : 0;
+
+    // Token Metadata PDA
+    const mdi = metadataInfos[i]?.data;
+    let metaName = "";
+    let metaSymbol = "";
+    let metaUri: string | undefined = undefined;
+    if (mdi) {
+      try {
+        const [md] = Metadata.deserialize(mdi);
+        metaName   = clean((md as any).data.name);
+metaSymbol = clean((md as any).data.symbol);
+metaUri    = clean((md as any).data.uri);
+      } catch {
+        // ignore malformed metadata
       }
-        
-    /* ─── 5. Build the final plain-JS object ───────────────────────── */
-     // --- convert Anchor enum (object *or* number) to 0 | 1 ------------
-const raw      = c.account.poolType as number | { bonding?: {}; amm?: {} };
-const poolType = typeof raw === "number"
-  ? raw                             // already 0 | 1
-  : ("amm" in raw ? 1 : 0);         // object form
+    }
+
+    return { decimals, supplyUi, memeReserveRaw, woodReserveLamports, metaName, metaSymbol, metaUri };
+  });
+
+  // 5) Pull off-chain JSON in a limited-concurrency pool (HTTP only)
+  const jsons = await mapLimit(
+    decoded.map((d) => toHttp(d.metaUri)),
+    6,
+    async (uri) => {
+      if (!uri) return null;
+      try {
+        const r = await fetch(uri, { cache: "no-store" });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch {
+        return null;
+      }
+    }
+  );
+
+  // 6) Build final objects without more RPC
+  const out = configs.map((c: any, i: number) => {
+    const cfg = c.account as any;
+
+    // Normalize enum poolType: number | { bonding|amm: {} } -> 0|1
+    const raw = cfg.poolType as number | { bonding?: {}; amm?: {} };
+    const poolType: 0 | 1 = (typeof raw === "number" ? raw : ("amm" in raw ? 1 : 0)) as 0 | 1;
+
+    const m = decoded[i];
+    const quoteMintPk = quoteMints[i];
+
+    // Price
+    let price = 1;
+    if (poolType === 0) {
+      price = bondingSpotPrice({
+        vtokens: asNumber(cfg.vtokens),
+        vwoodeng: asNumber(cfg.vwoodeng),
+        bondingSold: asNumber(cfg.bondingSold),
+      });
+    } else if (m.memeReserveRaw > 0 && m.woodReserveLamports > 0) {
+      // AMM: (quote / quoteDec) / (meme / memeDec)
+      price =
+        (m.woodReserveLamports / 10 ** QUOTE_DECIMALS) /
+        (m.memeReserveRaw / 10 ** m.decimals);
+    }
+
+    const marketCap = price * (m.supplyUi ?? 0);
+
+    const j = jsons[i] || {};
+    const attributes = Array.isArray(j.attributes) ? j.attributes : [];
+    const category =
+      attributes.find?.((a: any) => a?.trait_type === "Category")?.value ?? "";
 
 
-const {
-  lastMemePrice,
-  vtokens,
-  vwoodeng,
-  bondingSold,
-  ...rest
-} = c.account as any;
+      // --- Social links extraction ---
+const norm = (u?: string) => {
+  if (!u) return undefined;
+  const s = String(u).trim();
+  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
+};
+// attribute helper fallback
+const attrVal = (name: string) => {
+  if (!Array.isArray(j.attributes)) return undefined;
+  const hit = j.attributes.find((a: any) =>
+    String(a?.trait_type ?? "").toLowerCase() === name.toLowerCase()
+  );
+  return hit?.value;
+};
 
-return {
-  pubkey: c.publicKey,
-  ...rest,
-  poolType,                                     // ⬅️ normalised enum
-  lastMemePrice: asNumber(lastMemePrice),
-  vtokens      : asNumber(vtokens),
-  vwoodeng     : asNumber(vwoodeng),
-  bondingSold  : asNumber(bondingSold),
-  ammReserves: reserves,
-  price,
-  decimals,
-  totalSupply,
-  marketCap,
-  quoteMint: quoteMintPk,
-  ...meta
+const socials = {
+  x:        norm(j?.extensions?.twitter ?? j?.socials?.x ?? j?.twitter ?? j?.x ?? attrVal("X") ?? attrVal("Twitter")),
+  telegram: norm(j?.extensions?.telegram ?? j?.socials?.telegram ?? j?.telegram ?? attrVal("Telegram") ?? attrVal("TG")),
+  website:  norm(j?.external_url ?? j?.extensions?.website ?? j?.socials?.website ?? j?.website ?? attrVal("Website")),
 };
 
 
-    })
-  );
+
+// --- Threshold extraction from metadata (robust) ---
+const coerceNum = (v: any) => {
+  if (v == null) return NaN;
+  const s = String(v).replace(/[,_\s]/g, ''); // "50,000" -> "50000"
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
+};
+
+// `attrVal` already exists a few lines above; we reuse it here.
+// If it doesn't in your copy, paste this helper:
+// const attrVal = (name: string) => {
+//   if (!Array.isArray(j.attributes)) return undefined;
+//   const hit = j.attributes.find((a: any) =>
+//     String(a?.trait_type ?? '').toLowerCase() === name.toLowerCase()
+//   );
+//   return hit?.value;
+// };
+
+const thresholdMeta =
+  j?.extensions?.threshold ??
+  j?.socials?.threshold ??      // tolerate odd metadata
+  attrVal('Threshold') ??       // trait casing
+  attrVal('threshold');
+
+const nftThreshold =
+  coerceNum(thresholdMeta) > 0 ? Math.floor(coerceNum(thresholdMeta)) : undefined;
+
+
+
+
+
+    return {
+      pubkey: c.publicKey,
+      poolType,
+      lastMemePrice: asNumber(cfg.lastMemePrice),
+      vtokens: asNumber(cfg.vtokens),
+      vwoodeng: asNumber(cfg.vwoodeng),
+      bondingSold: asNumber(cfg.bondingSold),
+      memeMint: new PublicKey(cfg.memeMint),
+      quoteMint: quoteMintPk,
+      ammReserves: {
+        meme: m.memeReserveRaw,
+        woodeng: m.woodReserveLamports,
+      },
+      price,
+      decimals: m.decimals,
+      totalSupply: m.supplyUi,
+      marketCap,
+
+      // metadata / UI
+      name: m.metaName || j.name || "",
+      symbol: m.metaSymbol || j.symbol || "",
+      description: j.description || "",
+      imageUrl: toHttp(j.image || ""),
+audioUrl: toHttp(j.animation_url || ""),
+
+      attributes,
+      category,
+      socials,
+      nftThreshold,
+    } as PoolType;
+  });
+
+  return out;
 }
+
 
 
 // REPLACE the whole sellSoundMeme with this version (auto-unwrap to SOL)
@@ -1713,30 +2286,44 @@ const refreshBalances = useCallback(async () => {
     return;
   }
 
-  // 1) MEME balances (per pool mint)
-  const mints = pools.map(p => p.memeMint);
-  const raw   = await Promise.all(mints.map(mint => fetchUserMemeBalance(wallet, mint)));
-  const map: Record<string, number> = {};
-  mints.forEach((mint, i) => { map[mint.toBase58()] = raw[i]; });
-  setBalancesByMint(map);
+  // 1) Pull ALL SPL token accounts for the wallet in one RPC
+  const parsed = await connection.getParsedTokenAccountsByOwner(
+    wallet.publicKey,
+    { programId: TOKEN_PROGRAM_ID },         // classic SPL-Token
+    'confirmed'
+  );
 
-  // 2) Quote balances (unique quote mints among visible pools)
-  const quoteSet = Array.from(new Set(
-  pools.map(p => p.quoteMint?.toBase58()).filter(Boolean) as string[]
-));
+  // Map of mint -> raw amount (no decimals applied)
+  const rawByMint: Record<string, number> = {};
+  for (const { account } of parsed.value) {
+    try {
+      const info = (account.data as any).parsed.info;
+      const mint = String(info.mint);
+      const amountRaw = Number(info.tokenAmount.amount);
+      rawByMint[mint] = amountRaw;
+    } catch {/* ignore malformed */ }
+  }
 
-const qMap: Record<string, number> = {};
-for (const q of quoteSet) {
-  if (q === WSOL_MINT.toBase58()) {
-  const nativeLamports = await connection.getBalance(wallet.publicKey);
-  qMap[q] = nativeLamports; // show only native SOL
-} else {
-  qMap[q] = await fetchUserMemeBalance(wallet, new PublicKey(q));
-}
+  // 2) Fill balances ONLY for the meme mints we display
+  const memeMintStrs = pools.map(p => p.memeMint.toBase58());
+  const memeBalances: Record<string, number> = {};
+  for (const m of memeMintStrs) memeBalances[m] = rawByMint[m] ?? 0;
+  setBalancesByMint(memeBalances);
 
-}
-setQuoteBalancesRaw(qMap);
+  // 3) Quote balances
+  const qMap: Record<string, number> = {};
+  const quoteSet = Array.from(new Set(pools.map(p => p.quoteMint.toBase58())));
+  for (const q of quoteSet) {
+    if (q === WSOL_MINT.toBase58()) {
+      // show **native SOL** only (wSOL is ephemeral)
+      qMap[q] = await connection.getBalance(wallet.publicKey, 'confirmed');
+    } else {
+      qMap[q] = rawByMint[q] ?? 0;
+    }
+  }
+  setQuoteBalancesRaw(qMap);
 }, [wallet.publicKey, pools]);
+
 
 
 
@@ -1826,10 +2413,13 @@ const refreshUserNfts = useCallback(async () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
 
-  const [showDetail, setShowDetail] = useState(false);
-  const [detailPool, setDetailPool] = useState<any | null>(null);
 
-  const [selectedTimeRange, setSelectedTimeRange] = useState('24H');
+
+  const [hoverDeltaPct, setHoverDeltaPct] = useState<number | null>(null);
+
+  useEffect(() => { setHoverDeltaPct(null); }, [selectedTimeRange, detailPool, showDetail]);
+
+
 
  
 
@@ -1886,6 +2476,52 @@ const handleMintNft = (pool: PoolType) => {
 
 
 
+useEffect(() => {
+  const flushAll = () => {
+    flushTimersRef.current.forEach((entry, mint) => {
+      try {
+        // Prefer sendBeacon for reliability during unload
+        const ok = navigator.sendBeacon?.(
+  '/api/pricepoints/ingest',
+  new Blob([JSON.stringify({ mint, priceLamports: entry.last, at: entry.atMs })],
+  { type: 'application/json' })
+);
+if (!ok) {
+  fetch('/api/pricepoints/ingest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mint, priceLamports: entry.last, at: entry.atMs }),
+    keepalive: true,
+  });
+}
+
+      } catch {
+        fetch('/api/pricepoints/ingest', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mint, priceLamports: entry.last }),
+          keepalive: true,
+        });
+      }
+    });
+    flushTimersRef.current.clear();
+  };
+
+  const onVis = () => { if (document.visibilityState === 'hidden') flushAll(); };
+
+  window.addEventListener('visibilitychange', onVis);
+  window.addEventListener('beforeunload', flushAll);
+  return () => {
+    window.removeEventListener('visibilitychange', onVis);
+    window.removeEventListener('beforeunload', flushAll);
+    flushAll();
+  };
+}, []);
+
+
+
+
+
 
   useEffect(() => {
   if (!wallet.connected) return;
@@ -1920,8 +2556,11 @@ useEffect(() => {
       subId = await prog.addEventListener('PriceUpdate', (ev: any /* { memeMint, priceLamports } */, _slot) => {
         const mintStr = new PublicKey(ev.memeMint).toBase58();
         const lamports = Number(ev.priceLamports);
-        pushPricePoint(mintStr, Number(ev.priceLamports));
-        persistPricePoint(mintStr, lamports);
+if (lamports > 0) {
+  pushPricePoint(mintStr, lamports);
+  persistPricePoint(mintStr, lamports, Date.now());
+}
+
       });
     } catch (e) {
       console.warn('Event subscription failed (RPC may not support logs). Will rely on polling.', e);
@@ -1938,6 +2577,7 @@ useEffect(() => {
 
 
 // Load existing history for each pool so charts show up on first open
+// 1) Load history (persisted) once per pool set
 useEffect(() => {
   if (pools.length === 0) return;
 
@@ -1953,21 +2593,57 @@ useEffect(() => {
         })
       );
 
-      setPriceSeriesByMint(prev => {
-        const next = { ...prev };
-        for (const [mintStr, arr] of all) {
-          next[mintStr] = arr.map(pt => ({
+      const seriesByMint: Record<string, { time: number; price: number }[]> = {};
+      const firstSeen:    Record<string, number> = {};
+
+      for (const [mintStr, arr] of all) {
+        const series = arr
+          .map(pt => ({
             time: new Date(pt.time).getTime(),
             price: Number(pt.priceLamports) / 10 ** WOODENG_DECIMALS,
-          }));
-        }
-        return next;
-      });
+          }))
+          .sort((a, b) => a.time - b.time);
+
+        seriesByMint[mintStr] = series;
+        if (series.length) firstSeen[mintStr] = series[0].time;
+      }
+
+      setPersistedSeriesByMint(prev => ({ ...prev, ...seriesByMint }));
+      setFirstSeenAtByMint(prev => ({ ...prev, ...firstSeen }));
     } catch (e) {
       console.warn('Failed loading history', e);
     }
   })();
 }, [pools]);
+
+
+
+
+
+  // Bootstrap: if a mint has no DB history yet, write one initial point
+useEffect(() => {
+  if (pools.length === 0) return;
+
+  for (const p of pools) {
+    const mint = p.memeMint.toBase58();
+    const hasHistory = (persistedSeriesByMint[mint]?.length ?? 0) > 0;
+    if (hasHistory) continue;
+
+    // prefer on-chain lastMemePrice; else derive from current displayed price
+    const lamports =
+      Number(p.lastMemePrice ?? 0) > 0
+        ? Number(p.lastMemePrice)
+        : Math.round(Number(p.price ?? 0) * 10 ** WOODENG_DECIMALS);
+
+    if (lamports > 0) {
+      // debounced server write so reloads have a baseline
+      persistPricePoint(mint, lamports, Date.now());
+    }
+  }
+}, [pools, persistedSeriesByMint]);
+
+
+
 
 
 
@@ -1979,13 +2655,55 @@ useEffect(() => {
   let stop = false;
 
   // seed current price for every pool right away
+    // seed current price for every pool right away
+  const seeds: Record<string, number> = {};
   for (const p of pools) {
-    const mintStr = p.memeMint.toBase58();
-    // prefer on-chain config last price if present
-    const lamports = (p.lastMemePrice ?? 0);
-    const derived  = Math.max(1, Math.floor((p.price ?? 0) * 10 ** WOODENG_DECIMALS));
-    pushPricePoint(mintStr, lamports > 0 ? lamports : derived);
+  const mintStr = p.memeMint.toBase58();
+  if (!seededOnceRef.current.has(mintStr)) {
+    const lamportsFromChain = Number(p.lastMemePrice ?? 0);
+
+if (lamportsFromChain > 0) {
+  // seed + persist real chain price so reloads are consistent across users
+  pushPricePoint(mintStr, lamportsFromChain);
+  persistPricePoint(mintStr, lamportsFromChain, Date.now());
+} else if (p.price && p.price > 0) {
+  // derive for UI only; DO NOT persist to server
+  const derivedLamports = Math.round(p.price * 10 ** WOODENG_DECIMALS);
+  if (derivedLamports > 0) {
+    pushPricePoint(mintStr, derivedLamports);
   }
+}
+
+    seededOnceRef.current.add(mintStr);
+
+// remember when we seeded, to only accept newer local values
+const seededAt = Date.now();
+seeds[mintStr] = seededAt;
+
+// try to patch with a more recent local value (if exists)
+try {
+  const raw = localStorage.getItem(`lastPrice:${mintStr}`);
+  if (raw) {
+    const { time, priceLamports } = JSON.parse(raw);
+    if (Number.isFinite(time) && Number.isFinite(priceLamports) && time > seededAt) {
+      pushPricePoint(mintStr, Number(priceLamports));
+    }
+  }
+} catch {}
+
+  }
+}
+
+
+  // set firstSeenAt only for mints that don't have it yet (no clobbering)
+  setFirstSeenAtByMint(prev => {
+    const next = { ...prev };
+    for (const [k, v] of Object.entries(seeds)) {
+      if (next[k] == null) next[k] = v;
+    }
+    return next;
+  });
+
 
   // polling: read config.lastMemePrice every 10s
   const provider = new AnchorProvider(connection, (wallet.publicKey
@@ -1997,16 +2715,22 @@ useEffect(() => {
   const id = setInterval(async () => {
     if (stop) return;
     try {
-      for (const p of pools) {
-        const cfg = await prog.account.soundMemeConfig.fetch(p.pubkey);
-        const lamports = Number((cfg as any).lastMemePrice ?? 0);
-if (lamports > 0) {
-  const mintStr = p.memeMint.toBase58();
-  pushPricePoint(mintStr, lamports);
-  persistPricePoint(mintStr, lamports);   // ← ADD THIS
+      const cfgKeys = pools.map(p => p.pubkey);
+const infos = await getMultiple(cfgKeys); // your helper (chunks of 100)
+
+for (let i = 0; i < cfgKeys.length; i++) {
+  const acc = infos[i];
+  if (!acc?.data) continue;
+
+  const cfg = prog.coder.accounts.decode("SoundMemeConfig", acc.data) as any;
+  const lamports = Number(cfg.lastMemePrice ?? 0);
+  if (lamports > 0) {
+    const mintStr = pools[i].memeMint.toBase58();
+    pushPricePoint(mintStr, lamports);        // live
+    persistPricePoint(mintStr, lamports, Date.now());
+  }
 }
 
-      }
     } catch (e) {
       // swallow intermittent RPC errors
     }
@@ -2038,7 +2762,7 @@ useEffect(() => {
         [mintStr]: rows
           .map(r => ({
             time: new Date(r.time).getTime(),
-            price: Number(r.priceLamports) / 1e9, // lamports → WOODENG
+            price: Number(r.priceLamports) / 10 ** WOODENG_DECIMALS, // lamports → WOODENG
           }))
           .sort((a, b) => a.time - b.time)
           .slice(-2000),
@@ -2059,6 +2783,39 @@ useEffect(() => {
     if (timer) clearInterval(timer);
   };
 }, [showDetail, detailPool]);
+
+
+useEffect(() => {
+  if (!showDetail || !detailPool) return;
+
+  const mintStr = detailPool.memeMint.toBase58();
+
+  // How many points do we already have (persisted + live)?
+  const have =
+    (priceSeriesByMint[mintStr]?.length ?? 0) +
+    (persistedSeriesByMint[mintStr]?.length ?? 0);
+
+  if (have === 0) {
+    // Use on-chain lastMemePrice if present; else fall back to current pool.price
+    const lamports =
+      Number(detailPool.lastMemePrice ?? 0) ||
+      Math.round(Number(detailPool.price ?? 0) * 1e9);
+
+    if (lamports > 0) {
+      // show instantly
+      pushPricePoint(mintStr, lamports);
+      // also persist so a reload keeps it
+      persistPricePoint(mintStr, lamports, Date.now());;
+    }
+  }
+}, [
+  showDetail,
+  detailPool,
+  priceSeriesByMint,
+  persistedSeriesByMint,
+  pushPricePoint,
+]);
+
 
 
 
@@ -2292,6 +3049,20 @@ const minMemeOut = Math.max(
       wallet,
     });
 
+    // Immediately persist the on-chain price so a page reload keeps your last trade
+try {
+  const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
+  const progNow = new Program(poolIdl, POOL_PROGRAM_ID, providerNow);
+  const cfgNow = await progNow.account.soundMemeConfig.fetch(selectedPool.pubkey);
+  const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
+  if (lamportsNow > 0) {
+    const mintStr = selectedPool.memeMint.toBase58();
+    pushPricePoint(mintStr, lamportsNow);       // update in-memory
+    await persistPricePoint(mintStr, lamportsNow, Date.now());
+  }
+} catch {}
+
+
 
       setTransactionStatus('success');
 setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
@@ -2346,6 +3117,23 @@ setBuyFilled({
     if (!selectedPool || !modalTokensToSell) throw new Error('Select amount to sell');
     const memeAmountIn = memeRawIn;
     const tx = await sellSoundMeme({ pool: selectedPool, memeAmountIn, minWoodengOut, wallet });
+
+
+
+
+    // Immediately persist the on-chain price so a page reload keeps your last trade
+try {
+  const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
+  const progNow = new Program(poolIdl, POOL_PROGRAM_ID, providerNow);
+  const cfgNow = await progNow.account.soundMemeConfig.fetch(selectedPool.pubkey);
+  const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
+  if (lamportsNow > 0) {
+    const mintStr = selectedPool.memeMint.toBase58();
+    pushPricePoint(mintStr, lamportsNow);       // update in-memory
+    await persistPricePoint(mintStr, lamportsNow, Date.now());
+  }
+} catch {}
+
 
     setTransactionStatus('success');
     setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
@@ -2553,19 +3341,6 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
     </button>
   </div>
 
-  {/* hash targets for the mobile drawer */}
-<div id="top-gainers" className="scroll-mt-24" />
-<div id="top-marketcap" className="scroll-mt-24" />
-<div id="newest" className="scroll-mt-24" />
-
-<MobileVerticalStacks
-  pools={pools}
-  onOpen={(p) => { setDetailPool(p); setShowDetail(true); }}
-  onBuy={(p) => handleOpenBuyModal(p)}
-  onSell={(p) => handleOpenSellModal(p)}
-  change24hFor={change24hFor}
-  createdAtFor={createdAtFor}
-/>
 
 </div>
 
@@ -2610,45 +3385,81 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
             onClick={() => { setDetailPool(pool); setShowDetail(true); }}
           >
             {/* IMAGE + Overlay */}
-            <div className="relative aspect-square w-full overflow-hidden rounded-t-2xl">
-               <img
-   src={pool.imageUrl || "https://placehold.co/400x400?text=No+Image"}
-   alt={pool.name || 'Sound meme'}
-   className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-   loading="lazy"
-   decoding="async"
-   fetchPriority="low"
-   sizes="(min-width:1280px) 25vw, (min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
- />
-               <div className="absolute inset-0 flex items-center justify-center p-2">
-  <button
-    className="bg-black/70 p-3 rounded-full hover:bg-black/80 transition"
-    onClick={e => { e.stopPropagation(); playDemo(pool.pubkey.toBase58(), pool.audioUrl); }}
+            {/* IMAGE + Overlay */}
+<div className="relative aspect-square w-full overflow-hidden rounded-t-2xl">
+  <img
+    src={pool.imageUrl || "https://placehold.co/400x400?text=No+Image"}
+    alt={pool.name || 'Sound meme'}
+    className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+    loading="lazy"
+    decoding="async"
+    fetchPriority="low"
+    sizes="(min-width:1280px) 25vw, (min-width:1024px) 33vw, (min-width:640px) 50vw, 100vw"
+  />
+  <div className="absolute inset-0 flex items-center justify-center p-2">
+    <button
+      className="bg-black/70 p-3 rounded-full hover:bg-black/80 transition"
+      onClick={e => { e.stopPropagation(); playDemo(pool.pubkey.toBase58(), pool.audioUrl); }}
+    >
+      {playing === pool.pubkey.toBase58() ? (
+        <Pause className="w-6 h-6 text-white" />
+      ) : (
+        <Play className="w-6 h-6 text-white" />
+      )}
+    </button>
+  </div>
+
+  {/* contract chip + copy (bottom-left) */}
+  <div
+    className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/60 backdrop-blur px-2 py-1
+               rounded-md ring-1 ring-white/10 text-[11px] select-text"
   >
-    {playing === pool.pubkey.toBase58() ? (
-      <Pause className="w-6 h-6 text-white" />
-    ) : (
-      <Play className="w-6 h-6 text-white" />
-    )}
-  </button>
+    <span className="font-mono">{shortAddr(pool.memeMint.toBase58())}</span>
+    <button
+      type="button"
+      className="p-1 rounded hover:bg-white/10"
+      title="Copy contract address"
+      onClick={(e) => {
+        e.stopPropagation();
+        try { navigator.clipboard.writeText(pool.memeMint.toBase58()); } catch {}
+        setCopied(pool.memeMint.toBase58());
+        setTimeout(() => setCopied(null), 1200);
+      }}
+    >
+      {copied === pool.memeMint.toBase58()
+        ? <CheckCircle2 className="w-3.5 h-3.5" />
+        : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  </div>
 </div>
 
 
+            
 
-
-
-
-            </div>
             {/* Main Card Info */}
             <div className="flex flex-col flex-1 p-4">
               
-              <div className="text-[#c2c2c9] text-sm truncate">{pool.description || "No description"}</div>
+              {/* Name (front page) */}
+<div className="flex items-center justify-between">
+  <h3 className="text-base font-semibold truncate" title={pool.name ?? ""}>
+    {pool.name ?? "Untitled Meme"}
+  </h3>
+</div>
+
+{/* Description */}
+<div className="text-[#c2c2c9] text-sm mt-1 line-clamp-2">
+  {pool.description || "No description"}
+</div>
+
+              <SocialLinksBar socials={pool.socials} className="mt-2" />
                <div className="mt-3 flex items-center gap-3">
   {/* price + unit */}
   <div className="flex items-baseline gap-2 whitespace-nowrap">
-    <span className="text-[#ffc371] font-bold text-lg tabular-nums">
-      {Number(pool.price ?? 0).toFixed(5)}
-    </span>
+    <TinyPrice
+  value={latestPriceOf(pool.memeMint.toBase58())}
+  className="text-[#ffc371] font-bold text-lg"
+/>
+
     <span className="text-sm text-[#ffc371]/90">{quoteLabelOf(pool)}</span>
   </div>
 
@@ -3326,112 +4137,168 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 )}
 
 
-    {/* Pool Detail Modal */}
+{/* Pool Detail Modal */}
 {showDetail && detailPool && (() => {
   const mintKey = detailPool.memeMint.toBase58();
 
-  // ✅ Build the series from live data if present; otherwise use an empty array.
-  //    Also, clamp to the currently selected time range and ensure numeric timestamps.
-  const now = Date.now();
-  const horizon = rangeMs(selectedTimeRange);
-  const baseSeries = persistedSeriesByMint[mintKey] ?? [];
 
 
-  const series = baseSeries
-    .map(p => ({
-      time: typeof p.time === 'string' ? new Date(p.time).getTime() : Number(p.time),
-      price: Number(p.price),
-    }))
-    .filter(p => (horizon === Infinity ? true : p.time >= now - horizon))
-    .sort((a, b) => a.time - b.time);
+  // ticks = merged (persisted + live) price points for this mint
+const ticks = mergedSeries(mintKey);
+
+// history
+// Normalize server OHLC (lamports) to UI units; fallback to client build if not ready
+const raw = serverCandles[mintKey]?.[selectedTimeRange] ?? [];
+
+const lamportsToUi = (x: number) => x / 10 ** WOODENG_DECIMALS;
+const normalize = (b: { t:number; o:number; h:number; l:number; c:number }) => {
+  // If server already sent UI values (< 1), leave them; if integers (e.g., 2000),
+  // treat as lamports and divide by 1e9 (WOODENG_DECIMALS).
+  const M = Math.max(b.o, b.h, b.l, b.c);
+  const scale = M > 1 ? 10 ** WOODENG_DECIMALS : 1;
+  const f = (v: number) => v / scale;
+  return { t: b.t, o: f(b.o), h: f(b.h), l: f(b.l), c: f(b.c) };
+};
+
+let candles = raw.map(normalize);
+if (!candles.length) {
+  candles = buildCandles(mintKey, selectedTimeRange);
+}
+
+
+  const bucketMs = TF_MS[selectedTimeRange];
+
+  // merge live tick into the correct bucket
+if (ticks.length) {
+  const lastTick = ticks[ticks.length - 1];
+  const tBucket  = bucketStart(lastTick.time, selectedTimeRange);
+
+  if (!candles.length) {
+    // first candle in range opens at the first trade
+    const p = lastTick.price;
+    candles = [{ t: tBucket, o: p, h: p, l: p, c: p }];
+  } else {
+    const last = candles[candles.length - 1];
+
+    if (last.t === tBucket) {
+      // update current (open stays the very first trade of the bucket)
+      const o = last.o;
+      const h = Math.max(last.h, lastTick.price);
+      const l = Math.min(last.l, lastTick.price);
+      const c = lastTick.price;
+      candles[candles.length - 1] = { t: last.t, o, h, l, c };
+    } else if (tBucket > last.t) {
+      // first trade of a *new* bucket: OPEN MUST BE THIS TRADE (not prev close)
+      const p = lastTick.price;
+      candles.push({ t: tBucket, o: p, h: p, l: p, c: p });
+    }
+    // if tBucket < last.t, ignore out-of-order tick
+  }
+}
+
+
+  // time-gap fill up to "now"
+  if (candles.length) {
+    const nowBucket = Math.floor(Date.now() / bucketMs) * bucketMs;
+    while (candles[candles.length - 1].t + bucketMs <= nowBucket) {
+      const c0 = candles[candles.length - 1].c;
+      const t  = candles[candles.length - 1].t + bucketMs;
+      candles.push({ t, o: c0, h: c0, l: c0, c: c0 });
+    }
+  }
+
+  // volume as “number of ticks per bucket”
+  const volMap = new Map<number, number>();
+  for (const pt of ticks) {
+    const b = bucketStart(pt.time, selectedTimeRange);
+    volMap.set(b, (volMap.get(b) ?? 0) + 1);
+  }
+  const volume = candles.map(b => ({ t: b.t, v: volMap.get(b.t) ?? 0, up: b.c >= b.o }));
+
+// Use the last CLOSED bar if available (more stable across reloads)
+const active = candles[candles.length - 1];
+const closed = candles.length >= 2 ? candles[candles.length - 2] : active;
+const basePct = closed && closed.o > 0 ? ((closed.c - closed.o) / closed.o) * 100 : 0;
+
 
   return (
     <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-      <div className="bg-[#23232e] p-6 rounded-2xl max-w-lg w-full relative">
+      <div className="bg-[#23232e] p-6 rounded-2xl max-w-lg w-full relative overflow-hidden">
         <button className="absolute top-4 right-4" onClick={() => setShowDetail(false)}><X /></button>
-        <div className="flex items-center gap-5 mb-4">
-           <img
-  src={detailPool.imageUrl}
-  alt={detailPool.name || 'meme'}
-  className="w-20 h-20 rounded-xl"
-  loading="lazy"
-  decoding="async"
-  sizes="(max-width: 480px) 80px, 96px"
-/>
 
+        {/* header */}
+        <div className="flex items-center gap-5 mb-4">
+          <img
+            src={detailPool.imageUrl}
+            alt={detailPool.name || 'meme'}
+            className="w-20 h-20 rounded-xl"
+            loading="lazy"
+            decoding="async"
+            sizes="(max-width: 480px) 80px, 96px"
+          />
           <div>
             <h2 className="text-2xl font-bold mb-1">{detailPool.name}</h2>
             <div className="text-sm text-[#aab]">{detailPool.description}</div>
+            <SocialLinksBar socials={detailPool.socials} className="mt-2" />
             <div className="flex items-center gap-2 mt-2">
               <span className="text-[#ffc371] font-bold">
-  {detailPool.price?.toFixed(5)} {quoteLabelOf(detailPool)}
-</span>
+                <TinyPrice value={Number(detailPool.price ?? 0)} /> {quoteLabelOf(detailPool)}
+              </span>
               <span className="bg-[#2b323c] text-xs px-2 py-1 rounded">{detailPool.symbol}</span>
             </div>
-            <div className="flex items-center gap-2 text-xs mt-1">
-              <span>Reserves:</span>
-              <span className="text-[#f7f7b2]">
-  {(detailPool.ammReserves?.woodeng / 1e9).toLocaleString(undefined, { maximumFractionDigits: 6 })} {quoteLabelOf(detailPool)}
-</span>
-              <span>/</span>
-              <span className="text-[#f8b2f7]">
-                {(detailPool.ammReserves?.meme / 10 ** (detailPool.decimals ?? MEME_DECIMALS)).toLocaleString(undefined, { maximumFractionDigits: 6 })} {detailPool.symbol}
-              </span>
-            </div>
-            <div className="text-xs text-[#adadff] mt-1">
-  Market Cap: {Number(detailPool.marketCap ?? 0).toFixed(2)} {quoteLabelOf(detailPool)}
-</div>
           </div>
         </div>
 
-        <div>
-          <div className="flex gap-2 mt-4 mb-2">
-            {["1s", "1m", "5m", "30m", "1H", "24H", "7D", "30D", "1Y", "ALL"].map(range => (
-              <button
-                key={range}
-                className={`text-xs px-2 py-1 rounded ${selectedTimeRange === range ? "bg-[#ffc371] text-black" : "bg-[#262635] text-white"}`}
-                onClick={() => setSelectedTimeRange(range)}
-              >
-                {range}
-              </button>
-            ))}
-          </div>
+        {/* timeframe buttons */}
+        <div className="flex gap-2 mt-4 mb-2">
+          {(['15m','30m','1h','4h','24h'] as Timeframe[]).map(tf => (
+            <button
+              key={tf}
+              className={`text-xs px-2 py-1 rounded ${selectedTimeRange === tf ? 'bg-[#ffc371] text-black' : 'bg-[#262635] text-white'}`}
+              onClick={() => setSelectedTimeRange(tf)}
+            >
+              {tf.toUpperCase()}
+            </button>
+          ))}
+        </div>
 
-          <div className="w-full h-56 sm:h-64 md:h-72 bg-[#141419] rounded-xl">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={series}>
-                <CartesianGrid stroke="#23232e" />
-                <XAxis
-                  dataKey="time"
-                  tickFormatter={(t) =>
-                    new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                  }
-                  hide
-                />
-                <YAxis domain={['dataMin', 'dataMax']} hide />
-                <Tooltip
-                  content={({ active, payload }) =>
-                    active && payload?.length ? (
-                      <div className="bg-[#23232e] rounded px-3 py-2">
-                        <div className="font-bold">
-                          {Number(payload[0].payload.price).toFixed(6)} {quoteLabelOf(detailPool)}
-                        </div>
-                        <div className="text-xs">
-                          {new Date(payload[0].payload.time).toLocaleString()}
-                        </div>
-                      </div>
-                    ) : null
-                  }
-                />
-                <Line type="monotone" dataKey="price" stroke="#ffc371" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+        {/* chart */}
+        <div className="relative w-full h-56 sm:h-64 md:h-72 bg-[#141419] rounded-xl overflow-hidden">
+          <div className="absolute inset-0">
+            <CandleChart
+  key={selectedTimeRange}
+  data={candles.map(b => ({
+    t: b.t,
+    o: b.o,
+    h: b.h,
+    l: b.l,
+    c: b.c,
+  }))}
+  volume={volume.map(b => ({
+    t:  b.t,
+    v:  b.v,
+    up: b.up,
+  }))}
+  onBarHover={({ pct }) => setHoverDeltaPct(pct)}
+/>
+
+
+
+          </div>
+          <div
+            className={`absolute top-2 right-2 z-10 px-2 py-1 rounded-full text-xs font-semibold ${
+              ((hoverDeltaPct ?? basePct) >= 0) ? 'bg-green-500/15 text-green-300' : 'bg-red-500/15 text-red-300'
+            }`}
+          >
+            {selectedTimeRange.toUpperCase()} {((hoverDeltaPct ?? basePct) >= 0 ? '+' : '')}{((hoverDeltaPct ?? basePct) || 0).toFixed(2)}%
           </div>
         </div>
       </div>
     </div>
   );
 })()}
+
+
 
   </div>
 )}

@@ -1,6 +1,6 @@
 // app/api/candles/route.ts
 import { NextResponse } from 'next/server';
-import { pool } from '@/lib/db';
+import { pool } from '@/lib/pg';
 
 // GET /api/candles?mint=<BASE58>&tf=5m|1h&limit=200
 export async function GET(req: Request) {

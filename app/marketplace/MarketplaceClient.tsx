@@ -11,28 +11,44 @@ import type { NFT } from '@/types/nft'; // add this import instead
 
 
 
+
 // REPLACE your hasPool/getPoolAddr with this:
+// ── pool/bundle presence detection ─────────────────────────────────────────────
 const hasPool = (n: NFT) => {
   if ((n as any).hasPool !== undefined) return Boolean((n as any).hasPool);
   if ((n as any).poolPda || (n as any).poolAddress) return true;
-  const p = (n as any).pool ?? (n as any).amm ?? (n as any).vault?.pool;
+
+  // cover bundle / alt shapes
+  const p =
+    (n as any).pool ??
+    (n as any).amm ??
+    (n as any).bundle ??
+    (n as any).bundlePda ??
+    (n as any).bundleAddress ??
+    (n as any).vault?.pool;
+
   if (!p) return false;
   if (typeof p === 'string') return p.length > 0;
-  return Boolean(
-    p.pda || p.address || p.addr || p.publicKey || p.pubkey || p.id
-  );
+  return Boolean(p.pda || p.address || p.addr || p.publicKey || p.pubkey || p.id);
 };
 
 const getPoolAddr = (n: NFT): string | undefined => {
   if ((n as any).poolPda) return (n as any).poolPda as string;
   if ((n as any).poolAddress) return (n as any).poolAddress as string;
-  const p = (n as any).pool ?? (n as any).amm ?? (n as any).vault?.pool;
+
+  const p =
+    (n as any).pool ??
+    (n as any).amm ??
+    (n as any).bundle ??
+    (n as any).bundlePda ??
+    (n as any).bundleAddress ??
+    (n as any).vault?.pool;
+
   if (!p) return;
   if (typeof p === 'string') return p;
-  return (p.pda || p.address || p.addr || p.publicKey || p.pubkey || p.id) as
-    | string
-    | undefined;
+  return (p.pda || p.address || p.addr || p.publicKey || p.pubkey || p.id) as string | undefined;
 };
+
 
 
 
@@ -45,6 +61,14 @@ const normToken = (t?: string) => {
   if (x.startsWith('woodeng')) return 'woodeng';
   return x; // fallback
 };
+
+
+const normType = (t?: string) => {
+  const x = (t || '').toLowerCase();
+  if (x.includes('bundle') || x.includes('vault')) return 'bundle';
+  return 'single';
+};
+
 
 
 
@@ -116,7 +140,7 @@ export default function MarketplaceClient() {
     };
 
     const pass1 = nfts.filter((n) => {
-      if (filters.type.length && !filters.type.includes(n.type)) return false;
+      if (filters.type.length && !filters.type.includes(normType((n as any).type))) return false;
       if (
   filters.token.length &&
   !filters.token.includes(normToken((n as any).tokenType) as 'sol' | 'woodeng')

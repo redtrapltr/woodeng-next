@@ -81,12 +81,19 @@ export function getLockerPda(
   user: PublicKey,
   lockId: number | bigint,
 ) {
-  const buf = Buffer.alloc(8);
-  buf.writeBigUInt64LE(BigInt(lockId));
-  return PublicKey.findProgramAddress(
-    [Buffer.from('locker'), memeMint.toBuffer(), user.toBuffer(), buf],
-    LOCKER_PROGRAM_ID,
-  );
+  
+
+  // Make an 8-byte little-endian u64 without Buffer.writeBigUInt64LE
+const u8 = new Uint8Array(8);
+new DataView(u8.buffer).setBigUint64(0, BigInt(lockId), true);
+
+// web3.js accepts Buffer|Uint8Array for seeds. If your version complains,
+// wrap with Buffer.from(u8).
+return PublicKey.findProgramAddress(
+  [Buffer.from('locker'), memeMint.toBuffer(), user.toBuffer(), u8],
+  LOCKER_PROGRAM_ID
+);
+
 }
 
 /** 1️⃣ Create a mint whose *authority is a PDA* (locker) */

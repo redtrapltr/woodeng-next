@@ -26,14 +26,17 @@ import idl                  from '@/idl/idl.json';
 import { AnchorProvider, Program, BN } from '@project-serum/anchor';
 import {
   getAssociatedTokenAddress,
-  TOKEN_PROGRAM_ID
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction
 } from '@solana/spl-token';
 import {
   Connection,
   clusterApiUrl,
   PublicKey,
   SystemProgram,
-  SYSVAR_RENT_PUBKEY
+  SYSVAR_RENT_PUBKEY,
+  Transaction
 } from '@solana/web3.js';
 
 /* metaplex ------------------------------------------------------- */
@@ -45,6 +48,49 @@ import {
 /* utils ---------------------------------------------------------- */
 const resolveIpfs = (u: string) =>
   u.startsWith('ipfs://') ? `https://ipfs.io/ipfs/${u.replace('ipfs://', '')}` : u;
+
+/* ───────────────── helpers: find existing order on-chain ──────── */
+const ORDER_SELLER_OFFSET = 8 + 1 + 8;            // disc(8) + bump(1) + id(u64)
+const ORDER_MINT_OFFSET   = ORDER_SELLER_OFFSET + 32;
+
+type OrderRow = {
+  publicKey: PublicKey;
+  account: {
+    price: any;              // BN-like
+    escrow: PublicKey;
+    seller: PublicKey;
+    nftMint: PublicKey;
+  };
+};
+
+async function findOpenOrder(
+  program: Program<any>,
+  seller: PublicKey,
+  mint: PublicKey
+): Promise<OrderRow | null> {
+  const rows = await program.account.order.all([
+    { memcmp: { offset: ORDER_SELLER_OFFSET, bytes: seller.toBase58() } },
+    { memcmp: { offset: ORDER_MINT_OFFSET,   bytes: mint.toBase58() } },
+  ]) as unknown as OrderRow[];
+  return rows[0] ?? null;
+}
+
+// Ensure an ATA exists (idempotent)
+function ixEnsureAta(payer: PublicKey, owner: PublicKey, mint: PublicKey, ata: PublicKey) {
+  return createAssociatedTokenAccountIdempotentInstruction(
+    payer, ata, owner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+}
+
+// Read token balance (returns 0 if account missing)
+async function getAtaAmount(conn: Connection, ata: PublicKey): Promise<number> {
+  try {
+    const bal = await conn.getTokenAccountBalance(ata);
+    return Number(bal.value.amount);
+  } catch {
+    return 0;
+  }
+}
 
 /* ----------------------------------------------------------------- */
 
@@ -67,29 +113,30 @@ export default function ListNFT() {
   const [error,        setError]        = useState<string | null>(null);
   const [success,      setSuccess]      = useState(false);
 
-  /* ---------- loader: fetch real on-chain NFT ------------------- */
+  /* anchor client */
+  const conn     = new Connection(clusterApiUrl('devnet'));
+  const provider = new AnchorProvider(conn, wallet as any, {});
+  const program  = new Program(idl as any, PROGRAM_ID, provider);
+
+  /* ---------- loader: fetch NFT + any open order ---------------- */
   useEffect(() => {
     async function load() {
-      if (!nftId)   { setError('No NFT id');         return; }
-      if (!wallet.connected) return;
+      if (!nftId)   { setError('No NFT id'); return; }
+      if (!wallet.connected || !publicKey) return;
 
       try {
         setIsLoading(true); setError(null);
 
-        /* 1 ─ Metaplex connection */
-        const mx   = Metaplex
-          .make(new Connection(clusterApiUrl('devnet')))
-          .use(walletAdapterIdentity(wallet));
-
-        /* 2 ─ fetch the NFT account */
+        const mx   = Metaplex.make(conn).use(walletAdapterIdentity(wallet));
         const mintPk  = new PublicKey(nftId);
         const onChain = await mx.nfts().findByMint({ mintAddress: mintPk });
 
-        /* 3 ─ load off-chain JSON */
         const metaUrl   = resolveIpfs(onChain.uri);
         const metaJson  = await (await fetch(metaUrl)).json();
 
-        /* 4 ─ map into your local type */
+        const existing = await findOpenOrder(program, publicKey, mintPk);
+        const existingPriceLam = existing ? new BN((existing.account as any).price).toNumber() : 0;
+
         const parsed: NFT = {
           id: nftId,
           title:       metaJson.name,
@@ -99,22 +146,21 @@ export default function ListNFT() {
             username: metaJson.properties?.artist ?? '',
             email: '',
             type: 'user',
-            walletAddress: publicKey?.toString() ?? ''
+            walletAddress: publicKey.toString()
           },
           imageUrl: resolveIpfs(metaJson.image),
-          audioUrl: metaJson.properties?.audio
-                      ? resolveIpfs(metaJson.properties.audio)
-                      : '',
-          price: 0,
+          audioUrl: metaJson.properties?.audio ? resolveIpfs(metaJson.properties.audio) : '',
+          price: existingPriceLam / 1e9,
           metadata: metaJson,
           status: 'available',
           createdAt: new Date().toISOString(),
           hasPool: false,
           tokenType: 'woodeng',
-          isListed: false
+          isListed: !!existing,
         };
 
         setNft(parsed);
+        if (existing) setPrice((existingPriceLam / 1e9).toString());
       } catch (e: any) {
         console.error(e);
         setError('Could not load NFT metadata');
@@ -124,9 +170,10 @@ export default function ListNFT() {
     }
 
     load();
-  }, [nftId, wallet]);   // rerun when wallet reconnects
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nftId, wallet.connected, publicKey?.toBase58()]);
 
-  /* ---------- submit: list-order -------------------------------- */
+  /* ---------- submit: list or update (cancel + relist) ---------- */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nft)            return;
@@ -137,22 +184,70 @@ export default function ListNFT() {
     try {
       setIsSubmitting(true); setError(null);
 
-      /* 1 ─ Anchor wiring */
-      const conn     = new Connection(clusterApiUrl('devnet'));
-      const provider = new AnchorProvider(conn, wallet as any, {});
-      const program  = new Program(idl as any, PROGRAM_ID, provider);
+      const mintPk       = new PublicKey(nftId);
+      const userNftAta   = await getAssociatedTokenAddress(mintPk, publicKey);
 
-      /* 2 ─ PDAs & helpers */
-      const mintPk   = new PublicKey(nftId);
-      const orderId  = BigInt(Date.now()) * 1_000n; // micro-ts
-      const { order, escrow, escAuth } = orderPdas(mintPk, publicKey, orderId);
+      // 0) Make sure seller ATA exists (for both cancel & relist)
+      {
+        const createAtaIx = ixEnsureAta(publicKey, publicKey, mintPk, userNftAta);
+        const tx = new Transaction().add(createAtaIx);
+        // send quietly; if it already exists this is a no-op
+        try { await provider.sendAndConfirm(tx); } catch {}
+      }
 
-      const userNftAta = await getAssociatedTokenAddress(mintPk, publicKey);
-      const priceLam   = new BN(Math.floor(+price * 1e9)); // WOODENG → lamports
+      const newPriceLam = new BN(Math.floor(+price * 1e9));
 
-      /* 3 ─ transact */
+      // 1) Check if NFT already in wallet; if not, try cancel existing order
+      let amount = await getAtaAmount(conn, userNftAta);
+      if (amount === 0) {
+        const existing = await findOpenOrder(program, publicKey, mintPk);
+        if (!existing) {
+          throw new Error('NFT is not in your wallet and no open order was found to cancel. Refresh or check you are using the same wallet you listed with.');
+        }
+
+        // Cancel: build a tx with (ensure ATA) + cancel instruction
+        const [escAuthOld] = PublicKey.findProgramAddressSync(
+          [Buffer.from('escrow_auth'), existing.publicKey.toBuffer()],
+          PROGRAM_ID
+        );
+        const cancelIx = await program.methods
+          .cancelOrder()
+          .accounts({
+            order:           existing.publicKey,
+            escrowAuthority: escAuthOld,
+            escrow:          (existing.account as any).escrow as PublicKey,
+            sellerNftAta:    userNftAta,
+            seller:          publicKey,
+            tokenProgram:    TOKEN_PROGRAM_ID,
+          })
+          .instruction();
+
+        const tx = new Transaction().add(cancelIx);
+        await provider.sendAndConfirm(tx);
+
+        // Wait until the NFT returns (simple poll)
+        for (let i = 0; i < 6; i++) { // ~3s total
+          await new Promise(r => setTimeout(r, 500));
+          amount = await getAtaAmount(conn, userNftAta);
+          if (amount > 0) break;
+        }
+        if (amount === 0) throw new Error('Cancel succeeded but NFT not detected in your wallet yet. Try again in a few seconds.');
+      }
+
+      // 2) (Re)list with a fresh orderId
+      const orderIdBig        = BigInt(Date.now()) * 1_000n; // micro-timestamp
+      const { order, escrow, escAuth } = orderPdas(mintPk, publicKey, orderIdBig);
+
+      const creatorPk  = publicKey; // or derive from metadata
+      const royaltyBps = 500;       // 5%
+
       await program.methods
-        .listOrder(new BN(orderId.toString()), priceLam)
+        .listOrder(
+          new BN(orderIdBig.toString()),
+          newPriceLam,
+          creatorPk,
+          royaltyBps
+        )
         .accounts({
           nftMint:         mintPk,
           seller:          publicKey,
@@ -166,10 +261,10 @@ export default function ListNFT() {
         })
         .rpc();
 
-      /* 4 ─ UI success */
+      /* UI success */
       setNft(prev => prev ? { ...prev, isListed: true, price: +price } : prev);
       setSuccess(true);
-      setTimeout(() => router.push(`/nft/${nftId}`), 2000);
+      setTimeout(() => router.push(`/nft/${nftId}`), 1500);
 
     } catch (err: any) {
       console.error(err);
@@ -202,9 +297,9 @@ export default function ListNFT() {
         <ArrowLeft className="w-4 h-4" /> Back to profile
       </button>
 
-      <h1 className="text-3xl font-bold mb-2">List NFT for sale</h1>
+      <h1 className="text-3xl font-bold mb-2">{nft?.isListed ? 'Update Listing' : 'List NFT for sale'}</h1>
       <p className="text-muted-foreground mb-6">
-        Set your price and publish the order
+        {nft?.isListed ? 'Change your listing price' : 'Set your price and publish the order'}
       </p>
 
       {isLoading ? (
@@ -235,7 +330,7 @@ export default function ListNFT() {
           {/* price */}
           <label className="block">
             <span className="text-sm font-medium">
-              Listing price (WOODENG)
+              {nft.isListed ? 'New price (WOODENG)' : 'Listing price (WOODENG)'}
             </span>
             <input
               type="number"
@@ -256,7 +351,7 @@ export default function ListNFT() {
           )}
           {success && (
             <div className="bg-green-500/10 text-green-500 p-4 rounded-lg flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5" /> NFT listed – redirecting…
+              <CheckCircle2 className="w-5 h-5" /> {nft.isListed ? 'Listing updated' : 'NFT listed'} – redirecting…
             </div>
           )}
 
@@ -281,7 +376,7 @@ export default function ListNFT() {
               {isSubmitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                'List for sale'
+                nft.isListed ? 'Update Listing' : 'List for Sale'
               )}
             </button>
           </div>
