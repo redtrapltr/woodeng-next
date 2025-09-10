@@ -121,6 +121,9 @@ const CandleChart = NextDynamic(
 
 
 
+
+
+
 const clean = (s?: string) =>
   (s ?? "").replace(/\0/g, "").replace(/[\x00-\x1F\x7F]/g, "").trim();
 
@@ -2267,6 +2270,68 @@ const [quoteBalancesRaw, setQuoteBalancesRaw] = useState<Record<string, number>>
 
 
 
+// --- OPTIMISTIC PATCH HELPERS (place inside SoundMemesClient) ----------------
+const adjustMemeBalanceRaw = (mintStr: string, deltaRaw: number) => {
+  setBalancesByMint(prev => {
+    const cur = prev[mintStr] ?? 0;
+    const next = Math.max(0, cur + deltaRaw);
+    return { ...prev, [mintStr]: next };
+  });
+};
+
+const adjustQuoteBalanceRaw = (quoteMint: PublicKey, deltaLamports: number) => {
+  const k = quoteMint.toBase58();
+  setQuoteBalancesRaw(prev => {
+    const cur = prev[k] ?? 0;
+    const next = Math.max(0, cur + deltaLamports);
+    return { ...prev, [k]: next };
+  });
+};
+
+const patchPoolAfterBuy = (pool: PoolType, memeRawOut: number, woodLamportsIn: number) => {
+  setPools(prev => prev.map(p => {
+    if (!p.memeMint.equals(pool.memeMint)) return p;
+
+    if (p.poolType === 1) {
+      // AMM: y += woodIn, x -= memeOut
+      return {
+        ...p,
+        ammReserves: {
+          meme: Math.max(0, (p.ammReserves?.meme ?? 0) - memeRawOut),
+          woodeng: (p.ammReserves?.woodeng ?? 0) + woodLamportsIn,
+        },
+      };
+    } else {
+      // Bonding: sold += memeOut, vault wood += woodIn
+      return {
+        ...p,
+        bondingSold: (p.bondingSold ?? 0) + memeRawOut,
+        ammReserves: {
+          ...(p.ammReserves ?? { meme: 0, woodeng: 0 }),
+          woodeng: (p.ammReserves?.woodeng ?? 0) + woodLamportsIn,
+        },
+      };
+    }
+  }));
+};
+
+const patchPoolAfterSell = (pool: PoolType, memeRawIn: number, woodLamportsOut: number) => {
+  if (pool.poolType !== 1) return; // only AMM sells
+  setPools(prev => prev.map(p => {
+    if (!p.memeMint.equals(pool.memeMint)) return p;
+    return {
+      ...p,
+      ammReserves: {
+        meme: (p.ammReserves?.meme ?? 0) + memeRawIn,
+        woodeng: Math.max(0, (p.ammReserves?.woodeng ?? 0) - woodLamportsOut),
+      },
+    };
+  }));
+};
+
+
+
+
 
 // 1 WOODENG ≡ 1 SOL — on récupère le prix USD de Solana
 const [solUsd, setSolUsd] = useState<number | null>(null);
@@ -3049,6 +3114,32 @@ const minMemeOut = Math.max(
       wallet,
     });
 
+
+    const DEC = selectedPool.decimals ?? MEME_DECIMALS;
+const memeRawOut = Math.floor(Number(modalTokensToBuy) * 10 ** DEC);
+const mintStr = selectedPool.memeMint.toBase58();
+
+// ✅ user MEME balance up
+adjustMemeBalanceRaw(mintStr, +memeRawOut);
+
+// ✅ user quote balance down (SOL or WOODENG) — we spent exactly maxWoodengIn
+adjustQuoteBalanceRaw(selectedPool.quoteMint, -maxWoodengIn);
+
+// ✅ pool reserves / bonding progress patched locally
+patchPoolAfterBuy(selectedPool, memeRawOut, maxWoodengIn);
+
+// (you already do these, keep them)
+setTransactionStatus('success');
+setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
+
+// keep your reconciliations
+await refreshUserNfts();
+await refreshBalances();
+
+// (optional) keep the buy modal open for a moment so the live “Balance” line
+// visibly updates, or just close as you do now:
+setShowBuyModal(false);
+
     // Immediately persist the on-chain price so a page reload keeps your last trade
 try {
   const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
@@ -3093,17 +3184,21 @@ setBuyFilled({
   };
 
   const handleConfirmSell = async () => {
-  const DEC       = selectedPool.decimals ?? MEME_DECIMALS;
-  const memeRawIn = Math.floor(Number(modalTokensToSell) * 10 ** DEC);
-  const woodengRawOut = getQuoteForMemeSell(selectedPool, memeRawIn);
-  const woodengUiOut = woodengRawOut / 10 ** WOODENG_DECIMALS;
-  const spotPrice = Number(selectedPool.price);
-  const avgPrice = memeRawIn > 0 ? (woodengUiOut / Number(modalTokensToSell)) : 0;
+  if (!selectedPool) return;
+
+  const DEC = selectedPool.decimals ?? MEME_DECIMALS;
+  const amtUi = Number(modalTokensToSell || 0);
+  const memeRawIn = Math.floor(amtUi * 10 ** DEC);
+
+  const woodengRawOut  = getQuoteForMemeSell(selectedPool, memeRawIn);
+  const woodengUiOut   = woodengRawOut / 10 ** WOODENG_DECIMALS;
+
+  const spotPrice   = Number(selectedPool.price);
+  const avgPrice    = amtUi > 0 ? (woodengUiOut / amtUi) : 0;
   const priceImpact = spotPrice > 0 ? ((spotPrice - avgPrice) / spotPrice) * 100 : 0;
 
-  // Calculate minWoodengOut for slippage protection
+  // slippage guard
   const minWoodengOut = Math.floor(woodengRawOut * (1 - slippage / 100));
-
   if (priceImpact > slippage) {
     setTransactionStatus('error');
     setTransactionMessage('Price impact exceeds slippage tolerance.');
@@ -3112,45 +3207,57 @@ setBuyFilled({
 
   setTransactionStatus('processing');
   setTransactionMessage('Processing transaction...');
+
   try {
     if (!wallet.publicKey) throw new Error('Please connect your wallet!');
-    if (!selectedPool || !modalTokensToSell) throw new Error('Select amount to sell');
-    const memeAmountIn = memeRawIn;
-    const tx = await sellSoundMeme({ pool: selectedPool, memeAmountIn, minWoodengOut, wallet });
+    if (!modalTokensToSell) throw new Error('Select amount to sell');
 
+    const tx = await sellSoundMeme({
+      pool: selectedPool,
+      memeAmountIn: memeRawIn,
+      minWoodengOut,
+      wallet,
+    });
 
-
-
-    // Immediately persist the on-chain price so a page reload keeps your last trade
-try {
-  const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
-  const progNow = new Program(poolIdl, POOL_PROGRAM_ID, providerNow);
-  const cfgNow = await progNow.account.soundMemeConfig.fetch(selectedPool.pubkey);
-  const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
-  if (lamportsNow > 0) {
     const mintStr = selectedPool.memeMint.toBase58();
-    pushPricePoint(mintStr, lamportsNow);       // update in-memory
-    await persistPricePoint(mintStr, lamportsNow, Date.now());
-  }
-} catch {}
 
+    // optimistic patches
+    adjustMemeBalanceRaw(mintStr, -memeRawIn);
+    adjustQuoteBalanceRaw(selectedPool.quoteMint, +woodengRawOut);
+    patchPoolAfterSell(selectedPool, memeRawIn, woodengRawOut);
 
     setTransactionStatus('success');
     setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
-    await refreshUserNfts();          // ⬅️ NEW
-    await refreshBalances();          // ⬅️ NEW
+    await refreshUserNfts();
+    await refreshBalances();
     setShowSellModal(false);
+
+    // optional: refresh last price & persist
+    try {
+      const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
+      const progNow = new Program(poolIdl, POOL_PROGRAM_ID, providerNow);
+      const cfgNow = await progNow.account.soundMemeConfig.fetch(selectedPool.pubkey);
+      const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
+      if (lamportsNow > 0) {
+        const mint = selectedPool.memeMint.toBase58();
+        pushPricePoint(mint, lamportsNow);
+        await persistPricePoint(mint, lamportsNow, Date.now());
+      }
+    } catch {}
+
+    // filled-order toast
     setSellFilled({
-  open:true,
-  symbol:selectedPool.symbol,
-  amountMeme:Number(modalTokensToSell),
-  priceWoodeng:woodengUiOut
-});
+      open: true,
+      symbol: selectedPool.symbol,
+      amountMeme: amtUi,
+      priceWoodeng: woodengUiOut,
+    });
   } catch (e: any) {
     setTransactionStatus('error');
     setTransactionMessage('Error: ' + (e.message || 'Unknown error'));
   }
 };
+
 
 
  

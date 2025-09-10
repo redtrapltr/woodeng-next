@@ -335,12 +335,18 @@ React.useEffect(() => {
           const audioCid = await pinFile(t.audio.mp3)
           audioURI = `ipfs://${audioCid}`
         }
+
+
+
+          // ✅ année : albumMeta.year en bundle, sinon track.metadata.year
+  const yearToUse = isBundle ? (albumMeta.year || t.metadata.year) : t.metadata.year;
+
         const meta: any = {
           name: t.metadata.songName,
           symbol: 'MUSIC',
           description: t.metadata.description,
           image: imageURI,
-          properties: { audio: audioURI, ...t.metadata },
+          properties: { audio: audioURI, ...t.metadata, year: yearToUse, },
         }
         if (animationURI) meta.animation_url = animationURI
 
@@ -785,96 +791,112 @@ React.useEffect(() => {
           </div>
 
           {/* STEP 2: NFT Details */}
-          <div className={currentStep !== 1 ? 'hidden' : ''}>
-            <div className="space-y-4">
-              {tracks.map((track, i) => (
-                <div key={i} className="bg-muted/50 rounded-lg p-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-medium text-muted-foreground">Track {i + 1}</h4>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Song Name</label>
-                      <input
-                        type="text"
-                        value={track.metadata.songName}
-                        onChange={e => updateMeta(i, 'songName', e.target.value)}
-                        className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Artist Name</label>
-                      <input
-                        type="text"
-                        value={track.metadata.artist}
-                        onChange={e => updateMeta(i, 'artist', e.target.value)}
-                        className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Style</label>
-                      <input
-                        type="text"
-                        value={track.metadata.style}
-                        onChange={e => updateMeta(i, 'style', e.target.value)}
-                        className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
-                        placeholder="e.g. Electronic, Hip Hop, Jazz"
-                        required
-                      />
-                    </div>
-                    {!isBundle && (
-                      <div>
-                        <label className="block text-sm font-medium mb-1">Collection</label>
-                        <input
-                          type="text"
-                          value={track.metadata.collection}
-                          onChange={e => updateMeta(i, 'collection', e.target.value)}
-                          className="w-full px-3 py-1.5 bg-card border border-border rounded-lg focus:border-primary text-sm"
-                          placeholder="Enter collection name"
-                        />
-                      </div>
-                    )}
-                    {isBundle && (
-                      <>
-                        <div>
-                          <label className="block text-sm font-medium mb-1">Album Name</label>
-                          <input
-                            type="text"
-                            value={albumMeta.albumName}
-                            onChange={e => setAlbumMeta({ ...albumMeta, albumName: e.target.value })}
-                            className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-1">Release Year</label>
-                          <input
-                            type="number"
-                            value={albumMeta.year}
-                            onChange={e => setAlbumMeta({ ...albumMeta, year: e.target.value })}
-                            className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7] transition-colors"
-                            required
-                          />
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Description</label>
-                    <textarea
-                      value={track.metadata.description}
-                      onChange={e => updateMeta(i, 'description', e.target.value)}
-                      rows={2}
-                      className="w-full px-3 py-1.5 bg-card border rounded-lg transition-colors resize-none text-sm"
-                      required
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+<div className={currentStep !== 1 ? 'hidden' : ''}>
+  <div className="space-y-4">
+    {tracks.map((track, i) => (
+      <div key={i} className="bg-muted/50 rounded-lg p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <h4 className="text-sm font-medium text-muted-foreground">Track {i + 1}</h4>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium mb-1">Song Name</label>
+            <input
+              type="text"
+              value={track.metadata.songName}
+              onChange={e => updateMeta(i, 'songName', e.target.value)}
+              className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7]"
+              required
+            />
           </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Artist Name</label>
+            <input
+              type="text"
+              value={track.metadata.artist}
+              onChange={e => updateMeta(i, 'artist', e.target.value)}
+              className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7]"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Style</label>
+            <input
+              type="text"
+              value={track.metadata.style}
+              onChange={e => updateMeta(i, 'style', e.target.value)}
+              className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7]"
+              placeholder="e.g. Electronic, Hip Hop, Jazz"
+              required
+            />
+          </div>
+
+          {/* ✅ Release Year — maintenant toujours visible */}
+          <div>
+            <label className="block text-sm font-medium mb-1">Release Year</label>
+            <input
+              type="number"
+              value={isBundle ? albumMeta.year : track.metadata.year}
+              onChange={e => {
+                const v = e.target.value;
+                if (isBundle) setAlbumMeta({ ...albumMeta, year: v });
+                else updateMeta(i, 'year', v);
+              }}
+              className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7]"
+              placeholder="2024"
+              required
+            />
+          </div>
+
+          {/* Champ Collection: seulement en single */}
+          {!isBundle && (
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium mb-1">Collection</label>
+              <input
+                type="text"
+                value={track.metadata.collection}
+                onChange={e => updateMeta(i, 'collection', e.target.value)}
+                className="w-full px-3 py-1.5 bg-card border border-border rounded-lg focus:border-primary text-sm"
+                placeholder="Enter collection name"
+              />
+            </div>
+          )}
+
+          {/* Champs Album (uniquement bundle) */}
+          {isBundle && (
+            <>
+              <div>
+                <label className="block text-sm font-medium mb-1">Album Name</label>
+                <input
+                  type="text"
+                  value={albumMeta.albumName}
+                  onChange={e => setAlbumMeta({ ...albumMeta, albumName: e.target.value })}
+                  className="w-full px-4 py-2 bg-[#181926] text-white border border-[#24273a] rounded-lg focus:outline-none focus:border-[#cba6f7]"
+                  required
+                />
+              </div>
+            </>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Description</label>
+          <textarea
+            value={track.metadata.description}
+            onChange={e => updateMeta(i, 'description', e.target.value)}
+            rows={2}
+            className="w-full px-3 py-1.5 bg-card border rounded-lg transition-colors resize-none text-sm"
+            required
+          />
+        </div>
+      </div>
+    ))}
+  </div>
+</div>
+
 
           {/* STEP 3: Seed & Copies */}
           <div className={currentStep !== 2 ? 'hidden' : ''}>
@@ -989,57 +1011,64 @@ React.useEffect(() => {
           </div>
 
           {/* STEP 4: Preview & Mint */}
-          <div className={currentStep !== 3 ? 'hidden' : ''}>
-            <div className="bg-card border border-border rounded-lg p-6">
-              <h3 className="text-xl font-semibold mb-6">Preview Your NFT</h3>
-              <div className="space-y-8">
-                {isBundle && (
-  <MosaicPreview
-    images={heroImages}
-    aspect="video"
-    overlay={{ title: albumMeta.albumName || 'Album', subtitle: albumMeta.year || '' }}
-  />
-)}
+<div className={currentStep !== 3 ? 'hidden' : ''}>
+  <div className="bg-card border border-border rounded-lg p-6">
+    <h3 className="text-xl font-semibold mb-6">Preview Your NFT</h3>
+    <div className="space-y-8">
 
+      {/* ✅ Mosaïque seulement si bundle ET plus d'un track */}
+      {isBundle && tracks.length > 1 && (
+        <MosaicPreview
+          images={heroImages}
+          aspect="video"
+          overlay={{ title: albumMeta.albumName || 'Album', subtitle: albumMeta.year || '' }}
+        />
+      )}
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {tracks.map((track, index) => (
-                    <div key={index} className="bg-muted/50 rounded-lg overflow-hidden">
-                      <div className="aspect-square relative">
-                        {(isBundle ? track.trackImage : track.cover) && (
-                          <img
-                            src={URL.createObjectURL(isBundle ? (track.trackImage as File) : (track.cover as File))}
-                            alt={`Track ${index + 1}`}
-                            className="w-full h-full object-cover"
-                          />
-                        )}
-                      </div>
-                      <div className="p-4">
-                        <h4 className="font-semibold mb-1">{track.metadata.songName}</h4>
-                        <p className="text-sm text-muted-foreground mb-2">{track.metadata.artist}</p>
-                        <div className="flex items-center gap-2 text-sm">
-                          <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
-                            {track.metadata.style}
-                          </span>
-                          <span className="text-muted-foreground">
-                            {copies} copies
-                          </span>
-                        </div>
-                        {track.metadata.description && (
-                          <div className="mt-2 text-sm text-muted-foreground line-clamp-2">
-                            {track.metadata.description}
-                          </div>
-                        )}
-                        {track.metadata.collection && (
-                          <div className="mt-2 text-xs">
-                            <span className="text-muted-foreground">Collection: </span>
-                            <span className="font-medium">{track.metadata.collection}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {tracks.map((track, index) => (
+          <div key={index} className="bg-muted/50 rounded-lg overflow-hidden">
+            <div className="aspect-square relative">
+              {/* ✅ En bundle, on enlève l’image cover par track */}
+              {!isBundle && ( (track.cover) && (
+                <img
+                  src={URL.createObjectURL(track.cover as File)}
+                  alt={`Track ${index + 1}`}
+                  className="w-full h-full object-cover"
+                />
+              ))}
+            </div>
+
+            <div className="p-4">
+              <h4 className="font-semibold mb-1">{track.metadata.songName}</h4>
+              <p className="text-sm text-muted-foreground mb-2">{track.metadata.artist}</p>
+
+              <div className="flex items-center gap-2 text-sm">
+                <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+                  {track.metadata.style}
+                </span>
+                <span className="text-muted-foreground">{copies} copies</span>
+                {/* Afficher l'année résolue */}
+                <span className="text-muted-foreground">
+                  {isBundle ? (albumMeta.year || '-') : (track.metadata.year || '-')}
+                </span>
+              </div>
+
+              {track.metadata.description && (
+                <div className="mt-2 text-sm text-muted-foreground line-clamp-2">
+                  {track.metadata.description}
                 </div>
+              )}
+              {track.metadata.collection && !isBundle && (
+                <div className="mt-2 text-xs">
+                  <span className="text-muted-foreground">Collection: </span>
+                  <span className="font-medium">{track.metadata.collection}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
 
                 <div className="bg-muted/50 rounded-lg p-4">
                   <h4 className="text-sm font-medium text-muted-foreground mb-2">Pool Token</h4>
