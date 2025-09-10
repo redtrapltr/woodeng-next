@@ -74,7 +74,7 @@ export default function HowItWorksFull() {
   ];
 
   return (
-    <div className="py-12 space-y-24">
+    <div className="container mx-auto px-4 sm:px-6 lg:px-8 pt-28 pb-12 space-y-24">
       {/* Hero Section */}
       <section className="text-center space-y-8">
         <div className="space-y-6">

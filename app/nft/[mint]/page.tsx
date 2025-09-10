@@ -11,9 +11,9 @@ import {
 import { useParams, useRouter } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import {
-  AnchorProvider, Program, BorshCoder, Idl, BN,
-} from '@project-serum/anchor';
+import type { Idl } from '@project-serum/anchor';
+import { AnchorProvider, Program, BorshCoder, BN } from '@project-serum/anchor';
+
 import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
@@ -22,6 +22,7 @@ import {
 } from '@solana/spl-token';
 
 import { Metaplex } from '@metaplex-foundation/js';
+import { getMint } from '@solana/spl-token';
 
 import {
   Loader2, Play, Pause, AlertCircle, X, Tag, Edit,
@@ -80,51 +81,54 @@ async function fetchNftData(
   }
   meta ||= {};
 
+    // read on-chain supply (decimals = 0 for your SFTs)
+  const mintInfo = await getMint(conn, mint);
+  const totalSupply = Number(mintInfo.supply);
+
   return {
     mint,
-    name:        nft.name,
-    artist:      meta.properties?.artist ?? meta.artist ?? 'Unknown artist',
-    image:       toHttp(meta.image ?? '') || '/blank.png',
-    audio:       meta.properties?.audio ? toHttp(meta.properties.audio)
-               : meta.animation_url      ? toHttp(meta.animation_url)
-               : undefined,
+    name: nft.name,
+    artist: meta.properties?.artist ?? meta.artist ?? 'Unknown artist',
+    image: toHttp(meta.image ?? '') || '/blank.png',
+    audio: meta.properties?.audio ? toHttp(meta.properties.audio)
+         : meta.animation_url      ? toHttp(meta.animation_url)
+         : undefined,
     description: meta.description,
     collection:  meta.collection?.name,
     style:       meta.properties?.style,
-    copies:      meta.properties?.copies,
+    copies:      totalSupply,               // <-- use on-chain supply
     royalties:   nft.sellerFeeBasisPoints / 100,
-    metadata:    meta,                 // ← NEW
-    year:        meta.year,            // optional
+    metadata:    meta,
+    year:        meta.year,
   };
+
 }
 
 /* ---- find *any* open Order for this mint ------------------------ */
-async function fetchOrderData(
-  conn: Connection,
-  mintPk: PublicKey,
-) {
-  // discriminator is 8; Order struct = 1+8+32+32+8+32 = 113 bytes
-  const raw = await conn.getProgramAccounts(PROGRAM_ID, {
-    filters: [{ dataSize: 8 + 113 }],
-  });
+async function fetchOrderData(conn: Connection, mintPk: PublicKey) {
+  const coder = new BorshCoder(idl as unknown as Idl);
+  const accs = await conn.getProgramAccounts(PROGRAM_ID);
 
-  const coder = new BorshCoder(idl as Idl);
-  for (const { pubkey, account } of raw) {
-    try {
-      const o: any = coder.accounts.decode('Order', account.data);
-      if (!new PublicKey(o.nftMint).equals(mintPk)) continue;
-      // ensure escrow still exists
-      if (!(await conn.getAccountInfo(o.escrow))) continue;
-      return {
-        orderPda: pubkey,
-        escrow:   o.escrow as PublicKey,
-        seller:   o.seller as PublicKey,
-        priceLamports: Number(o.price),
-      };
-    } catch {/* skip */}
+  for (const { pubkey, account } of accs) {
+    let o: any;
+    try { o = coder.accounts.decode('Order', account.data); } catch { continue; }
+    if (!new PublicKey(o.nftMint).equals(mintPk)) continue;
+
+    const bal = await conn.getTokenAccountBalance(new PublicKey(o.escrow)).catch(() => null);
+    if (!bal || Number(bal.value.amount) !== 1) continue;
+
+    return {
+      orderPda: pubkey,
+      escrow: new PublicKey(o.escrow),
+      seller: new PublicKey(o.seller),
+      creator: new PublicKey(o.creator),           // <-- add this
+      priceLamports: Number(o.price),
+    };
   }
   return null;
 }
+
+
 
 /* -------------------------------------------------- */
 /* component                                          */
@@ -142,6 +146,7 @@ export default function NFTDetailPage() {
     orderPda: PublicKey;
     escrow: PublicKey;
     seller: PublicKey;
+    creator: PublicKey;     // <-- add this
     priceLamports: number;
   } | null>(null);
 
@@ -185,34 +190,42 @@ export default function NFTDetailPage() {
   const listNft = () => router.push(`/list-nft/${mint}`);
 
   const cancelListing = async () => {
-    if (!order || !wallet.publicKey) return;
-    try {
-      setLoading(true);
-      const conn     = new Connection(clusterApiUrl('devnet'));
-      const provider = new AnchorProvider(conn, wallet as any, {});
-      const program  = new Program(idl as any, PROGRAM_ID, provider);
+  if (!order || !wallet.publicKey) return;
+  const payer = wallet.publicKey!;            // <-- capture once
 
-      await program.methods
-        .cancelOrder()
-        .accounts({
-          order:            order.orderPda,
-          escrowAuthority:  PublicKey.findProgramAddressSync(
-            [Buffer.from('escrow_auth'), order.orderPda.toBuffer()],
-            PROGRAM_ID,
-          )[0],
-          escrow:           order.escrow,
-          seller:           wallet.publicKey,
-          sellerNftAta:     await getAssociatedTokenAddress(nft!.mint, wallet.publicKey),
-          tokenProgram:     TOKEN_PROGRAM_ID,
-        })
-        .rpc();
-      setOrder(null);
-    } catch (e: any) { setError(e.message ?? 'Cancel failed'); }
-    finally        { setLoading(false); }
-  };
+  try {
+    setLoading(true);
+    const conn     = new Connection(clusterApiUrl('devnet'));
+    const provider = new AnchorProvider(conn, wallet as any, {});
+    const program  = new Program(idl as any, PROGRAM_ID, provider);
+
+    await program.methods
+      .cancelOrder()
+      .accounts({
+        order:           order.orderPda,
+        escrowAuthority: PublicKey.findProgramAddressSync(
+          [Buffer.from('escrow_auth'), order.orderPda.toBuffer()],
+          PROGRAM_ID
+        )[0],
+        escrow:          order.escrow,
+        seller:          payer,                                  // <-- use payer
+        sellerNftAta:    await getAssociatedTokenAddress(nft!.mint, payer), // <-- use payer
+        tokenProgram:    TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    setOrder(null);
+  } catch (e: any) {
+    setError(e.message ?? 'Cancel failed');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const buyNft = async () => {
   if (!order || !wallet.publicKey || !nft) return;
+  const payer = wallet.publicKey!;                 // <-- capture once
 
   try {
     setLoading(true);
@@ -221,73 +234,65 @@ export default function NFTDetailPage() {
     const provider = new AnchorProvider(conn, wallet as any, {});
     const program  = new Program(idl as any, PROGRAM_ID, provider);
 
-    /* PDA / ATA derivations */
-    const buyerNftAta   = await getAssociatedTokenAddress(
-      nft.mint,
-      wallet.publicKey,
-      /* allow off curve */ false,
-      TOKEN_PROGRAM_ID,
-      ASSOCIATED_TOKEN_PROGRAM_ID,
-    );
-    const sellerWdgAta  = await getAssociatedTokenAddress(WOODENG_MINT, order.seller);
-    const buyerWdgAta   = await getAssociatedTokenAddress(WOODENG_MINT, wallet.publicKey);
+    // Helper: ensure ATA exists (payer = buyer)
+    const ensureAta = async (owner: PublicKey, mint: PublicKey) => {
+      const ata = await getAssociatedTokenAddress(mint, owner);
+      const info = await conn.getAccountInfo(ata);
+      if (!info) {
+        const ix = createAssociatedTokenAccountInstruction(
+          payer,       // payer signs to create any ATA
+          ata,
+          owner,
+          mint
+        );
+        const tx = new Transaction().add(ix);
+        await provider.sendAndConfirm(tx, [], { commitment: 'finalized' });
+      }
+      return ata;
+    };
+
+    // 1) buyer’s NFT ATA
+    const buyerNftAta   = await ensureAta(payer, nft.mint);
+
+    // 2) WOODENG ATAs for buyer, seller, and creator (royalties)
+    const buyerWdgAta   = await ensureAta(payer,          WOODENG_MINT);
+    const sellerWdgAta  = await ensureAta(order.seller,   WOODENG_MINT);
+    const creatorWdgAta = await ensureAta(order.creator,  WOODENG_MINT);
+
+    // 3) escrow authority PDA
     const escrowAuthPda = PublicKey.findProgramAddressSync(
       [Buffer.from('escrow_auth'), order.orderPda.toBuffer()],
-      PROGRAM_ID,
+      PROGRAM_ID
     )[0];
 
-   /* ---------- 1. make sure the buyer’s NFT ATA exists --------------- */
-const ataInfo = await conn.getAccountInfo(buyerNftAta);
-
-if (!ataInfo) {
-  const createIx = createAssociatedTokenAccountInstruction(
-    wallet.publicKey,        // payer
-    buyerNftAta,             // ata to create
-    wallet.publicKey,        // owner
-    nft.mint,                // mint
-    TOKEN_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  );
-
-  // send and *wait for finalisation* before moving on
-  const tx   = new Transaction().add(createIx);
-  const sig  = await provider.sendAndConfirm(
-    tx,
-    [],                       // no extra signers
-    { commitment: 'finalized' }
-  );
-
-  // extra safety – loop until RPC shows the account initialised
-  // (usually unnecessary, but avoids edge cases on dev-net)
-  while (!(await conn.getAccountInfo(buyerNftAta, 'confirmed'))) {
-    await new Promise(r => setTimeout(r, 400));  // 0.4 s
-  }
-}
-
-
-    /* ---------- 2. fill the order ---------------------------------- */
+    // 4) fill
     await program.methods
       .fillOrder()
       .accounts({
-        order:            order.orderPda,
-        escrowAuthority:  escrowAuthPda,
-        escrow:           order.escrow,
-        buyer:            wallet.publicKey,
-        buyerTokenAta:    buyerWdgAta,
-        sellerTokenAta:   sellerWdgAta,
-        buyerNftAta:      buyerNftAta,
-        seller:           order.seller,
-        tokenProgram:     TOKEN_PROGRAM_ID,
+        order:           order.orderPda,
+        escrowAuthority: escrowAuthPda,
+        escrow:          order.escrow,
+        buyer:           payer,             // <-- use payer
+        buyerTokenAta:   buyerWdgAta,
+        sellerTokenAta:  sellerWdgAta,
+        creatorTokenAta: creatorWdgAta,     // <-- royalties ATA
+        buyerNftAta:     buyerNftAta,
+        seller:          order.seller,
+        creator:         order.creator,     // <-- often required with creatorTokenAta
+        tokenProgram:    TOKEN_PROGRAM_ID,
       })
       .rpc();
 
-    setOrder(null);                     // refresh UI
+    setOrder(null);
   } catch (e: any) {
     setError(e.message ?? 'Buy failed');
   } finally {
     setLoading(false);
   }
 };
+
+
+
 
 
   /* -------------------------------------------------- */

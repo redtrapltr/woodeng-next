@@ -222,7 +222,7 @@ export default function FAQ() {
     .filter(category => category.questions.length > 0);
 
   return (
-    <div className="py-12 space-y-12 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className="container mx-auto px-4 sm:px-6 lg:px-8 pt-28 pb-12 space-y-12">
       {/* Header */}
       <div className="text-center space-y-6">
         <h1 className="text-4xl font-bold">Frequently Asked Questions</h1>

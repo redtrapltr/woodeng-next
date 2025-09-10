@@ -31,6 +31,8 @@ import { AnchorProvider, Program, BN } from '@project-serum/anchor'
 import idl from '../../idl/idl.json'
 import { CheckCircle2, AlertCircle, ArrowLeft, Plus, Minus, Coins, Info, Loader2, ArrowRight } from 'lucide-react'
 import cn from 'classnames'
+import MosaicPreview from '../components/MosaicPreview';
+
 
 // -- CONSTANTS --
 const PROGRAM_ID = new PublicKey('FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS')
@@ -223,6 +225,24 @@ export default function UploadYourMusic() {
   const [formError, setFormError] = useState<string | null>(null)
   const [albumMeta, setAlbumMeta] = useState({ albumName: '', year: '' })
 
+
+
+  // ADD: build object URLs for the hero preview
+const heroImages = React.useMemo(() => {
+  const files = isBundle
+    ? tracks.map(t => t.trackImage || t.cover).filter(Boolean)
+    : [tracks[0]?.cover].filter(Boolean);
+  return files.map(f => URL.createObjectURL(f as File));
+}, [tracks, isBundle]);
+
+// cleanup object URLs to avoid memory leaks
+React.useEffect(() => {
+  return () => {
+    heroImages.forEach(u => { try { URL.revokeObjectURL(u) } catch {} });
+  };
+}, [heroImages]);
+
+
   // Checkbox terms
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [ownershipConfirmed, setOwnershipConfirmed] = useState(false)
@@ -245,9 +265,11 @@ export default function UploadYourMusic() {
     updateTrack(i, { metadata: { ...tracks[i].metadata, [k]: v } })
 
   const addTrack = () => {
-    if (tracks.length >= 5) return
-    setTracks([...tracks, { ...blankTrack }])
-  }
+  if (tracks.length >= 20) return
+  setTracks([...tracks, { ...blankTrack }])
+}
+
+
   const removeTrack = (i: number) => {
     if (tracks.length > 1) setTracks(tracks.filter((_, idx) => idx !== i))
   }
@@ -334,41 +356,43 @@ export default function UploadYourMusic() {
       const minted: PublicKey[] = []
 
       if (isBundle) {
-        for (let c = 0; c < nCopies; c++) {
-          for (let i = 0; i < uris.length; i++) {
-            const { nft } = await mx.nfts().create({
-              uri: uris[i],
-              name: `${tracks[i].metadata.songName} #${c + 1}`,
-              symbol: 'MUSIC',
-              sellerFeeBasisPoints: skipDeposit ? Math.round((parseFloat(royalties || '0') || 0) * 100) : 0,
-              creators: [{ address: publicKey, share: 100 }],
-              tokenOwner: publicKey,
-            })
-            minted.push(nft.address)
-          }
-        }
-      } else {
-        const { sft } = await mx.nfts().createSft({
-          uri: uris[0],
-          name: tracks[0].metadata.songName,
-          symbol: 'MUSIC',
-          sellerFeeBasisPoints: 0,
-          creators: [{ address: publicKey, share: 100 }],
-          decimals: 0,
-          tokenOwner: publicKey,
-          tokenAmount: token(1, 0),
-        })
-        minted.push(sft.address)
-        const extra = Math.max(0, nCopies - 1)
-        if (extra > 0) {
-          const ata = await ensureQuoteAtaAndMaybeWrap(mx.connection, publicKey, sft.address, wallet, 0);
-          await mx.tokens().mint({
-            mintAddress: sft.address,
-            amount: token(extra, 0),
-            toToken: ata,
-          })
-        }
-      }
+  // ONE mint per track (SFT), with `copies` supply
+  for (let i = 0; i < uris.length; i++) {
+    const { sft } = await mx.nfts().createSft({
+      uri: uris[i],
+      name: tracks[i].metadata.songName,
+      symbol: 'MUSIC',
+      sellerFeeBasisPoints: skipDeposit ? Math.round((parseFloat(royalties || '0') || 0) * 100) : 0,
+      creators: [{ address: publicKey, share: 100 }],
+      decimals: 0,
+      tokenOwner: publicKey,
+      tokenAmount: token(nCopies, 0),  // mint `copies` to you
+    })
+    minted.push(sft.address)
+  }
+} else {
+  const { sft } = await mx.nfts().createSft({
+    uri: uris[0],
+    name: tracks[0].metadata.songName,
+    symbol: 'MUSIC',
+    sellerFeeBasisPoints: 0,
+    creators: [{ address: publicKey, share: 100 }],
+    decimals: 0,
+    tokenOwner: publicKey,
+    tokenAmount: token(1, 0),
+  })
+  minted.push(sft.address)
+  const extra = Math.max(0, nCopies - 1)
+  if (extra > 0) {
+    const ata = await ensureQuoteAtaAndMaybeWrap(mx.connection, publicKey, sft.address, wallet, 0);
+    await mx.tokens().mint({
+      mintAddress: sft.address,
+      amount: token(extra, 0),
+      toToken: ata,
+    })
+  }
+}
+
 
       setMintedAddrs(minted.map(pk => pk.toBase58()))
 
@@ -441,26 +465,27 @@ export default function UploadYourMusic() {
             .postInstructions(postIxs)
             .rpc();
 
-          for (let i = 0; i < minted.length && i < uris.length; i++) {
-            const mint = minted[i]
-            const [vaultPda] = PublicKey.findProgramAddressSync(
-              [Buffer.from('nft_vault'), bundlePda.toBuffer(), mint.toBuffer()],
-              PROGRAM_ID
-            )
-            await prog2.methods.addToBundle()
-              .accounts({
-                bundle: bundlePda,
-                authority: publicKey!,
-                bundleSigner,
-                vault: vaultPda,
-                mint,
-                payer: publicKey!,
-                systemProgram: SystemProgram.programId,
-                tokenProgram: TOKEN_PROGRAM_ID,
-                rent: SYSVAR_RENT_PUBKEY,
-              })
-              .rpc()
-          }
+          for (let i = 0; i < minted.length; i++) {
+  const mint = minted[i]
+  const [vaultPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from('nft_vault'), bundlePda.toBuffer(), mint.toBuffer()],
+    PROGRAM_ID
+  )
+  await prog2.methods.addToBundle()
+    .accounts({
+      bundle: bundlePda,
+      authority: publicKey!,
+      bundleSigner,
+      vault: vaultPda,
+      mint,
+      payer: publicKey!,
+      systemProgram: SystemProgram.programId,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      rent: SYSVAR_RENT_PUBKEY,
+    })
+    .rpc()
+}
+
           setPoolAddr(bundlePda.toBase58())
           setSuccessModal({ open: true, pool: bundlePda.toBase58() })
 
@@ -969,14 +994,13 @@ export default function UploadYourMusic() {
               <h3 className="text-xl font-semibold mb-6">Preview Your NFT</h3>
               <div className="space-y-8">
                 {isBundle && (
-                  <div className="aspect-[3/1] relative rounded-lg overflow-hidden bg-muted/50">
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-                    <div className="absolute bottom-4 left-4">
-                      <h2 className="text-2xl font-bold text-white mb-2">{albumMeta.albumName}</h2>
-                      <p className="text-white/80">{albumMeta.year}</p>
-                    </div>
-                  </div>
-                )}
+  <MosaicPreview
+    images={heroImages}
+    aspect="video"
+    overlay={{ title: albumMeta.albumName || 'Album', subtitle: albumMeta.year || '' }}
+  />
+)}
+
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {tracks.map((track, index) => (
