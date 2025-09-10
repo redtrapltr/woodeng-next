@@ -47,6 +47,9 @@ import { Globe, Send, Twitter } from 'lucide-react';
 import { PROGRAM_ID as METADATA_PROGRAM_ID } from "@metaplex-foundation/mpl-token-metadata";
 
 
+import bs58 from "bs58";
+import { BorshAccountsCoder } from "@project-serum/anchor";
+
 
 
 
@@ -540,6 +543,19 @@ type PoolType = {
   audioFile?: File;
 };
 
+
+
+
+// Filled trade toast payloads (used by buy/sell “filled” modals)
+type FilledTrade = {
+  open: boolean;
+  symbol: string;
+  amountMeme: number;   // UI units
+  priceWoodeng: number; // UI units
+  quoteLabel?: string;  // SOL or WOODENG
+};
+
+
 const QUOTE_DECIMALS = 9;              // WOODENG and wSOL both have 9
 const WOODENG_DECIMALS = QUOTE_DECIMALS;
 const WSOL_MINT = NATIVE_MINT;         // So111111... (wrapped SOL)
@@ -662,12 +678,90 @@ async function buildCreateMintIx(
 
 export default function SoundMemesClient() {
 
+
+
+
+
+
+
+
+  // ==== put near the top of SoundMemesClient() ====
+const BULK_FLUSH_MS = 30_000;
+
+type PricePoint = { mint: string; priceLamports: number; at: number };
+
+// latest-per-mint buffer + one timer
+const bulkRef = React.useRef<Map<string, PricePoint>>(new Map());
+const flushTimerRef = React.useRef<number | null>(null);
+
+// enqueue (keep only newest per mint)
+function queuePrice(mint: string, priceLamports: number, at = Date.now()) {
+  if (!Number.isFinite(priceLamports) || priceLamports <= 0) return;
+  const prev = bulkRef.current.get(mint);
+  if (!prev || at > prev.at) bulkRef.current.set(mint, { mint, priceLamports, at });
+  scheduleFlush();
+}
+
+function scheduleFlush() {
+  if (flushTimerRef.current != null) return;
+  flushTimerRef.current = window.setTimeout(() => flushNow(false), BULK_FLUSH_MS);
+}
+
+async function flushNow(useBeacon: boolean) {
+  const items = Array.from(bulkRef.current.values());
+  bulkRef.current.clear();
+  if (!items.length) {
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+    return;
+  }
+
+  const payload = JSON.stringify({ points: items });
+
+  try {
+    // try beacon on unload/hidden tabs
+    if (useBeacon && 'sendBeacon' in navigator) {
+      const ok = navigator.sendBeacon('/api/pricepoints/bulk', new Blob([payload], { type: 'application/json' }));
+      if (ok) return;
+    }
+    await fetch('/api/pricepoints/bulk', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+      keepalive: useBeacon, // helps during unload
+    });
+  } finally {
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+  }
+}
+
+// flush regularly + when tab hides/unloads
+React.useEffect(() => {
+  const id = window.setInterval(() => flushNow(false), BULK_FLUSH_MS);
+  const onHide = () => flushNow(true);
+  window.addEventListener('visibilitychange', onHide);
+  window.addEventListener('beforeunload', onHide);
+  return () => {
+    clearInterval(id);
+    window.removeEventListener('visibilitychange', onHide);
+    window.removeEventListener('beforeunload', onHide);
+    flushNow(true);
+  };
+}, []);
+
+
   // 1) FIRST
   const wallet = useWallet();
   const [pools, setPools] = useState<PoolType[]>([]);
   const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
 
   const [copied, setCopied] = useState<string | null>(null);
+
+
+  // Auto-migration controls
+const AUTO_MIGRATE_AFTER_BUY = true;           // used by the post-buy path
+const ATTEMPT_SINGLE_TX_AUTOMIGRATE = false;   // keep false unless you know the math
+const autoMigratingRef = React.useRef<Set<string>>(new Set()); // prevent double-fires
+
 
 
   const searchParams   = useSearchParams();
@@ -940,7 +1034,7 @@ const pushPricePoint = useCallback((mintStr: string, priceLamports: number) => {
     localStorage.setItem(`lastPrice:${mintStr}`, JSON.stringify({ time, priceLamports }));
   } catch {}
 
-  persistPricePoint(mintStr, priceLamports, time);
+  queuePrice(mintStr, priceLamports, time); // ✅ fixed
 }, []);
 
 
@@ -948,38 +1042,6 @@ const pushPricePoint = useCallback((mintStr: string, priceLamports: number) => {
 
 
 
-// We always keep the most recent price and flush it shortly after the last update.
-// was: useRef<Map<string, { timer: any; last: number }>>(new Map())
-const flushTimersRef = useRef<Map<string, {
-  timer: ReturnType<typeof setTimeout>;
-  last: number;
-  atMs: number;
-}>>(new Map());
-
-async function persistPricePoint(mintStr: string, priceLamports: number, atMs: number) {
-  const existing = flushTimersRef.current.get(mintStr);
-  if (existing) {
-    existing.last = priceLamports;
-    existing.atMs = atMs;                 // ✅ tracked timestamp
-    clearTimeout(existing.timer);
-  }
-
-  const timer = setTimeout(async () => {
-    const entry = flushTimersRef.current.get(mintStr);
-    if (!entry) return;
-    try {
-      await fetch('/api/pricepoints/ingest', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mint: mintStr, priceLamports: entry.last, at: entry.atMs }),
-      });
-    } finally {
-      flushTimersRef.current.delete(mintStr);
-    }
-  }, 1000);
-
-  flushTimersRef.current.set(mintStr, { timer, last: priceLamports, atMs });
-}
 
 
 
@@ -1917,12 +1979,13 @@ const ata = await getAssociatedTokenAddress(memeMint, wallet.publicKey!);
 }
 
 
-// ------ Fetch pools and calculate price from AMM reserves ------
+
 // ---- helpers used by the batched fetch --------------------------------
-function readU64LE(buf: Buffer, offset: number): number {
-  // token amounts & supply fit safely in JS number for this app
-  return Number(buf.readBigUInt64LE(offset));
+function readU64LESafe(buf: Buffer | undefined | null, offset: number): number {
+  if (!buf || buf.length < offset + 8) return 0;
+  try { return Number(buf.readBigUInt64LE(offset)); } catch { return 0; }
 }
+
 
 
 function toHttp(url: string | undefined): string | undefined {
@@ -1966,19 +2029,48 @@ async function mapLimit<T, R>(
 
 // ------ BATCHED & SCALABLE FETCH ---------------------------------------
 async function fetchSoundMemePoolsWithMetadata(poolProgram: Program) {
-  // 1) Pull raw configs once
-  const rawConfigs = await connection.getProgramAccounts(POOL_PROGRAM_ID, {
-    filters: [{ dataSize: 8 + 350 }], // your config size
-  });
 
-  const configs = rawConfigs
-    .map(({ pubkey, account: { data } }) => ({
-      publicKey: pubkey,
-      account: poolProgram.coder.accounts.decode("SoundMemeConfig", data),
-    }))
-    .filter((c: any) => (c.account as any).version === CONFIG_VERSION);
 
-  if (configs.length === 0) return [];
+  
+  
+
+
+  // 8-byte Anchor discriminator for the account "SoundMemeConfig"
+const disc = BorshAccountsCoder.accountDiscriminator("SoundMemeConfig");
+
+// replace the "configs" construction in fetchSoundMemePoolsWithMetadata(...)
+const rawConfigs = await connection.getProgramAccounts(POOL_PROGRAM_ID, {
+  filters: [
+    { memcmp: { offset: 0, bytes: bs58.encode(BorshAccountsCoder.accountDiscriminator("SoundMemeConfig")) } },
+    // keep this if you want, but we'll also hard-check the byte below
+    { memcmp: { offset: 8, bytes: bs58.encode(Buffer.from([CONFIG_VERSION])) } },
+  ],
+});
+
+const configs: Array<{ publicKey: PublicKey; account: any }> = [];
+for (const { pubkey, account } of rawConfigs) {
+  const data = account.data;
+  // quick sanity checks so decode doesn’t crash
+  if (!data || data.length < 9) continue;           // must have disc(8) + version(1)
+  if (data[8] !== CONFIG_VERSION) continue;         // byte-8 is version in your layout
+
+  try {
+    const acc = poolProgram.coder.accounts.decode("SoundMemeConfig", data);
+    // optional: double-check version field if your struct also stores it
+    if ((acc as any).version === CONFIG_VERSION) {
+      configs.push({ publicKey: pubkey, account: acc });
+    }
+  } catch (err) {
+    console.warn("Skip malformed config", pubkey.toBase58(), err);
+  }
+}
+
+if (configs.length === 0) return [];
+
+
+
+
+
 
   // 2) Derive all addresses we’ll need (CPU-only)
   const memeMints = configs.map((c: any) => new PublicKey((c.account as any).memeMint));
@@ -2027,15 +2119,28 @@ async function fetchSoundMemePoolsWithMetadata(poolProgram: Program) {
     let supplyUi = 0;
     if (mi && mi.length >= 82) {
       decimals = mi[44];
-      const supplyRaw = readU64LE(mi, 36);
+      const supplyRaw = readU64LESafe(mi, 36);
       supplyUi = supplyRaw / 10 ** decimals;
     }
 
-    // Token vaults (size 165)
-    const memeAcc = memeVaultInfos[i]?.data;
-    const woodAcc = woodVaultInfos[i]?.data;
-    const memeReserveRaw = memeAcc ? readU64LE(memeAcc, 64) : 0;
-    const woodReserveLamports = woodAcc ? readU64LE(woodAcc, 64) : 0;
+    // Token vaults (SPL Token accounts)
+const memeAccInfo = memeVaultInfos[i];
+const woodAccInfo = woodVaultInfos[i];
+
+const memeReserveRaw =
+  memeAccInfo &&
+  memeAccInfo.owner.equals(TOKEN_PROGRAM_ID) &&
+  memeAccInfo.data.length >= 72
+    ? readU64LESafe(memeAccInfo.data, 64)
+    : 0;
+
+const woodReserveLamports =
+  woodAccInfo &&
+  woodAccInfo.owner.equals(TOKEN_PROGRAM_ID) &&
+  woodAccInfo.data.length >= 72
+    ? readU64LESafe(woodAccInfo.data, 64)
+    : 0;
+
 
     // Token Metadata PDA
     const mdi = metadataInfos[i]?.data;
@@ -2393,17 +2498,14 @@ const refreshBalances = useCallback(async () => {
 
 
 // ↕ somewhere around the other modal hooks
-const [buyFilled, setBuyFilled] = useState<{
-  open: boolean;
-  symbol: string;
-  amountMeme: number;      // UI units
-  priceWoodeng: number;    // UI units
-  quoteLabel?: string; 
-}>({ open: false, symbol: "", amountMeme: 0, priceWoodeng: 0 });
+// BUY filled state
+const [buyFilled, setBuyFilled] = useState<FilledTrade>({
+  open: false, symbol: "", amountMeme: 0, priceWoodeng: 0
+});
 
-// ↕ right below const [buyFilled, …]
-const [sellFilled, setSellFilled] = useState({
-  open:false, symbol:"", amountMeme:0, priceWoodeng:0
+// SELL filled state
+const [sellFilled, setSellFilled] = useState<FilledTrade>({
+  open: false, symbol: "", amountMeme: 0, priceWoodeng: 0
 });
 const [mintFilled, setMintFilled] = useState({
   open:false, symbol:"", lockId:0
@@ -2541,48 +2643,6 @@ const handleMintNft = (pool: PoolType) => {
 
 
 
-useEffect(() => {
-  const flushAll = () => {
-    flushTimersRef.current.forEach((entry, mint) => {
-      try {
-        // Prefer sendBeacon for reliability during unload
-        const ok = navigator.sendBeacon?.(
-  '/api/pricepoints/ingest',
-  new Blob([JSON.stringify({ mint, priceLamports: entry.last, at: entry.atMs })],
-  { type: 'application/json' })
-);
-if (!ok) {
-  fetch('/api/pricepoints/ingest', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ mint, priceLamports: entry.last, at: entry.atMs }),
-    keepalive: true,
-  });
-}
-
-      } catch {
-        fetch('/api/pricepoints/ingest', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mint, priceLamports: entry.last }),
-          keepalive: true,
-        });
-      }
-    });
-    flushTimersRef.current.clear();
-  };
-
-  const onVis = () => { if (document.visibilityState === 'hidden') flushAll(); };
-
-  window.addEventListener('visibilitychange', onVis);
-  window.addEventListener('beforeunload', flushAll);
-  return () => {
-    window.removeEventListener('visibilitychange', onVis);
-    window.removeEventListener('beforeunload', flushAll);
-    flushAll();
-  };
-}, []);
-
 
 
 
@@ -2618,15 +2678,14 @@ useEffect(() => {
 
   (async () => {
     try {
-      subId = await prog.addEventListener('PriceUpdate', (ev: any /* { memeMint, priceLamports } */, _slot) => {
-        const mintStr = new PublicKey(ev.memeMint).toBase58();
-        const lamports = Number(ev.priceLamports);
-if (lamports > 0) {
-  pushPricePoint(mintStr, lamports);
-  persistPricePoint(mintStr, lamports, Date.now());
-}
+      subId = await prog.addEventListener('PriceUpdate', (ev, _slot) => {
+  const mintStr = new PublicKey(ev.memeMint).toBase58();
+  const lamports = Number(ev.priceLamports);
+  if (lamports > 0) {
+    pushPricePoint(mintStr, lamports);
+  }
+});
 
-      });
     } catch (e) {
       console.warn('Event subscription failed (RPC may not support logs). Will rely on polling.', e);
     }
@@ -2701,9 +2760,11 @@ useEffect(() => {
         : Math.round(Number(p.price ?? 0) * 10 ** WOODENG_DECIMALS);
 
     if (lamports > 0) {
-      // debounced server write so reloads have a baseline
-      persistPricePoint(mint, lamports, Date.now());
-    }
+  pushPricePoint(mint, lamports);
+  // force one bulk flush so the DB has a baseline now
+  flushNow(false);
+}
+
   }
 }, [pools, persistedSeriesByMint]);
 
@@ -2728,16 +2789,15 @@ useEffect(() => {
     const lamportsFromChain = Number(p.lastMemePrice ?? 0);
 
 if (lamportsFromChain > 0) {
-  // seed + persist real chain price so reloads are consistent across users
   pushPricePoint(mintStr, lamportsFromChain);
-  persistPricePoint(mintStr, lamportsFromChain, Date.now());
+  flushNow(false); // immediate bulk baseline
 } else if (p.price && p.price > 0) {
-  // derive for UI only; DO NOT persist to server
   const derivedLamports = Math.round(p.price * 10 ** WOODENG_DECIMALS);
   if (derivedLamports > 0) {
-    pushPricePoint(mintStr, derivedLamports);
+    pushPricePoint(mintStr, derivedLamports); // UI only (bulk will send later)
   }
 }
+
 
     seededOnceRef.current.add(mintStr);
 
@@ -2788,12 +2848,12 @@ for (let i = 0; i < cfgKeys.length; i++) {
   if (!acc?.data) continue;
 
   const cfg = prog.coder.accounts.decode("SoundMemeConfig", acc.data) as any;
-  const lamports = Number(cfg.lastMemePrice ?? 0);
-  if (lamports > 0) {
-    const mintStr = pools[i].memeMint.toBase58();
-    pushPricePoint(mintStr, lamports);        // live
-    persistPricePoint(mintStr, lamports, Date.now());
-  }
+const lamports = Number(cfg.lastMemePrice ?? 0);
+if (lamports > 0) {
+  const mintStr = pools[i].memeMint.toBase58();
+  pushPricePoint(mintStr, lamports);
+}
+
 }
 
     } catch (e) {
@@ -2867,11 +2927,10 @@ useEffect(() => {
       Math.round(Number(detailPool.price ?? 0) * 1e9);
 
     if (lamports > 0) {
-      // show instantly
-      pushPricePoint(mintStr, lamports);
-      // also persist so a reload keeps it
-      persistPricePoint(mintStr, lamports, Date.now());;
-    }
+  pushPricePoint(mintStr, lamports);
+  flushNow(false); // immediate bulk baseline
+}
+
   }
 }, [
   showDetail,
@@ -2896,6 +2955,38 @@ useEffect(() => {
 useEffect(() => {
   refreshBalances();            // ← fetch raw balances
 }, [refreshBalances]);
+
+
+
+// Auto-migrate any bonding pool that already meets the threshold
+useEffect(() => {
+  if (!wallet.publicKey) return;
+
+  (async () => {
+    for (const p of pools) {
+      // only bonding pools
+      if (p.poolType !== 0) continue;
+      // skip if not yet at the WOODENG threshold
+      if ((p.ammReserves?.woodeng ?? 0) < BONDING_MCAP_THRESHOLD_LAMPORTS) continue;
+
+      const k = p.memeMint.toBase58();
+      if (autoMigratingRef.current.has(k)) continue; // avoid double fire
+
+      try {
+        autoMigratingRef.current.add(k);
+
+        // migrate (this will prompt the wallet once)
+        await migratePool(p);
+
+        
+      } catch (e) {
+        console.warn("Auto-migrate watcher failed for", k, e);
+      } finally {
+        autoMigratingRef.current.delete(k);
+      }
+    }
+  })();
+}, [pools, wallet.publicKey]);
 
 
 // Récupère le prix USD de SOL (1 WOODENG = 1 SOL)
@@ -3013,6 +3104,17 @@ async function buySoundMeme({
     coreIx,
   ].filter(Boolean) as TransactionInstruction[];
 
+
+  
+ // if using SOL, close the temporary wSOL account to return lamports
+ if (quoteIsSol(pool)) {
+   ixs.push(createCloseAccountInstruction(
+     buyerQuoteAta,
+     wallet.publicKey,
+     wallet.publicKey
+   ));
+ }
+
   return await sendIxsOnce(connection, getAnchorWallet(wallet), ixs);
 }
 
@@ -3092,15 +3194,9 @@ const isBonding       = selectedPool.poolType === 0;
   *  minMemeOut = desired_out × (1 − protocol_fee − user_slippage)
   *               but never less than 1 raw token
   * --------------------------------------------------------- */
- const feePct  = selectedPool.poolType === 0                      // 1 % only
-               ? PROTOCOL_FEE_BPS / 10_000
-               : 0;
+// after
 const slipPct = slippage / 100;
-
-const minMemeOut = Math.max(
-  1,
-  Math.floor(memeRawOut * (1 - feePct - slipPct))
-);
+const minMemeOut = Math.max(1, Math.floor(memeRawOut * (1 - slipPct)));
 
     setTransactionStatus('processing');
     setTransactionMessage('Processing transaction...');
@@ -3115,8 +3211,7 @@ const minMemeOut = Math.max(
     });
 
 
-    const DEC = selectedPool.decimals ?? MEME_DECIMALS;
-const memeRawOut = Math.floor(Number(modalTokensToBuy) * 10 ** DEC);
+    // reuse DEC & memeRawOut you already computed above
 const mintStr = selectedPool.memeMint.toBase58();
 
 // ✅ user MEME balance up
@@ -3147,10 +3242,11 @@ try {
   const cfgNow = await progNow.account.soundMemeConfig.fetch(selectedPool.pubkey);
   const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
   if (lamportsNow > 0) {
-    const mintStr = selectedPool.memeMint.toBase58();
-    pushPricePoint(mintStr, lamportsNow);       // update in-memory
-    await persistPricePoint(mintStr, lamportsNow, Date.now());
-  }
+  const mintStr = selectedPool.memeMint.toBase58();
+  pushPricePoint(mintStr, lamportsNow);
+  // no direct write; bulk will send it shortly
+}
+
 } catch {}
 
 
@@ -3167,6 +3263,37 @@ const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
 const updatedPools = await fetchSoundMemePoolsWithMetadata(poolProgram);
 setPools(updatedPools);
 setShowBuyModal(false);                 // close the buy form
+
+
+
+
+// ---- AUTO-MIGRATE if threshold now met (no click needed) ----
+if (AUTO_MIGRATE_AFTER_BUY) {
+  try {
+    const fresh = updatedPools.find(p => p.memeMint.equals(selectedPool.memeMint));
+    if (fresh &&
+        fresh.poolType === 0 &&
+        (fresh.ammReserves?.woodeng ?? 0) >= BONDING_MCAP_THRESHOLD_LAMPORTS) {
+
+      const k = fresh.memeMint.toBase58();
+      if (!autoMigratingRef.current.has(k)) {
+        autoMigratingRef.current.add(k);
+        await migratePool(fresh);  // uses your existing migrateToAmm() helper
+
+        // refresh once more so UI flips to AMM immediately
+        const provider2 = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
+        const poolProgram2 = new Program(poolIdl, POOL_PROGRAM_ID, provider2);
+        const after = await fetchSoundMemePoolsWithMetadata(poolProgram2);
+        setPools(after);
+      }
+    }
+  } catch (e) {
+    console.warn("Auto-migrate after buy failed:", e);
+  } finally {
+    autoMigratingRef.current.delete(selectedPool.memeMint.toBase58());
+  }
+}
+
 
 // >>> open filled-order pop-up <<<
 setBuyFilled({
@@ -3239,10 +3366,10 @@ setBuyFilled({
       const cfgNow = await progNow.account.soundMemeConfig.fetch(selectedPool.pubkey);
       const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
       if (lamportsNow > 0) {
-        const mint = selectedPool.memeMint.toBase58();
-        pushPricePoint(mint, lamportsNow);
-        await persistPricePoint(mint, lamportsNow, Date.now());
-      }
+  const mint = selectedPool.memeMint.toBase58();
+  pushPricePoint(mint, lamportsNow);
+}
+
     } catch {}
 
     // filled-order toast
@@ -3251,6 +3378,7 @@ setBuyFilled({
       symbol: selectedPool.symbol,
       amountMeme: amtUi,
       priceWoodeng: woodengUiOut,
+      quoteLabel: quoteLabelOf(selectedPool),
     });
   } catch (e: any) {
     setTransactionStatus('error');
@@ -4120,7 +4248,7 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
         <span className="font-semibold">{sellFilled.amountMeme}</span>&nbsp;
         {sellFilled.symbol}&nbsp;for&nbsp;
         <span className="font-semibold">
-          {sellFilled.priceWoodeng.toFixed(5)} {quoteLabelOf(selectedPool!)}
+          {sellFilled.priceWoodeng.toFixed(5)} {sellFilled.quoteLabel ?? 'WOODENG'}
         </span>.
       </p>
       <button className="bg-[#ffc371] w-full py-2 rounded text-black font-bold"
@@ -4250,27 +4378,47 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 
 
 
-  // ticks = merged (persisted + live) price points for this mint
+// ticks = merged (persisted + live) price points for this mint
 const ticks = mergedSeries(mintKey);
 
-// history
-// Normalize server OHLC (lamports) to UI units; fallback to client build if not ready
-const raw = serverCandles[mintKey]?.[selectedTimeRange] ?? [];
+// --- START FIX: force server OHLC to numbers and correct units ---
+const rawServer = serverCandles[mintKey]?.[selectedTimeRange] ?? [];
 
-const lamportsToUi = (x: number) => x / 10 ** WOODENG_DECIMALS;
-const normalize = (b: { t:number; o:number; h:number; l:number; c:number }) => {
-  // If server already sent UI values (< 1), leave them; if integers (e.g., 2000),
-  // treat as lamports and divide by 1e9 (WOODENG_DECIMALS).
-  const M = Math.max(b.o, b.h, b.l, b.c);
-  const scale = M > 1 ? 10 ** WOODENG_DECIMALS : 1;
-  const f = (v: number) => v / scale;
-  return { t: b.t, o: f(b.o), h: f(b.h), l: f(b.l), c: f(b.c) };
-};
+// coerce every field to a JS number (Postgres on Vercel often returns strings)
+const srvNum = (rawServer as any[]).map(b => ({
+  t: Number((b as any).t),
+  o: Number((b as any).o),
+  h: Number((b as any).h),
+  l: Number((b as any).l),
+  c: Number((b as any).c),
+})).filter(b =>
+  Number.isFinite(b.t) &&
+  Number.isFinite(b.o) &&
+  Number.isFinite(b.h) &&
+  Number.isFinite(b.l) &&
+  Number.isFinite(b.c)
+);
 
-let candles = raw.map(normalize);
-if (!candles.length) {
-  candles = buildCandles(mintKey, selectedTimeRange);
-}
+// Decide if these are lamports (server) or already UI.
+// Use the latest live UI tick (if present) to judge the scale robustly.
+const lastUi = ticks.length ? ticks[ticks.length - 1].price : 0;
+const maxSrv = srvNum.length ? Math.max(...srvNum.flatMap(b => [b.o, b.h, b.l, b.c])) : 0;
+
+// If server values are > ~5x the live UI price, they’re lamports → divide by 1e9.
+const looksLamports = lastUi > 0 ? (maxSrv / lastUi > 5) : (maxSrv >= 1_000);
+const scale = looksLamports ? 1e9 : 1;
+
+const serverUi = srvNum.map(b => ({
+  t: b.t,
+  o: b.o / scale,
+  h: b.h / scale,
+  l: b.l / scale,
+  c: b.c / scale,
+}));
+
+let candles = serverUi.length ? serverUi : buildCandles(mintKey, selectedTimeRange);
+// --- END FIX ---
+
 
 
   const bucketMs = TF_MS[selectedTimeRange];
