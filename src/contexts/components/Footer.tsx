@@ -2,6 +2,7 @@
 import React from "react";
 import Link from "next/link";
 import { X, Send, Mail } from "lucide-react";
+import Image from "next/image";
 
 export function Footer() {
   return (
@@ -12,11 +13,14 @@ export function Footer() {
           {/* Company Info */}
           <div className="space-y-4">
             <div>
-              <img
-                src="https://i.postimg.cc/pTd49kBG/Woo-Logo.png"
-                alt="Woo Logo"
-                className="h-20 w-auto"
-              />
+              <Image
+  src="/brand/logo.png"
+  alt="Woodeng"
+  width={320}
+  height={80}
+  className="h-20 w-auto"
+  priority
+/>
             </div>
             <p className="text-muted-foreground text-sm">
               Music NFT’s & Sound Memes decentralized platform.

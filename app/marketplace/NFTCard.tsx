@@ -9,8 +9,7 @@ import { cn } from '@/lib/utils';
 import { Web3Image, useAudio } from '@/contexts/components/Web3Media';
 
 /* tiny helpers ---------------------------------------------------- */
-const mmss = (sec = 0) =>
-  `${Math.floor(sec / 60)}:${`${Math.floor(sec % 60)}`.padStart(2, '0')}`;
+
 
 const Badge = ({ children }: { children: React.ReactNode }) => (
   <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-black/60 text-white">
@@ -135,12 +134,14 @@ export function NFTCard({
         </div>
 
         <div className="flex flex-wrap gap-1 mt-2 text-[11px]">
-          <span className="bg-muted px-1.5 rounded">{nft.metadata.genre}</span>
-          <span className="bg-muted px-1.5 rounded">{mmss(nft.metadata.duration)}</span>
-          {nft.metadata.style && (
-            <span className="bg-muted px-1.5 rounded">{nft.metadata.style}</span>
-          )}
-        </div>
+  {!!nft.metadata.genre && nft.metadata.genre !== 'N/A' && (
+    <span className="bg-muted px-1.5 rounded">{nft.metadata.genre}</span>
+  )}
+  {!!nft.metadata.style && nft.metadata.style !== 'N/A' && (
+    <span className="bg-muted px-1.5 rounded">{nft.metadata.style}</span>
+  )}
+</div>
+
 
         <div className="mt-auto pt-3">
           <button

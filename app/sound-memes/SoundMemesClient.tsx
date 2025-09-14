@@ -267,7 +267,7 @@ function MiniVerticalCard({
   <button
     type="button"
     onClick={(e) => { e.stopPropagation(); onBuy(pool); }}
-    className="h-9 rounded bg-[#ffc371] text-black font-semibold"
+    className="h-9 w-full inline-flex items-center justify-center whitespace-nowrap leading-none rounded px-3 text-[13px] font-semibold bg-[#ffc371] text-black"
   >
     Buy
   </button>
@@ -276,7 +276,7 @@ function MiniVerticalCard({
     type="button"
     onClick={(e) => { e.stopPropagation(); onSell(pool); }}
     disabled={!isAmm(pool)}
-    className="h-9 rounded bg-[#ff5656] text-white font-semibold disabled:opacity-40"
+    className="h-9 w-full inline-flex items-center justify-center whitespace-nowrap leading-none rounded px-3 text-[13px] font-semibold bg-[#ff5656] text-white disabled:opacity-40"
     title={isAmm(pool) ? '' : 'Sell available after AMM migration'}
   >
     Sell
@@ -341,21 +341,23 @@ function MobileVerticalSection({
     if (best !== -1) setActiveIdx(best);
   }, []);
 
-  // start at bottom so you "climb" to #1
-  React.useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight - el.clientHeight; // start at bottom
-      setProgress(0);
-      decorate();
-    });
-  }, [itemsBestFirst.length, decorate]);
+  // start at TOP (Top #1 first), then scroll down toward #100
+React.useEffect(() => {
+  const el = scrollRef.current;
+  if (!el) return;
+  requestAnimationFrame(() => {
+    el.scrollTop = 0; // start at top
+    setProgress(0);
+    decorate();
+  });
+}, [itemsBestFirst, decorate]);
+
+
 
   const onScroll = React.useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     const max = Math.max(1, el.scrollHeight - el.clientHeight);
-    const pct = (max - el.scrollTop) / max; // bottom→top fill
+    const pct = el.scrollTop / max; // top→bottom progress
     setProgress(Math.min(1, Math.max(0, pct)));
     decorate();
   }, [decorate]);
@@ -470,7 +472,7 @@ function MobileVerticalStacks({
 
   return (
     <div className="md:hidden">
-      <div className="mb-3 flex items-center justify-between">
+  <div className="mt-5 mb-3 flex items-center justify-between">
         <div className="text-sm opacity-80">Category</div>
         <select
           value={mode}
@@ -484,13 +486,15 @@ function MobileVerticalStacks({
       </div>
 
       <MobileVerticalSection
+  key={mode}                        // ⬅️ remount on category change
   title={title}
   itemsBestFirst={current}
   onOpen={onOpen}
-  onBuy={onBuy}                                      // was: (p) => handleOpenBuyModal(p)
-  onSell={(p) => { if (isAmm(p)) onSell(p); }}       // was: if (isAmm(p)) handleOpenSellModal(p)
+  onBuy={onBuy}
+  onSell={(p) => { if (isAmm(p)) onSell(p); }}
   change24hFor={change24hFor}
 />
+
     </div>
   );
 }
@@ -566,6 +570,11 @@ const quoteLabelOf = (p: PoolType) => (quoteIsSol(p) ? "SOL" : "WOODENG");
 const MEME_DECIMALS = 0;
 const PROTOCOL_FEE_BPS = 100; // 1 %
 const BONDING_MCAP_THRESHOLD_LAMPORTS = 35 * 10 ** WOODENG_DECIMALS; // 35 WOODENG market-cap (lamports)
+const AMM_MIGRATION_UPPER_CAP_LAMPORTS = 69 * 10 ** WOODENG_DECIMALS; // upper cap where migration is no longer allowed
+
+
+
+
 
 
 
@@ -803,7 +812,7 @@ useEffect(() => {
     try {
       const r = await fetch(`/api/ohlc/${mintKey}?tf=${selectedTimeRange}&limit=1000`, { cache: 'no-store' });
       const bars: ServerCandle[] = r.ok ? await r.json() : [];
-      if (!stop && Array.isArray(bars)) {
+      if (!stop && Array.isArray(bars) && bars.length > 0) {   // ✅ only set when non-empty
         setServerCandles(prev => ({
           ...prev,
           [mintKey]: { ...(prev[mintKey] ?? {}), [selectedTimeRange]: bars }
@@ -814,6 +823,7 @@ useEffect(() => {
 
   return () => { stop = true; };
 }, [showDetail, detailPool, selectedTimeRange]);
+
 
 
 
@@ -1114,6 +1124,7 @@ function rangeMs(range: string) {
 }
 
 
+const toPubkey = (x: any) => (x instanceof PublicKey ? x : new PublicKey(String(x)));
 
 
 
@@ -1301,12 +1312,25 @@ async function migratePool(pool: PoolType) {
     tokenProgram: TOKEN_PROGRAM_ID,
   }).rpc();
 
+  // 🔗 bridge one price point immediately
+  try {
+    const fresh   = await prog.account.soundMemeConfig.fetch(cfgPda);
+    const lamports = Number((fresh as any).lastMemePrice ?? 0);
+    const mintStr  = pool.memeMint.toBase58();
+    const bridge   = lamports > 0 ? lamports : Math.round(Number(pool.price ?? 0) * 1e9);
+    if (bridge > 0) {
+      pushPricePoint(mintStr, bridge);
+      flushNow(false); // persist right away so reloads keep it
+    }
+  } catch {}
+
   await refreshBalances();
   await refreshUserNfts();
   const upd = await fetchSoundMemePoolsWithMetadata(prog);
   setPools(upd);
   setStatus(`Migrated! Tx ${sig.slice(0,8)}…`);
 }
+
 
 
 
@@ -1827,18 +1851,17 @@ function tokensUntilAmm(pool: PoolType): number {
 
 
 function getQuoteForMemeSell(pool: PoolType, memeRawIn: number): number {
-  if (pool.poolType === 0) return NaN; // selling disabled on bonding
+  if (pool.poolType === 0) return NaN;
 
-  const x = Number(pool.ammReserves.meme);     // MEME reserve (raw)
-  const y = Number(pool.ammReserves.woodeng);  // WOODENG reserve (lamports)
+  const x = Number(pool.ammReserves.meme);
+  const y = Number(pool.ammReserves.woodeng);
   if (memeRawIn <= 0) return NaN;
 
-  // AMM XYK exact-in (user sells MEME to receive WOODENG)
-  // Δy = floor( (y * Δx_eff) / (x + Δx_eff) ), with fee applied to input
-  const FEE = 0.003;
-  const dxEff = Math.floor(memeRawIn * (1 - FEE));
-  let dy = Math.floor((y * dxEff) / (x + dxEff));
-  return Math.max(0, dy);
+  // Gross out without fees:
+  const dyGross = Math.floor((y * memeRawIn) / (x + memeRawIn));
+  // Program charges 0.05% project + 0.25% LP on OUTPUT:
+  const dyNet = Math.floor(dyGross * (1 - 0.003));
+  return Math.max(0, dyNet);
 }
 
 
@@ -2319,6 +2342,12 @@ async function sellSoundMeme({
   const { ata: buyerQuoteAta, ix: buyerQuoteAtaIx } = await ensureAtaIx(wallet.publicKey, pool.quoteMint, wallet.publicKey);
   const { ata: projectWalletAta, ix: projectWalletAtaIx } = await ensureAtaIx(PROJECT_WALLET, pool.quoteMint, wallet.publicKey);
 
+
+  const cfg = await poolProgram.account.soundMemeConfig.fetch(configPda);
+const lpFeeVaultPk = (cfg as any).lpFeeVault ?? (cfg as any).lp_fee_vault;
+const lpFeeVault = toPubkey(lpFeeVaultPk);
+
+
   const coreIx = await poolProgram.methods
     .sell(new BN(memeAmountIn), new BN(minWoodengOut))
     .accounts({
@@ -2330,7 +2359,7 @@ async function sellSoundMeme({
       buyerMemeAta,
       buyerWoodengAta:  buyerQuoteAta,     // destination (quote) ATA
       projectWalletAta,
-      lpFeeVault:       projectWalletAta,
+      lpFeeVault,
       tokenProgram:     TOKEN_PROGRAM_ID,
       systemProgram:    SystemProgram.programId,
     })
@@ -2701,7 +2730,6 @@ useEffect(() => {
 
 
 // Load existing history for each pool so charts show up on first open
-// 1) Load history (persisted) once per pool set
 useEffect(() => {
   if (pools.length === 0) return;
 
@@ -2717,28 +2745,36 @@ useEffect(() => {
         })
       );
 
-      const seriesByMint: Record<string, { time: number; price: number }[]> = {};
-      const firstSeen:    Record<string, number> = {};
+      const updateSeries: Record<string, { time: number; price: number }[]> = {};
+      const updateFirst:  Record<string, number> = {};
 
       for (const [mintStr, arr] of all) {
         const series = arr
           .map(pt => ({
             time: new Date(pt.time).getTime(),
-            price: Number(pt.priceLamports) / 10 ** WOODENG_DECIMALS,
+            price: Number(pt.priceLamports) / 1e9,
           }))
+          .filter(p => Number.isFinite(p.time) && Number.isFinite(p.price))
           .sort((a, b) => a.time - b.time);
 
-        seriesByMint[mintStr] = series;
-        if (series.length) firstSeen[mintStr] = series[0].time;
+        if (series.length > 0) {
+          updateSeries[mintStr] = series;      // ✅ only overwrite when non-empty
+          updateFirst[mintStr]  = series[0].time;
+        }
       }
 
-      setPersistedSeriesByMint(prev => ({ ...prev, ...seriesByMint }));
-      setFirstSeenAtByMint(prev => ({ ...prev, ...firstSeen }));
+      if (Object.keys(updateSeries).length) {
+        setPersistedSeriesByMint(prev => ({ ...prev, ...updateSeries }));
+      }
+      if (Object.keys(updateFirst).length) {
+        setFirstSeenAtByMint(prev => ({ ...prev, ...updateFirst }));
+      }
     } catch (e) {
       console.warn('Failed loading history', e);
     }
   })();
 }, [pools]);
+
 
 
 
@@ -2873,7 +2909,7 @@ useEffect(() => {
 
   const mintStr = detailPool.memeMint.toBase58();
   let stop = false;
-  let timer: any = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
 
   const fetchOnce = async () => {
     try {
@@ -2882,6 +2918,8 @@ useEffect(() => {
       const rows: Array<{ time: string; priceLamports: string }> = await res.json();
 
       if (stop) return;
+      if (!Array.isArray(rows) || rows.length === 0) return; // ✅ don’t wipe existing history on empty response
+
       setPersistedSeriesByMint(prev => ({
         ...prev,
         [mintStr]: rows
@@ -2889,6 +2927,7 @@ useEffect(() => {
             time: new Date(r.time).getTime(),
             price: Number(r.priceLamports) / 10 ** WOODENG_DECIMALS, // lamports → WOODENG
           }))
+          .filter(p => Number.isFinite(p.time) && Number.isFinite(p.price))
           .sort((a, b) => a.time - b.time)
           .slice(-2000),
       }));
@@ -2899,7 +2938,6 @@ useEffect(() => {
 
   // initial fetch
   fetchOnce();
-
   // keep it fresh while the modal is open (every 10s)
   timer = setInterval(fetchOnce, 10_000);
 
@@ -2908,6 +2946,7 @@ useEffect(() => {
     if (timer) clearInterval(timer);
   };
 }, [showDetail, detailPool]);
+
 
 
 useEffect(() => {
@@ -2967,7 +3006,8 @@ useEffect(() => {
       // only bonding pools
       if (p.poolType !== 0) continue;
       // skip if not yet at the WOODENG threshold
-      if ((p.ammReserves?.woodeng ?? 0) < BONDING_MCAP_THRESHOLD_LAMPORTS) continue;
+      const v = p.ammReserves?.woodeng ?? 0;
+      if (v < BONDING_MCAP_THRESHOLD_LAMPORTS || v >= AMM_MIGRATION_UPPER_CAP_LAMPORTS) continue;
 
       const k = p.memeMint.toBase58();
       if (autoMigratingRef.current.has(k)) continue; // avoid double fire
@@ -3080,6 +3120,12 @@ async function buySoundMeme({
     ? poolProgram.methods.swap(new BN(amountWoodengIn), new BN(minMemeOut))
     : poolProgram.methods.buy (new BN(amountWoodengIn), new BN(minMemeOut));
 
+
+    const cfg = await poolProgram.account.soundMemeConfig.fetch(configPda);
+const lpFeeVaultPk = (cfg as any).lpFeeVault ?? (cfg as any).lp_fee_vault; // IDL casing-safe
+const lpFeeVault = toPubkey(lpFeeVaultPk);
+
+
   const coreIx = await method.accounts({
     config:        configPda,
     memeMint:      pool.memeMint,
@@ -3089,7 +3135,7 @@ async function buySoundMeme({
     buyerMemeAta,
     buyerWoodengAta: buyerQuoteAta,     // << input (quote) ATA
     projectWalletAta,
-    lpFeeVault:    projectWalletAta,
+    lpFeeVault,
     tokenProgram:  TOKEN_PROGRAM_ID,
     systemProgram: SystemProgram.programId,
   }).instruction();
@@ -3247,7 +3293,8 @@ try {
   // no direct write; bulk will send it shortly
 }
 
-} catch {}
+} catch (e) { /* ignore */ }
+
 
 
 
@@ -3268,23 +3315,24 @@ setShowBuyModal(false);                 // close the buy form
 
 
 // ---- AUTO-MIGRATE if threshold now met (no click needed) ----
+// ---- AUTO-MIGRATE if threshold now met (no click needed) ----
 if (AUTO_MIGRATE_AFTER_BUY) {
   try {
     const fresh = updatedPools.find(p => p.memeMint.equals(selectedPool.memeMint));
-    if (fresh &&
-        fresh.poolType === 0 &&
-        (fresh.ammReserves?.woodeng ?? 0) >= BONDING_MCAP_THRESHOLD_LAMPORTS) {
+    if (fresh && fresh.poolType === 0) {
+      const v = fresh.ammReserves?.woodeng ?? 0;
+      if (v >= BONDING_MCAP_THRESHOLD_LAMPORTS && v < AMM_MIGRATION_UPPER_CAP_LAMPORTS) {
+        const k = fresh.memeMint.toBase58();
+        if (!autoMigratingRef.current.has(k)) {
+          autoMigratingRef.current.add(k);
+          await migratePool(fresh);  // uses your existing migrateToAmm() helper
 
-      const k = fresh.memeMint.toBase58();
-      if (!autoMigratingRef.current.has(k)) {
-        autoMigratingRef.current.add(k);
-        await migratePool(fresh);  // uses your existing migrateToAmm() helper
-
-        // refresh once more so UI flips to AMM immediately
-        const provider2 = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
-        const poolProgram2 = new Program(poolIdl, POOL_PROGRAM_ID, provider2);
-        const after = await fetchSoundMemePoolsWithMetadata(poolProgram2);
-        setPools(after);
+          // refresh once more so UI flips to AMM immediately
+          const provider2 = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
+          const poolProgram2 = new Program(poolIdl, POOL_PROGRAM_ID, provider2);
+          const after = await fetchSoundMemePoolsWithMetadata(poolProgram2);
+          setPools(after);
+        }
       }
     }
   } catch (e) {
@@ -3293,6 +3341,7 @@ if (AUTO_MIGRATE_AFTER_BUY) {
     autoMigratingRef.current.delete(selectedPool.memeMint.toBase58());
   }
 }
+
 
 
 // >>> open filled-order pop-up <<<
@@ -3687,28 +3736,32 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 </div>
 
               <SocialLinksBar socials={pool.socials} className="mt-2" />
-               <div className="mt-3 flex items-center gap-3">
-  {/* price + unit */}
-  <div className="flex items-baseline gap-2 whitespace-nowrap">
-    <TinyPrice
-  value={latestPriceOf(pool.memeMint.toBase58())}
-  className="text-[#ffc371] font-bold text-lg"
-/>
-
-    <span className="text-sm text-[#ffc371]/90">{quoteLabelOf(pool)}</span>
+               <div className="mt-3 flex items-center gap-3 min-w-0">
+  {/* left side can shrink & truncate */}
+  <div className="flex items-baseline gap-2 min-w-0 overflow-hidden">
+    <span className="truncate max-w-[140px] sm:max-w-[180px]">
+      <TinyPrice
+        value={latestPriceOf(pool.memeMint.toBase58())}
+        className="text-[#ffc371] font-bold text-lg"
+      />
+    </span>
+    <span className="text-sm text-[#ffc371]/90 shrink-0">{quoteLabelOf(pool)}</span>
   </div>
 
-  
-
-
-  {/* right side pushed to edge */}
-  <div className="ml-auto flex items-center gap-2">
-    <span className="text-xs bg-[#2b323c] px-2 py-1 rounded">{pool.symbol || "MEME"}</span>
-    <span className={`text-xs px-2 py-0.5 rounded ${chgUp ? 'bg-green-600/20 text-green-300' : 'bg-red-600/20 text-red-300'}`}>
+  {/* right side never wraps or shrinks */}
+  <div className="ml-auto flex items-center gap-2 shrink-0">
+    <span className="text-xs bg-[#2b323c] px-2 py-[2px] rounded leading-none whitespace-nowrap">
+      {pool.symbol || "MEME"}
+    </span>
+    <span
+      className={`text-[11px] px-2 py-[2px] rounded leading-none whitespace-nowrap shrink-0
+        ${chgUp ? 'bg-green-600/20 text-green-300' : 'bg-red-600/20 text-red-300'}`}
+    >
       {chgUp ? '▲' : '▼'} {chgAbs}%
     </span>
   </div>
 </div>
+
 
 
               {/* Liquidity row — SHOW ONLY ON AMM */}
@@ -3753,7 +3806,7 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 
   {!( !isAmm(pool) && poolMcap(pool) >= 69 * 10 ** WOODENG_DECIMALS ) && (
   <button
-    className="h-10 rounded bg-[#907aff] text-white hover:bg-[#37ad71] transition"
+    className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#907aff] text-white hover:bg-[#37ad71] transition"
     onClick={e => { e.stopPropagation(); handleOpenBuyModal(pool); }}
   >
     Buy
@@ -3764,17 +3817,17 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
  {canSell && (
   <button
     onClick={e => { e.stopPropagation(); handleOpenSellModal(pool); }}
-    className="h-10 rounded bg-[#ff5656] text-white hover:bg-[#f8d648] transition">
+     className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#ff5656] text-white hover:bg-[#f8d648] transition">
     Sell
   </button>
 )}
 
 {/* ► MIGRATE – shown when 35 ≤ mcap < 69 WOODENG */}
 {!isAmm(pool) &&
-  poolMcap(pool) >= 34 * 10 ** WOODENG_DECIMALS &&
-  poolMcap(pool) <  69 * 10 ** WOODENG_DECIMALS && (
+    poolMcap(pool) >= BONDING_MCAP_THRESHOLD_LAMPORTS &&
+  poolMcap(pool) <  AMM_MIGRATION_UPPER_CAP_LAMPORTS && (
     <button
-      className="h-10 rounded bg-[#37ad71] text-white hover:bg-[#4cd488] transition"
+       className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#37ad71] text-white hover:bg-[#4cd488] transition"
       onClick={e => { e.stopPropagation(); migratePool(pool); }}>
       Migrate&nbsp;to&nbsp;AMM
     </button>
@@ -3784,7 +3837,7 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 
   {/* ► MINT NFT -------------------------------------------------- */}
   <button
-    className="h-10 rounded bg-[#907aff] text-white hover:bg-[#a593ff] transition disabled:opacity-40 flex items-center justify-center gap-1"
+     className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#907aff] text-white hover:bg-[#a593ff] transition disabled:opacity-40"
     disabled={!!txStep || userMemeTokens(pool) < getMintThreshold(pool)}
     onClick={e => { e.stopPropagation(); handleMintNft(pool); }}
   >
@@ -3794,7 +3847,7 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 
   {/* ► BURN NFT -------------------------------------------------- */}
   <button
-     className="h-10 rounded bg-[#ff5656] text-white hover:bg-[#ff7373] transition flex items-center justify-center gap-1 disabled:opacity-40"
+     className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#ff5656] text-white hover:bg-[#ff7373] transition disabled:opacity-40"
     disabled={!nftsLoaded}
     title="Burn your NFT to unlock tokens"
     onClick={async e => {

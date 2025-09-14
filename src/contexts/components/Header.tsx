@@ -12,13 +12,29 @@ import {
   User as UserIcon,
   Search as SearchIcon,
   ChevronRight,
-  X,
 } from "lucide-react";
 
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+
+/* ───── mobile breakpoint hook (avoid SSR flash) ───── */
+function useIsMobile(breakpoint = 860) {
+  const [isMobile, setIsMobile] = React.useState(false);
+  React.useEffect(() => {
+    const mql = window.matchMedia(`(max-width:${breakpoint}px)`);
+    const apply = () => setIsMobile(mql.matches);
+    apply();
+    if (mql.addEventListener) mql.addEventListener("change", apply);
+    else mql.addListener(apply);
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener("change", apply);
+      else mql.removeListener(apply);
+    };
+  }, [breakpoint]);
+  return isMobile;
+}
 
 /* ───── chain + program ids ─────────────────────────────────────────────── */
 const DEVNET = new Connection("https://api.devnet.solana.com", "confirmed");
@@ -61,7 +77,7 @@ type Suggestion = {
   highPriority?: boolean;
 };
 
-/* ───── SearchBox (moved OUTSIDE Header to avoid remounts on typing) ───── */
+/* ───── SearchBox ──────────────────────────────────────────────────────── */
 type SearchBoxProps = {
   value: string;
   onChange: (v: string) => void;
@@ -70,7 +86,7 @@ type SearchBoxProps = {
   loading: boolean;
   compact?: boolean;
   inputRef?: React.RefObject<HTMLInputElement>;
-  onPickLink?: () => void; // e.g., close mobile drawer
+  onPickLink?: () => void;
 };
 
 const SearchBox: React.FC<SearchBoxProps> = React.memo(
@@ -78,8 +94,7 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
     const [open, setOpen] = React.useState(false);
     const boxRef = React.useRef<HTMLDivElement | null>(null);
 
-    // close on click/touch outside
-    React.useEffect(() => {
+    useEffect(() => {
       const onDown = (e: MouseEvent | TouchEvent) => {
         if (!boxRef.current?.contains(e.target as Node)) setOpen(false);
       };
@@ -129,7 +144,7 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
               borderRadius: 14,
               padding: "8px 36px 8px 12px",
               width: "100%",
-              fontSize: 14,
+              fontSize: compact ? 16 : 14, // iOS anti-zoom
               outline: "none",
             }}
           />
@@ -138,7 +153,7 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
             type="submit"
             aria-label="Search"
             title="Search"
-            onMouseDown={(e) => e.preventDefault()} // don’t steal focus
+            onMouseDown={(e) => e.preventDefault()}
             style={{
               position: "absolute",
               right: 6,
@@ -185,7 +200,7 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
             {suggestions.map((s) => (
               <Link href={s.href} key={s.key} legacyBehavior>
                 <a
-                  onMouseDown={(e) => e.preventDefault()} // keep input focused
+                  onMouseDown={(e) => e.preventDefault()}
                   onPointerDown={(e) => e.preventDefault()}
                   onClick={() => {
                     setOpen(false);
@@ -208,17 +223,9 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
                       padding: "2px 8px",
                       borderRadius: 999,
                       background:
-                        s.badge === "Music NFT"
-                          ? "#2b364c"
-                          : s.badge === "Sound Meme"
-                          ? "#2b3f2e"
-                          : "#2b2b3b",
+                        s.badge === "Music NFT" ? "#2b364c" : s.badge === "Sound Meme" ? "#2b3f2e" : "#2b2b3b",
                       color:
-                        s.badge === "Music NFT"
-                          ? "#90b4ff"
-                          : s.badge === "Sound Meme"
-                          ? "#9af2a1"
-                          : "#b8baff",
+                        s.badge === "Music NFT" ? "#90b4ff" : s.badge === "Sound Meme" ? "#9af2a1" : "#b8baff",
                       whiteSpace: "nowrap",
                       flexShrink: 0,
                     }}
@@ -252,34 +259,26 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
   }
 );
 
-
-const LOGO_H = 64; // tweak: 28 / 32 / 36
-
 /* ───── Header ─────────────────────────────────────────────────────────── */
+const LOGO_H = 36;
+
 export default function Header() {
   const wallet = useWallet();
   const router = useRouter();
   const pathname = usePathname();
+  const isMobile = useIsMobile(860);
+  const logoH = isMobile ? 28 : LOGO_H; // << prevents first-paint “giant logo”
 
   const [woodengBalance, setWoodengBalance] = useState<string>("0");
-
-  // search state
   const [query, setQuery] = useState("");
-
   const [loading, setLoading] = useState(false);
   const [addrResult, setAddrResult] = useState<ResolvedKind>({ kind: "unknown" });
-
-  // MOBILE drawer state
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
   const searchRefMobile = useRef<HTMLInputElement>(null!);
-
   const isOnSoundMemes = pathname?.startsWith("/sound-memes") ?? false;
 
-  /* ───── WOODENG balance (devnet) ─────────────────────────────────────── */
+  /* WOODENG balance */
   useEffect(() => {
     const run = async () => {
       if (!wallet.publicKey) return setWoodengBalance("0");
@@ -298,24 +297,19 @@ export default function Header() {
     run();
   }, [wallet.publicKey]);
 
+  /* lock body scroll + autofocus search when drawer opens */
   useEffect(() => {
-    if (mobileOpen) {
-      const { overflow } = document.body.style;
-      document.body.style.overflow = "hidden";
-      return () => {
-        document.body.style.overflow = overflow;
-      };
-    }
+    if (!mobileOpen) return;
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+    const t = setTimeout(() => searchRefMobile.current?.focus(), 120);
+    return () => {
+      document.body.style.overflow = overflow;
+      clearTimeout(t);
+    };
   }, [mobileOpen]);
 
-  useEffect(() => {
-    if (mobileOpen) {
-      const t = setTimeout(() => searchRefMobile.current?.focus(), 100);
-      return () => clearTimeout(t);
-    }
-  }, [mobileOpen]);
-
-  /* ───── address detection (debounced + cached) ───────────────────────── */
+  /* address detection (debounced + cached) */
   const cacheRef = useRef<Map<string, ResolvedKind>>(new Map());
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -374,7 +368,7 @@ export default function Header() {
     }, 250);
   }, [query]);
 
-  /* ───── suggestions builder ──────────────────────────────────────────── */
+  /* suggestions */
   const suggestions: Suggestion[] = useMemo(() => {
     const q = query.trim();
     const looksLikeTicker = /^[a-z0-9]{2,6}$/i.test(q);
@@ -423,7 +417,7 @@ export default function Header() {
     return base;
   }, [query, addrResult, isOnSoundMemes]);
 
-  /* ───── submit behaviour ─────────────────────────────────────────────── */
+  /* submit */
   const onSubmit = () => {
     const q = query.trim();
     if (!q) return;
@@ -447,10 +441,8 @@ export default function Header() {
     }
   };
 
-  /* ───── close mobile when route changes or Esc is pressed ───────────── */
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
+  /* close drawer on route change / Esc */
+  useEffect(() => setMobileOpen(false), [pathname]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setMobileOpen(false);
@@ -519,47 +511,23 @@ export default function Header() {
 
   return (
     <header style={headerContainer}>
-      {/* global fixes */}
+      {/* Desktop helper */}
       <style jsx global>{`
-        html,
-        body {
-          overflow-x: hidden;
-        }
-        @supports (padding: max(0px)) {
-          .safe-top {
-            padding-top: env(safe-area-inset-top);
-          }
-        }
+        .hide-on-mobile { display: flex !important; }
+        @media (max-width: 860px) { .hide-on-mobile { display: none !important; } }
       `}</style>
 
-      {/* small CSS just to hide/show chunks responsively */}
+      {/* local styles (no .logo-img rules anymore) */}
       <style jsx>{`
-        .hide-on-mobile {
-          display: flex;
-        }
-        .show-on-mobile {
-          display: none;
-        }
-        @media (max-width: 860px) {
-          .hide-on-mobile {
-            display: none !important;
-          }
-          .show-on-mobile {
-            display: inline-flex !important;
-          }
-        }
-        .menu-btn svg {
-          display: block;
-        }
+        .iconText { font-size: 22px; line-height: 1; font-weight: 700; display: block; transform: translateY(-1px); }
       `}</style>
 
       <div style={contentWrapper}>
-        {/* Left: Logo, Search, Nav */}
+        {/* Left: Hamburger (mobile) + Logo + Search + Nav */}
         <div style={leftSection}>
-          {mounted && (
+          {isMobile && (
             <button
               type="button"
-              className="show-on-mobile menu-btn"
               aria-label="Open menu"
               aria-controls="mobile-drawer"
               aria-expanded={mobileOpen}
@@ -576,23 +544,26 @@ export default function Header() {
                 background: "#181929",
                 color: "#e6e6ff",
                 cursor: "pointer",
+                WebkitTapHighlightColor: "transparent",
+                display: "inline-flex",
               }}
             >
-              <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" style={{ display: "block" }}>
-                <path d="M3 6h18M3 12h18M3 18h18" stroke="#e6e6ff" strokeWidth="2" strokeLinecap="round" fill="none" />
-              </svg>
+              <span aria-hidden="true" className="iconText">☰</span>
             </button>
           )}
 
-          {/* Logo */}
+          {/* Logo — give the browser an intrinsic height on first paint */}
           <Link href="/" aria-label="Woodeng home" style={{ display: "inline-flex", alignItems: "center" }}>
-  <img
-    src="/brand/logo.png"
-    alt="Woodeng"
-    draggable={false}
-    style={{ height: LOGO_H, width: "auto", display: "block", flexShrink: 0 }}
-  />
-</Link>
+            <img
+              src="/brand/logo.png"
+              alt="Woodeng"
+              draggable={false}
+              height={logoH}
+              style={{ height: logoH, width: "auto", display: "block", flexShrink: 0 }}
+              decoding="async"
+              loading="eager"
+            />
+          </Link>
 
           {/* Desktop search */}
           <div className="hide-on-mobile" style={{ flex: "1 1 auto" }}>
@@ -635,7 +606,7 @@ export default function Header() {
           </nav>
         </div>
 
-        {/* Right: Create, WOODENG, Profile, Wallet (hidden on mobile) */}
+        {/* Right: desktop-only */}
         <div className="hide-on-mobile" style={{ display: "flex", alignItems: "center", gap: 18, flexShrink: 0, marginLeft: "auto" }}>
           <Link href="/create" legacyBehavior>
             <a style={createButtonStyle}>+ Create</a>
@@ -696,239 +667,213 @@ export default function Header() {
         </div>
       </div>
 
-      {/* Mobile overlay & drawer */}
-      <div
-        aria-hidden={!mobileOpen}
-        onClick={() => setMobileOpen(false)}
-        className="show-on-mobile"
-        style={{
-          position: "fixed",
-          inset: 0,
-          background: mobileOpen ? "rgba(0,0,0,0.6)" : "transparent",
-          transition: "background .18s ease",
-          pointerEvents: mobileOpen ? "auto" : "none",
-          zIndex: 50,
-          overscrollBehaviorY: "contain",
-        }}
-      >
-        <aside
-          id="mobile-drawer"
-          onClick={(e) => e.stopPropagation()}
+      {/* Mobile overlay & drawer (rendered only on mobile) */}
+      {isMobile && (
+        <div
+          aria-hidden={!mobileOpen}
+          onClick={() => setMobileOpen(false)}
           style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            height: "100dvh",
-            width: "min(calc(100vw - 16px), 420px)",
-            boxSizing: "border-box",
-            background: "#0b0c14",
-            borderRight: "1px solid #1a1a22",
-            transform: `translate3d(${mobileOpen ? "0%" : "-100%"}, 0, 0)`,
-            transition: "transform .22s ease",
-            willChange: "transform",
-            contain: "layout paint size",
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-            padding: "14px 14px 18px",
+            position: "fixed",
+            inset: 0,
+            background: mobileOpen ? "rgba(0,0,0,0.6)" : "transparent",
+            transition: "background .18s ease",
+            pointerEvents: mobileOpen ? "auto" : "none",
+            zIndex: 50,
+            overscrollBehaviorY: "contain",
           }}
         >
-          {/* drawer top bar (sticky) */}
-          <div
+          <aside
+            id="mobile-drawer"
+            onClick={(e) => e.stopPropagation()}
             style={{
-              position: "sticky",
+              position: "absolute",
               top: 0,
-              zIndex: 2,
+              left: 0,
+              height: "100dvh",
+              width: "min(calc(100vw - 16px), 420px)",
+              boxSizing: "border-box",
               background: "#0b0c14",
-              paddingBottom: 10,
-              marginBottom: 8,
-              borderBottom: "1px solid #1a1a22",
+              borderRight: "1px solid #1a1a22",
+              transform: `translate3d(${mobileOpen ? "0%" : "-100%"}, 0, 0)`,
+              transition: "transform .22s ease",
+              willChange: "transform",
+              contain: "layout paint size",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              padding: "14px 14px 18px",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-              <img
-  src="/brand/logo.png"
-  alt="Woodeng"
-  draggable={false}
-  style={{ height: LOGO_H, width: "auto", display: "block" }}
-/>
-
-
-
-              <button
-                onClick={() => setMobileOpen(false)}
-                aria-label="Close menu"
-                style={{
-                  height: 40,
-                  width: 40,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  borderRadius: 12,
-                  border: "1px solid #232332",
-                  background: "#181929",
-                  color: "#e6e6ff",
-                }}
-              >
-                <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" style={{ display: "block" }}>
-                  <path d="M5 5L19 19M19 5L5 19" stroke="#ffffff" strokeWidth="2.6" strokeLinecap="round" fill="none" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* actions row ABOVE search */}
-          <div style={{ display: "flex", gap: 10, margin: "8px 0 6px" }}>
-            <Link href="/profile" legacyBehavior>
-              <a
-                onClick={() => setMobileOpen(false)}
-                aria-label="Your profile"
-                style={{
-                  height: 44,
-                  width: 44,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  borderRadius: 12,
-                  background: "#181929",
-                  color: "#e6e6ff",
-                  border: "1px solid #232332",
-                  flex: "0 0 44px",
-                }}
-              >
-                <UserIcon size={18} />
-              </a>
-            </Link>
-
-            <WalletMultiButton
+            {/* drawer top bar */}
+            <div
               style={{
-                flex: 1,
-                borderRadius: 12,
-                background: "#a088fa",
-                color: "#fff",
-                padding: "10px 16px",
-                fontWeight: 700,
-                fontSize: "15px",
-                lineHeight: 1,
+                position: "sticky",
+                top: 0,
+                zIndex: 2,
+                background: "#0b0c14",
+                paddingBottom: 10,
+                marginBottom: 8,
+                borderBottom: "1px solid #1a1a22",
               }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <img
+                  src="/brand/logo.png"
+                  alt="Woodeng"
+                  draggable={false}
+                  height={logoH}
+                  style={{ height: logoH, width: "auto", display: "block" }}
+                  decoding="async"
+                  loading="eager"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => setMobileOpen(false)}
+                  aria-label="Close menu"
+                  style={{
+                    height: 40,
+                    width: 40,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 12,
+                    border: "1px solid #232332",
+                    background: "#181929",
+                    color: "#e6e6ff",
+                    WebkitTapHighlightColor: "transparent",
+                  }}
+                >
+                  <span aria-hidden="true" className="iconText">×</span>
+                </button>
+              </div>
+            </div>
+
+            {/* actions row */}
+            <div style={{ display: "flex", gap: 10, margin: "8px 0 6px" }}>
+              <Link href="/profile" legacyBehavior>
+                <a
+                  onClick={() => setMobileOpen(false)}
+                  aria-label="Your profile"
+                  style={{
+                    height: 44,
+                    width: 44,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 12,
+                    background: "#181929",
+                    color: "#e6e6ff",
+                    border: "1px solid #232332",
+                    flex: "0 0 44px",
+                  }}
+                >
+                  <UserIcon size={18} />
+                </a>
+              </Link>
+
+              <WalletMultiButton
+                style={{
+                  flex: 1,
+                  borderRadius: 12,
+                  background: "#a088fa",
+                  color: "#fff",
+                  padding: "10px 16px",
+                  fontWeight: 700,
+                  fontSize: "15px",
+                  lineHeight: 1,
+                }}
+              />
+            </div>
+
+            {/* search (compact) */}
+            <SearchBox
+              compact
+              inputRef={searchRefMobile}
+              value={query}
+              onChange={setQuery}
+              onSubmit={onSubmit}
+              suggestions={suggestions}
+              loading={loading}
+              onPickLink={() => setMobileOpen(false)}
             />
-          </div>
 
-          {/* search (compact) */}
-          <SearchBox
-            compact
-            inputRef={searchRefMobile}
-            value={query}
-            onChange={setQuery}
-            onSubmit={onSubmit}
-            suggestions={suggestions}
-            loading={loading}
-            onPickLink={() => setMobileOpen(false)}
-          />
-
-          {/* section shortcuts */}
-          {isOnSoundMemes && (
+            {/* main nav */}
             <div style={{ marginTop: 2 }}>
-              <div style={{ color: "#8d92a8", fontSize: 12, margin: "8px 2px" }}>Sound Memes sections</div>
+              <div style={{ color: "#8d92a8", fontSize: 12, margin: "8px 2px" }}>Navigate</div>
               {[
-                { href: "/sound-memes#top-gainers", label: "Top Gainers (24h)" },
-                { href: "/sound-memes#top-marketcap", label: "Top Market Cap" },
-                { href: "/sound-memes#newest", label: "Newest" },
-              ].map((it) => (
-                <Link href={it.href} key={it.href} legacyBehavior>
+                { href: "/", label: "Home", icon: <Home size={17} /> },
+                { href: "/marketplace", label: "Market Place", icon: <Music size={17} /> },
+                { href: "/sound-memes", label: "Sound Memes", icon: <AnimatedSoundWaveIcon /> },
+                { href: "/staking", label: "Staking", icon: <ShieldCheck size={17} /> },
+              ].map((item) => (
+                <Link href={item.href} key={item.href} legacyBehavior>
                   <a
                     onClick={() => setMobileOpen(false)}
                     style={{
-                      display: "block",
-                      padding: "10px 10px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 12px",
                       color: "#e6e6ff",
                       textDecoration: "none",
+                      fontSize: 15,
                       border: "1px solid #1b1c26",
                       background: "#10121c",
                       borderRadius: 12,
                       marginBottom: 8,
                       fontWeight: 600,
-                      fontSize: 14,
                     }}
                   >
-                    {it.label}
+                    {item.icon}
+                    <span style={{ marginLeft: 3 }}>{item.label}</span>
                   </a>
                 </Link>
               ))}
             </div>
-          )}
 
-          {/* main nav */}
-          <div style={{ marginTop: 2 }}>
-            <div style={{ color: "#8d92a8", fontSize: 12, margin: "8px 2px" }}>Navigate</div>
-            {[
-              { href: "/", label: "Home", icon: <Home size={17} /> },
-              { href: "/marketplace", label: "Market Place", icon: <Music size={17} /> },
-              { href: "/sound-memes", label: "Sound Memes", icon: <AnimatedSoundWaveIcon /> },
-              { href: "/staking", label: "Staking", icon: <ShieldCheck size={17} /> },
-            ].map((item) => (
-              <Link href={item.href} key={item.href} legacyBehavior>
+            {/* user actions */}
+            <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+              <Link href="/create" legacyBehavior>
                 <a
                   onClick={() => setMobileOpen(false)}
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "10px 12px",
-                    color: "#e6e6ff",
-                    textDecoration: "none",
-                    fontSize: 15,
-                    border: "1px solid #1b1c26",
-                    background: "#10121c",
-                    borderRadius: 12,
-                    marginBottom: 8,
-                    fontWeight: 600,
+                    background: "#a088fa",
+                    color: "white",
+                    padding: "12px 20px",
+                    borderRadius: "24px",
+                    fontWeight: 700,
+                    fontSize: "16px",
+                    textAlign: "center",
+                    boxShadow: "0 2px 16px 0 #a088fa1a",
                   }}
                 >
-                  {item.icon}
-                  <span style={{ marginLeft: 3 }}>{item.label}</span>
+                  + Create
                 </a>
               </Link>
-            ))}
-          </div>
 
-          {/* user actions */}
-          <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-            <Link href="/create" legacyBehavior>
-              <a
-                onClick={() => setMobileOpen(false)}
+              <div
                 style={{
-                  ...createButtonStyle,
-                  display: "block",
-                  textAlign: "center",
-                  padding: "12px 20px",
+                  background: "#232332",
+                  color: "#a088fa",
+                  fontWeight: 700,
+                  borderRadius: 14,
+                  padding: "10px 14px",
+                  fontSize: 15,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  whiteSpace: "nowrap",
+                  letterSpacing: "0.01em",
                 }}
               >
-                + Create
-              </a>
-            </Link>
-
-            <div
-              style={{
-                background: "#232332",
-                color: "#a088fa",
-                fontWeight: 700,
-                borderRadius: 14,
-                padding: "10px 14px",
-                fontSize: 15,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                whiteSpace: "nowrap",
-                letterSpacing: "0.01em",
-              }}
-            >
-              <Waves size={18} style={{ color: "#a088fa" }} />
-              {woodengBalance} WOODENG
+                <Waves size={18} style={{ color: "#a088fa" }} />
+                {woodengBalance} WOODENG
+              </div>
             </div>
-          </div>
-        </aside>
-      </div>
+          </aside>
+        </div>
+      )}
     </header>
   );
 }

@@ -18,13 +18,12 @@ function getDbUrl() {
 export function getPool(): Pool {
   if (!global.__dbPool) {
     const url = getDbUrl();
-    if (!url) {
-      throw new Error(
-        'No DB connection string. Set TIMESCALE_URL or TIGER_CLOUD_DATABASE_URL or DATABASE_URL.'
-      );
-    }
+    if (!url) throw new Error('Missing DB URL');
     global.__dbPool = new Pool({
       connectionString: url,
+      max: 3,                       // 👈 keep small on serverless/dev
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 5_000,
       ssl: { rejectUnauthorized: false },
     });
   }

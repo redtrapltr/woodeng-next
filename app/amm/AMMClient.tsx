@@ -114,6 +114,8 @@ interface OrderAccount { publicKey: PublicKey; account: OrderData }
   const [program, setProgram] = useState<Program<Idl> | null>(null);
   const searchParams = useSearchParams();
   const initialAddr = (searchParams.get('addr') ?? '').trim();
+  const deepLink = Boolean(initialAddr);
+
   const [searchInput, setSearchInput] = useState(initialAddr);
 
   const [poolPk, setPoolPk] = useState<PublicKey | null>(null);
@@ -170,6 +172,20 @@ const fetchBundleAcc = async (pk: PublicKey) =>
 const [userBalances, setUserBalances] = useState<number[]>([]);
 
 
+async function waitForAccount(
+  conn: Connection,
+  pk: PublicKey,
+  totalMs = 15000,
+  intervalMs = 600
+) {
+  const deadline = Date.now() + totalMs;
+  while (Date.now() < deadline) {
+    const info = await conn.getAccountInfo(pk, 'confirmed');
+    if (info) return info;
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  return null;
+}
 
 
   // Track last persisted to avoid spam
@@ -574,12 +590,21 @@ const handleSearchPool = async (addr?: string) => {
         setIsLoading(false);
         return;
       }
-      const info = await program.provider.connection.getAccountInfo(pk);
-      if (!info) {
-        alert('Account not found on devnet');
-        setIsLoading(false);
-        return;
-      }
+      
+
+      const conn = program.provider.connection;
+let info = await conn.getAccountInfo(pk, 'confirmed');
+if (!info) {
+  // ⏳ give devnet time to finalize after minting
+  info = await waitForAccount(conn, pk, 20000, 700);
+}
+if (!info) {
+  alert('Account not found on devnet (after waiting)');
+  setIsLoading(false);
+  return;
+}
+
+
       if (!info.owner.equals(PROGRAM_ID)) {
         alert('Address exists but is not a Woodeng pool');
         setIsLoading(false);
@@ -1405,6 +1430,23 @@ const gridCols = Math.min(4, Math.ceil(Math.sqrt(poolType === 'bundle' ? mosaicI
 const showMosaic = poolType === 'bundle' && mosaicImgs.length > 1;
 
 
+
+// If we came with ?addr=...: show a simple loader until the pool is ready
+if (publicKey && deepLink && (isLoading || !poolPk || (!poolState && !bundleState))) {
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-16">
+      <div className="min-h-[40vh] grid place-items-center text-center">
+        <div className="flex items-center gap-3 text-purple-300">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          <span className="text-sm">Loading pool…</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
   // --- Render
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6 text-white">
@@ -1442,70 +1484,73 @@ const showMosaic = poolType === 'bundle' && mosaicImgs.length > 1;
                 </button>
               </div>
 
-              {/* Quick Create Pool (one TX) */}
-<div className="mt-10 text-left w-full bg-gray-800 border border-gray-700 rounded-lg p-4">
-  <h3 className="text-lg font-semibold mb-3">Create Pool (Single-Mint)</h3>
-  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-    <div className="col-span-2">
-      <label className="text-xs text-gray-400">NFT Mint</label>
-      <input
-        value={newPoolNft}
-        onChange={(e) => setNewPoolNft(e.target.value)}
-        placeholder="Paste the minted NFT mint address (e.g., D2DNKx...)"
-        className="mt-1 w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded"
-      />
-    </div>
+              {/* Quick Create Pool (one TX) — hidden if deep-linking & loading */}
+{!deepLink && !isLoading && (
+  <div className="mt-10 text-left w-full bg-gray-800 border border-gray-700 rounded-lg p-4">
+    <h3 className="text-lg font-semibold mb-3">Create Pool (Single-Mint)</h3>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="col-span-2">
+        <label className="text-xs text-gray-400">NFT Mint</label>
+        <input
+          value={newPoolNft}
+          onChange={(e) => setNewPoolNft(e.target.value)}
+          placeholder="Paste the minted NFT mint address (e.g., D2DNKx...)"
+          className="mt-1 w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded"
+        />
+      </div>
 
-    <div>
-      <label className="text-xs text-gray-400">Quote Token</label>
-      <div className="mt-1 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setUseSOL(true)}
-          className={`px-3 py-2 rounded border ${useSOL ? 'border-purple-500' : 'border-gray-700'} bg-gray-900`}
-        >
-          SOL (wSOL)
-        </button>
-        <button
-          type="button"
-          onClick={() => setUseSOL(false)}
-          className={`px-3 py-2 rounded border ${!useSOL ? 'border-purple-500' : 'border-gray-700'} bg-gray-900`}
-        >
-          WOODENG
-        </button>
+      <div>
+        <label className="text-xs text-gray-400">Quote Token</label>
+        <div className="mt-1 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setUseSOL(true)}
+            className={`px-3 py-2 rounded border ${useSOL ? 'border-purple-500' : 'border-gray-700'} bg-gray-900`}
+          >
+            SOL (wSOL)
+          </button>
+          <button
+            type="button"
+            onClick={() => setUseSOL(false)}
+            className={`px-3 py-2 rounded border ${!useSOL ? 'border-purple-500' : 'border-gray-700'} bg-gray-900`}
+          >
+            WOODENG
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <label className="text-xs text-gray-400">Seed Amount ({useSOL ? 'SOL' : 'WOODENG'})</label>
+        <input
+          value={seedAmount}
+          onChange={(e) => setSeedAmount(e.target.value)}
+          className="mt-1 w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded"
+        />
+      </div>
+
+      <div>
+        <label className="text-xs text-gray-400">Royalty (bps)</label>
+        <input
+          value={royaltyBpsInput}
+          onChange={(e) => setRoyaltyBpsInput(e.target.value)}
+          className="mt-1 w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded"
+        />
       </div>
     </div>
 
-    <div>
-      <label className="text-xs text-gray-400">Seed Amount ({useSOL ? 'SOL' : 'WOODENG'})</label>
-      <input
-        value={seedAmount}
-        onChange={(e) => setSeedAmount(e.target.value)}
-        className="mt-1 w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded"
-      />
-    </div>
-
-    <div>
-      <label className="text-xs text-gray-400">Royalty (bps)</label>
-      <input
-        value={royaltyBpsInput}
-        onChange={(e) => setRoyaltyBpsInput(e.target.value)}
-        className="mt-1 w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded"
-      />
-    </div>
+    <button
+      onClick={handleCreatePoolClick}
+      disabled={isLoading || !newPoolNft.trim()}
+      className="mt-4 px-6 py-2 bg-purple-600 rounded hover:bg-purple-700"
+    >
+      {isLoading ? 'Creating…' : 'Create Pool (1 TX)'}
+    </button>
+    <p className="mt-2 text-xs text-gray-400">
+      For SOL pools, this wraps the SOL, calls <code>createPool</code>, and closes the wSOL ATA to reclaim rent — all in one transaction.
+    </p>
   </div>
+)}
 
-  <button
-    onClick={handleCreatePoolClick}
-    disabled={isLoading || !newPoolNft.trim()}
-    className="mt-4 px-6 py-2 bg-purple-600 rounded hover:bg-purple-700"
-  >
-    {isLoading ? 'Creating…' : 'Create Pool (1 TX)'}
-  </button>
-  <p className="mt-2 text-xs text-gray-400">
-    For SOL pools, this wraps the SOL, calls <code>createPool</code>, and closes the wSOL ATA to reclaim rent — all in one transaction.
-  </p>
-</div>
 
               {recentPools.length > 0 && (
                 <div className="mt-8">
@@ -1980,7 +2025,8 @@ const showMosaic = poolType === 'bundle' && mosaicImgs.length > 1;
       {/* Metadata Modal */}
       {showMetadata && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-900 rounded-lg max-w-lg w-full border border-purple-700">
+           <div className="bg-gray-900 rounded-lg w-full border border-purple-700
+                 max-w-[92vw] sm:max-w-lg">
             <div className="flex items-center justify-between p-4 border-b border-gray-800">
               <h3 className="font-bold text-lg">NFT Metadata</h3>
               <button onClick={() => setShowMetadata(false)} className="p-2 hover:bg-gray-700 rounded-full">
@@ -1988,17 +2034,34 @@ const showMosaic = poolType === 'bundle' && mosaicImgs.length > 1;
               </button>
             </div>
             <div className="p-6 space-y-2">
-              <div>
-                <span className="text-gray-400 font-medium mr-2">Name:</span>
-                <span className="font-mono">{mintNames[selectedMintIndex]}</span>
-              </div>
-              <div>
-                <span className="text-gray-400 font-medium mr-2">Mint:</span>
-                <span className="font-mono">{(poolType === 'single'
-                  ? poolState?.nftMints[selectedMintIndex]
-                  : bundleState?.mints[selectedMintIndex]
-                )?.toBase58()}</span>
-              </div>
+              <div className="flex items-start gap-2">
+   <span className="text-gray-400 font-medium shrink-0">Name:</span>
+   <span className="font-mono break-words break-all min-w-0">
+     {mintNames[selectedMintIndex]}
+   </span>
+ </div>
+ <div className="flex items-start gap-2">
+   <span className="text-gray-400 font-medium shrink-0">Mint:</span>
+   <div className="flex-1 min-w-0">
+     <code className="block font-mono text-xs break-all bg-gray-800/60 px-2 py-1 rounded select-all">
+       {(poolType === 'single'
+         ? poolState?.nftMints[selectedMintIndex]
+         : bundleState?.mints[selectedMintIndex]
+       )?.toBase58()}
+     </code>
+   </div>
+   <button
+     onClick={() => {
+       const m = (poolType === 'single'
+         ? poolState?.nftMints[selectedMintIndex]
+         : bundleState?.mints[selectedMintIndex])?.toBase58() || '';
+       navigator.clipboard?.writeText(m).catch(() => {});
+     }}
+     className="text-xs px-2 py-1 bg-gray-800 rounded hover:bg-gray-700 shrink-0"
+   >
+     Copy
+   </button>
+ </div>
               {/* Add more fields as needed */}
             </div>
             <div className="flex justify-end border-t border-gray-800 p-4">

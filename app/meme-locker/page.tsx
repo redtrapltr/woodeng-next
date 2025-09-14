@@ -1921,7 +1921,7 @@ return; // wait for user to click the CTA
 
   {/* tiny helper */}
   <p className="text-[11px] text-[#8d95a5] mt-2">
-    Tips : entrez un <b>@handle</b> (X / Telegram) ou collez une URL. Nous formaterons automatiquement les liens.
+    Tips: Enter a <b>@handle</b> (X / Telegram) or paste a URL. We will automatically format the links.
   </p>
 </div>
 
@@ -1930,12 +1930,12 @@ return; // wait for user to click the CTA
                   <label className="block mb-1 font-bold">Cover Image</label>
                   <span className="text-sm">Image (PNG/JPG, optional but recommended)</span>
                   <FileUploader onUri={(uri, type) => setCoverImageUri(uri)} />
-                  {coverImageUri && <img src={toStreamUrl(coverImageUri)} className="w-full my-2" alt="Meme Cover" />}
+
 
                   <label className="block mb-1 font-bold">Media File</label>
                   <span className="text-sm">Audio *</span>
                   <FileUploader onUri={(uri, type) => { setAudioUri(uri); setFileType(type) }} />
-                  {audioUri && <audio controls preload="none" src={toStreamUrl(audioUri)} className="w-full my-2" />}
+
 
                   <div className="text-xs text-[#aaa] flex items-center gap-1 mt-1">
                     <Info className="w-3 h-3" />

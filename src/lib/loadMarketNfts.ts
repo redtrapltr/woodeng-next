@@ -2,18 +2,20 @@
 'use client';
 
 import {
-  Connection, PublicKey, clusterApiUrl, AccountInfo,
+  Connection, PublicKey, clusterApiUrl,
 } from '@solana/web3.js';
+
 import {
-  AnchorProvider, Program, Idl,
-  BorshCoder, BorshAccountsCoder,
+  AnchorProvider, BorshCoder, BorshAccountsCoder,
   utils as anchorUtils,
 } from '@project-serum/anchor';
+import type { Idl } from '@project-serum/anchor';            // ✅ type-only
+
 import { Metaplex } from '@metaplex-foundation/js';
 
-import idl            from '@/idl/idl.json';
+import idl             from '@/idl/idl.json';
 import { PROGRAM_ID }  from '@/lib/constants';
-import { NFT }         from '@/types/nft';
+import type { NFT }    from '@/types/nft';     
 
 
 
@@ -100,12 +102,14 @@ export async function loadMarketNfts(): Promise<NFT[]> {
 
     if (pool.kind.single === undefined) continue;            // skip bundles
 
-    const x0 = Number(pool.nftReserves?.[0] ?? 0) + Number(pool.vx ?? 0);
-const y0 = Number(pool.tokenReserve ?? 0)     + Number(pool.vy ?? 0);
+    const x0  = Number(pool.nftReserves?.[0] ?? 0) + Number(pool.vx ?? 0);
+const y0  = Number(pool.tokenReserve ?? 0)     + Number(pool.vy ?? 0);
 const buy = xykBuyPrice(x0, y0);
-if (!Number.isFinite(buy)) continue;
 
+// ✅ Show the card even if not buyable yet (e.g. x0 <= 1)
+const buyUi     = Number.isFinite(buy) && buy > 0 ? buy : 0;
 const tokenType = normTokenFromMint(new PublicKey(pool.tokenMint));
+
 
 
     const mint      = new PublicKey(pool.nftMints[0]);
@@ -136,10 +140,11 @@ const tokenType = normTokenFromMint(new PublicKey(pool.tokenMint));
       imageUrl:   toHttp(rawImg) || '/blank.png',
       audioUrl:   toHttp(rawAudio),
       price: {
-  sol:     tokenType === 'sol'     ? buy : 0,
-  woodeng: tokenType === 'woodeng' ? buy : 0,
+  sol:     tokenType === 'sol'     ? buyUi : 0,
+  woodeng: tokenType === 'woodeng' ? buyUi : 0,
   usd: 0,
 },
+
 status:     'available',
 type:       'single',
 tokenType,

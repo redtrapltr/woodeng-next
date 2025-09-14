@@ -324,31 +324,40 @@ React.useEffect(() => {
         const coverCid = await pinFile(coverFile)
         const imageURI = `ipfs://${coverCid}`
 
-        let animationURI = ''
-        if (t.video) {
-          const videoCid = await pinFile(t.video)
-          animationURI = `ipfs://${videoCid}`
-        }
+        let videoURI = ''
+if (t.video) {
+  const videoCid = await pinFile(t.video)
+  videoURI = `ipfs://${videoCid}`
+}
 
-        let audioURI = ''
-        if (t.audio.mp3) {
-          const audioCid = await pinFile(t.audio.mp3)
-          audioURI = `ipfs://${audioCid}`
-        }
+let audioURI = ''
+if (t.audio.mp3) {
+  const audioCid = await pinFile(t.audio.mp3)
+  audioURI = `ipfs://${audioCid}`
+}
 
+// Standard: put AUDIO in animation_url so indexers see it's playable music
+// (If you also have a video, keep it in properties.files)
+const files: Array<{ uri: string; type?: string }> = []
+if (audioURI) files.push({ uri: audioURI, type: 'audio/mpeg' })
+if (videoURI) files.push({ uri: videoURI, type: 'video/mp4' })
 
+const yearToUse = isBundle ? (albumMeta.year || t.metadata.year) : t.metadata.year
 
-          // ✅ année : albumMeta.year en bundle, sinon track.metadata.year
-  const yearToUse = isBundle ? (albumMeta.year || t.metadata.year) : t.metadata.year;
+const meta: any = {
+  name: t.metadata.songName,
+  symbol: 'MUSIC',
+  description: t.metadata.description,
+  image: imageURI,
+  animation_url: audioURI || undefined,   // 👈 ALWAYS set audio here when present
+  properties: {
+    category: 'audio',                    // 👈 helps some indexers
+    files,                                // 👈 include files array
+    ...t.metadata,
+    year: yearToUse,
+  },
+}
 
-        const meta: any = {
-          name: t.metadata.songName,
-          symbol: 'MUSIC',
-          description: t.metadata.description,
-          image: imageURI,
-          properties: { audio: audioURI, ...t.metadata, year: yearToUse, },
-        }
-        if (animationURI) meta.animation_url = animationURI
 
         const blob = new Blob([JSON.stringify(meta)], { type: 'application/json' })
         const fileJson = new File([blob], `meta-${i}.json`, { type: 'application/json' })
@@ -448,28 +457,31 @@ React.useEffect(() => {
             postIxs.push(createCloseAccountInstruction(payerTokenAta, publicKey!, publicKey!));
           }
 
-          await prog2.methods
-            .initializeBundle(
-              bundleIdBn,
-              new BN(1),
-              new BN(0),
-              depLam,
-              poolRoyaltyBps
-            )
-            .accounts({
-              bundle: bundlePda,
-              bundleSigner,
-              tokenVault: tokenVaultPda,
-              payerTokenAta,
-              tokenMint,
-              payer: publicKey!,
-              systemProgram: SystemProgram.programId,
-              tokenProgram: TOKEN_PROGRAM_ID,
-              rent: SYSVAR_RENT_PUBKEY,
-            })
-            .preInstructions(preIxs)
-            .postInstructions(postIxs)
-            .rpc();
+          const initSig = await prog2.methods
+  .initializeBundle(
+    bundleIdBn,
+    new BN(1),
+    new BN(0),
+    depLam,
+    poolRoyaltyBps
+  )
+  .accounts({
+    bundle: bundlePda,
+    bundleSigner,
+    tokenVault: tokenVaultPda,
+    payerTokenAta,
+    tokenMint,
+    payer: publicKey!,
+    systemProgram: SystemProgram.programId,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    rent: SYSVAR_RENT_PUBKEY,
+  })
+  .preInstructions(preIxs)
+  .postInstructions(postIxs)
+  .rpc();
+
+await conn2.confirmTransaction(initSig, 'finalized');  // ✅ finalized before continuing
+
 
           for (let i = 0; i < minted.length; i++) {
   const mint = minted[i]
@@ -528,34 +540,37 @@ React.useEffect(() => {
             postIxs.push(createCloseAccountInstruction(payerTokenAta, publicKey!, publicKey!));
           }
 
-          await prog2.methods
-            .createPool(
-              new BN(1),
-              new BN(0),
-              depLam,
-              publicKey!,
-              poolRoyaltyBps
-            )
-            .accounts({
-              pool: poolKP.publicKey,
-              poolSigner,
-              nftVault,
-              tokenVault,
-              payerTokenAta,
-              nftMint: minted[0],
-              tokenMint,
-              payer: publicKey!,
-              systemProgram: SystemProgram.programId,
-              tokenProgram: TOKEN_PROGRAM_ID,
-              rent: SYSVAR_RENT_PUBKEY,
-            })
-            .signers([poolKP])
-            .preInstructions(preIxs)
-            .postInstructions(postIxs)
-            .rpc();
+          const sig = await prog2.methods
+  .createPool(
+    new BN(1),
+    new BN(0),
+    depLam,
+    publicKey!,
+    poolRoyaltyBps
+  )
+  .accounts({
+    pool: poolKP.publicKey,
+    poolSigner,
+    nftVault,
+    tokenVault,
+    payerTokenAta,
+    nftMint: minted[0],
+    tokenMint,
+    payer: publicKey!,
+    systemProgram: SystemProgram.programId,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    rent: SYSVAR_RENT_PUBKEY,
+  })
+  .signers([poolKP])
+  .preInstructions(preIxs)
+  .postInstructions(postIxs)
+  .rpc();
 
-          setPoolAddr(poolKP.publicKey.toBase58())
-          setSuccessModal({ open: true, pool: poolKP.publicKey.toBase58() })
+await conn2.confirmTransaction(sig, 'finalized');      // ✅ wait until finalized
+
+setPoolAddr(poolKP.publicKey.toBase58())
+setSuccessModal({ open: true, pool: poolKP.publicKey.toBase58() })
+
         }
       }
     } catch (err: any) {
@@ -1043,16 +1058,27 @@ React.useEffect(() => {
               <h4 className="font-semibold mb-1">{track.metadata.songName}</h4>
               <p className="text-sm text-muted-foreground mb-2">{track.metadata.artist}</p>
 
-              <div className="flex items-center gap-2 text-sm">
-                <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-full">
-                  {track.metadata.style}
-                </span>
-                <span className="text-muted-foreground">{copies} copies</span>
-                {/* Afficher l'année résolue */}
-                <span className="text-muted-foreground">
-                  {isBundle ? (albumMeta.year || '-') : (track.metadata.year || '-')}
-                </span>
-              </div>
+             <div className="mt-1 flex items-baseline gap-2 text-sm leading-none">
+  {/* style en violet */}
+  <span className="text-primary">{track.metadata.style || '-'}</span>
+
+  {/* séparateurs discrets */}
+  <span className="opacity-50">•</span>
+
+  {/* copies (même typo) */}
+  <span className="tabular-nums">
+    {Number(copies)} {Number(copies) === 1 ? 'copy' : 'copies'}
+  </span>
+
+  <span className="opacity-50">•</span>
+
+  {/* année (même typo) */}
+  <span className="tabular-nums">
+    {isBundle ? (albumMeta.year || '-') : (track.metadata.year || '-')}
+  </span>
+</div>
+
+
 
               {track.metadata.description && (
                 <div className="mt-2 text-sm text-muted-foreground line-clamp-2">
