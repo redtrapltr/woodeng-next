@@ -377,12 +377,12 @@ export default function Terms() {
 
           <div className="flex justify-center">
             <Link
-              href="/artist-verification"
-              className="px-6 py-3 rounded-lg flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
-              Request Verification
-              <Shield className="w-4 h-4" />
-            </Link>
+  href="/contact?topic=artist-verification"
+  className="px-6 py-3 rounded-lg flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+>
+  Request Verification
+  <Shield className="w-4 h-4" />
+</Link>
           </div>
         </div>
       </div>
