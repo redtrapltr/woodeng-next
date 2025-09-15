@@ -24,8 +24,9 @@ import {
 
 import {
   Play, Pause, Loader2, ArrowUpRight, ArrowDownRight,
-  CheckCircle2, AlertCircle, Info, X, Pickaxe, Copy   // ← add Copy here
+  CheckCircle2, AlertCircle, Info, X, Pickaxe, Copy
 } from "lucide-react";
+
 
 
 
@@ -428,6 +429,8 @@ function MobileVerticalStacks({
   const [mode, setMode] = React.useState<Mode>('gainers'); // default: Top Gainers
 
 
+
+
   useEffect(() => {
   const applyHash = () => {
     const h = (typeof window !== 'undefined' ? window.location.hash : '').replace('#','');
@@ -451,7 +454,14 @@ function MobileVerticalStacks({
     ),
     [pools, change24hFor]
   );
+
+
+
+
   
+
+
+
 
 
   const newest = React.useMemo(() => {
@@ -616,17 +626,18 @@ async function sendIxsOnce(
     await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
     return sig;
   } catch (e) {
-    // Devnet/websocket flake: fall back to polling and accept any non-error status.
+    // fallback poller to tolerate flaky websockets on devnet
     const start = Date.now();
     while (Date.now() - start < 20_000) {
       const st = await connection.getSignatureStatuses([sig]);
       const s = st.value[0];
-      if (s && !s.err) return sig; // processed/confirmed/finalized with NO error = success
+      if (s && !s.err) return sig;
       await new Promise(r => setTimeout(r, 500));
     }
     throw e;
   }
 }
+
 
 
 
@@ -661,10 +672,8 @@ async function ensureAtaIx(
   return { ata, ix };
 }
 
-// mint account builder (creates + initializes mint; you sign with `kp`)
-// mint account builder (creates + initializes mint; you sign with `kp`)
 async function buildCreateMintIx(
-  connection: Connection,           // ← add this
+  connection: Connection,           // ← added
   payer: PublicKey,
   decimals: number,
   mintAuthority: PublicKey
@@ -687,35 +696,29 @@ async function buildCreateMintIx(
 
 export default function SoundMemesClient() {
 
+ // 1) FIRST
+  const wallet = useWallet();
+
+    const [pools, setPools] = useState<PoolType[]>([]);
+  const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
 
 
-
-
-
-
-
-  // ==== put near the top of SoundMemesClient() ====
 const BULK_FLUSH_MS = 30_000;
-
 type PricePoint = { mint: string; priceLamports: number; at: number };
 
-// latest-per-mint buffer + one timer
 const bulkRef = React.useRef<Map<string, PricePoint>>(new Map());
 const flushTimerRef = React.useRef<number | null>(null);
 
-// enqueue (keep only newest per mint)
 function queuePrice(mint: string, priceLamports: number, at = Date.now()) {
   if (!Number.isFinite(priceLamports) || priceLamports <= 0) return;
   const prev = bulkRef.current.get(mint);
   if (!prev || at > prev.at) bulkRef.current.set(mint, { mint, priceLamports, at });
   scheduleFlush();
 }
-
 function scheduleFlush() {
   if (flushTimerRef.current != null) return;
   flushTimerRef.current = window.setTimeout(() => flushNow(false), BULK_FLUSH_MS);
 }
-
 async function flushNow(useBeacon: boolean) {
   const items = Array.from(bulkRef.current.values());
   bulkRef.current.clear();
@@ -723,11 +726,8 @@ async function flushNow(useBeacon: boolean) {
     if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
     return;
   }
-
   const payload = JSON.stringify({ points: items });
-
   try {
-    // try beacon on unload/hidden tabs
     if (useBeacon && 'sendBeacon' in navigator) {
       const ok = navigator.sendBeacon('/api/pricepoints/bulk', new Blob([payload], { type: 'application/json' }));
       if (ok) return;
@@ -736,14 +736,13 @@ async function flushNow(useBeacon: boolean) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: payload,
-      keepalive: useBeacon, // helps during unload
+      keepalive: useBeacon,
     });
   } finally {
     if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
   }
 }
 
-// flush regularly + when tab hides/unloads
 React.useEffect(() => {
   const id = window.setInterval(() => flushNow(false), BULK_FLUSH_MS);
   const onHide = () => flushNow(true);
@@ -758,10 +757,51 @@ React.useEffect(() => {
 }, []);
 
 
-  // 1) FIRST
-  const wallet = useWallet();
-  const [pools, setPools] = useState<PoolType[]>([]);
-  const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
+
+
+useEffect(() => {
+  if (!pools.length) return;
+  let stop = false;
+
+  const fetchBatch24h = async () => {
+    try {
+      const mints = pools.map(p => p.memeMint.toBase58());
+      const qs = new URLSearchParams({ tf: '24h', limit: '200', mints: mints.join(',') });
+      const r = await fetch(`/api/ohlc/batch?${qs}`, { cache: 'no-store' });
+      if (!r.ok) return;
+      const byMint: Record<string, any[]> = await r.json();
+      if (stop) return;
+
+      setServerCandles(prev => {
+        const next = { ...prev };
+        for (const [mint, bars] of Object.entries(byMint)) {
+          const cooked = (bars || []).map(b => ({
+            t: Number(b.t),
+            o: Number(b.o) / 1e9,
+            h: Number(b.h) / 1e9,
+            l: Number(b.l) / 1e9,
+            c: Number(b.c) / 1e9,
+            v: Number(b.v) | 0,
+          })).filter(b => Number.isFinite(b.t));
+          (next[mint] ||= {} as any)['24h'] = cooked;
+        }
+        return next;
+      });
+    } catch {}
+  };
+
+  fetchBatch24h();
+  const id = setInterval(fetchBatch24h, 60_000);
+  return () => { stop = true; clearInterval(id); };
+  // keep the dep stable to avoid refetch loops:
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [pools.map(p => p.memeMint.toBase58()).join(',')]);
+
+
+
+
+ 
+
 
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -946,7 +986,7 @@ const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 const poolMcap = (p: PoolType) => p.ammReserves?.woodeng ?? 0;
 // 44 000 000 MEME (raw, i.e. decimals *not* applied)
 const BONDING_CURVE_THRESHOLD_RAW = 44_000_000;
-const CONFIG_VERSION = 7;
+const CONFIG_VERSION = 8;
 
 
 type SortMode = 'marketcap' | 'gainers' | 'newest';
@@ -1029,9 +1069,9 @@ const latestPriceOf = (mint: string) => {
 
 
 const pushPricePoint = useCallback((mintStr: string, priceLamports: number) => {
-  if (!Number.isFinite(priceLamports) || priceLamports <= 0) return; // ← hard guard
+  if (!Number.isFinite(priceLamports) || priceLamports <= 0) return;
 
-  const priceUi = priceLamports / 10 ** WOODENG_DECIMALS; // lamports → WOODENG
+  const priceUi = priceLamports / 10 ** WOODENG_DECIMALS;
   const time = Date.now();
 
   setPriceSeriesByMint(prev => {
@@ -1040,12 +1080,12 @@ const pushPricePoint = useCallback((mintStr: string, priceLamports: number) => {
   });
 
   try {
-    // store only valid >0 prices
     localStorage.setItem(`lastPrice:${mintStr}`, JSON.stringify({ time, priceLamports }));
   } catch {}
 
-  queuePrice(mintStr, priceLamports, time); // ✅ fixed
+  queuePrice(mintStr, priceLamports, time);
 }, []);
+
 
 
 
@@ -1180,14 +1220,35 @@ function buildCandles(mintStr: string, tf: Timeframe) {
 
 
 
-// % change over last 24h — use merged (persisted + live + localStorage) data
 const change24hFor = React.useCallback((mintStr: string): number => {
-  const all = mergedSeries(mintStr);          // full history (persisted + live + local)
+  // ✅ Prefer 24h candles fetched from /api/ohlc/batch
+  const bars = serverCandles[mintStr]?.['24h'] as
+    | { t: number; o: number; h: number; l: number; c: number }[]
+    | undefined;
+
+  if (bars && bars.length > 0) {
+    if (bars.length >= 2) {
+      const prev = bars[bars.length - 2]; // previous 24h bar (close)
+      const last = bars[bars.length - 1]; // latest 24h bar (close so far)
+      if (prev?.c > 0 && Number.isFinite(last?.c)) {
+        return ((last.c - prev.c) / prev.c) * 100;
+      }
+    } else {
+      // only one bar: use its intra-bar change (close vs open)
+      const b = bars[0];
+      if (b?.o > 0 && Number.isFinite(b?.c)) {
+        return ((b.c - b.o) / b.o) * 100;
+      }
+    }
+  }
+
+  // 🔙 Fallback to tick-based (mergedSeries) if we don't have candles yet
+  const all = mergedSeries(mintStr);
   if (all.length < 2) return 0;
 
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
 
-  // binary search: index of last point with time <= cutoff
+  // binary search for last point <= cutoff
   let lo = 0, hi = all.length - 1, baseIdx = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
@@ -1197,12 +1258,10 @@ const change24hFor = React.useCallback((mintStr: string): number => {
 
   const base = (baseIdx >= 0 ? all[baseIdx].price : all[0].price);
   const last = all[all.length - 1].price;
-
   if (!Number.isFinite(base) || base <= 0) return 0;
-  const pct = ((last - base) / base) * 100;
-return Number.isFinite(pct) ? pct : 0;
 
-}, [persistedSeriesByMint, priceSeriesByMint]);
+  return ((last - base) / base) * 100;
+}, [serverCandles, persistedSeriesByMint, priceSeriesByMint]);
 
 
 
@@ -2621,7 +2680,8 @@ const refreshUserNfts = useCallback(async () => {
 
 
   const [showBuyModal, setShowBuyModal] = useState(false);
-  const [selectedPool, setSelectedPool] = useState<any | null>(null);
+  const [selectedPool, setSelectedPool] = useState<PoolType | null>(null);
+
   const [modalTokensToBuy, setModalTokensToBuy] = useState('');
   const [transactionStatus, setTransactionStatus] = useState('idle');
   const [transactionMessage, setTransactionMessage] = useState('');
@@ -3195,186 +3255,112 @@ const handleOpenBuyModal = async (poolFromGrid: PoolType) => {
 
 
   const handleConfirmBuy = async () => {
-    const DEC = selectedPool.decimals ?? MEME_DECIMALS;
-  // lamports of WOODENG we will actually spend
+  if (!selectedPool) return;
+  const pool = selectedPool;
 
-
-  // lamports of WOODENG we will actually spend (exact-in)
-const spendRaw = getQuoteForMemeBuy(
-  selectedPool,
-  Number(modalTokensToBuy)
-);
-
-// never add slippage to the input – send the solved amount exactly
-const maxWoodengIn = spendRaw;
-
-
-// exact spend at *current* curve state (used for maths & UI)
-const quoteUiExact  = spendRaw / 10 ** QUOTE_DECIMALS;
-// buffered spend that actually goes into the TX
-const woodengUiNeeded = maxWoodengIn / 10 ** WOODENG_DECIMALS;
-
-const isBonding       = selectedPool.poolType === 0;
-
-
-
-
-    // only enforce slippage on AMM pools
-  if (!isBonding) {
-    const spotPrice = Number(selectedPool.price);
-    const avgPrice  = quoteUiExact / Number(modalTokensToBuy);
-    const priceImpact = ((avgPrice - spotPrice) / spotPrice) * 100;
-    if (priceImpact > slippage) {
-      setTransactionStatus('error');
-      setTransactionMessage('Price impact exceeds slippage tolerance.');
-      return;
-    }
+  const DEC = pool.decimals ?? MEME_DECIMALS;
+  const amtUi = Number(modalTokensToBuy || 0);
+  if (!Number.isFinite(amtUi) || amtUi <= 0) {
+    setTransactionStatus('error');
+    setTransactionMessage('Enter a valid amount to buy.');
+    return;
   }
 
+  // desired MEME out (raw) & required WOODENG in (lamports)
+  const memeRawOut = Math.floor(amtUi * 10 ** DEC);
+  const woodengRawIn = getQuoteForMemeBuy(pool, amtUi);
+  if (!Number.isFinite(woodengRawIn)) {
+    setTransactionStatus('error');
+    setTransactionMessage('Quote unavailable for this amount.');
+    return;
+  }
+
+  // slippage guard using average vs. spot price
+  const woodengUiIn = woodengRawIn / 10 ** WOODENG_DECIMALS;
+  const spotPrice = Number(pool.price);
+  const avgPrice  = amtUi > 0 ? (woodengUiIn / amtUi) : 0;
+  const priceImpact = spotPrice > 0 ? ((avgPrice - spotPrice) / spotPrice) * 100 : 0;
+  // never let minOut go negative, even if slippage is 200, 1000, etc.
+const s = Math.max(0, Number(slippage) || 0);
+const minMemeOut = Math.floor(memeRawOut * Math.max(0, 1 - s / 100));
 
 
-  // we always want exactly N tokens (in raw units) back
- const memeRawOut = Math.floor(Number(modalTokensToBuy) * 10 ** DEC);
+  if (priceImpact > slippage) {
+    setTransactionStatus('error');
+    setTransactionMessage('Price impact exceeds slippage tolerance.');
+    return;
+  }
 
- /* -----------------------------------------------------------
-  *  minMemeOut = desired_out × (1 − protocol_fee − user_slippage)
-  *               but never less than 1 raw token
-  * --------------------------------------------------------- */
-// after
-const slipPct = slippage / 100;
-const minMemeOut = Math.max(1, Math.floor(memeRawOut * (1 - slipPct)));
+  setTransactionStatus('processing');
+  setTransactionMessage('Processing transaction...');
 
-    setTransactionStatus('processing');
-    setTransactionMessage('Processing transaction...');
-    try {
-      if (!wallet.publicKey) throw new Error('Please connect your wallet!');
-      if (!selectedPool || !modalTokensToBuy) throw new Error('Select amount to buy');
-         const tx = await buySoundMeme({
-      pool:            selectedPool,
-      amountWoodengIn: maxWoodengIn,
-      minMemeOut,        // ← now demands exactly N raw tokens
+  try {
+    if (!wallet.publicKey) throw new Error('Please connect your wallet!');
+    const tx = await buySoundMeme({
+      pool,
+      amountWoodengIn: woodengRawIn,
+      minMemeOut,
       wallet,
     });
 
+    const mintStr = pool.memeMint.toBase58();
 
-    // reuse DEC & memeRawOut you already computed above
-const mintStr = selectedPool.memeMint.toBase58();
+    // optimistic state patches
+    adjustMemeBalanceRaw(mintStr, +memeRawOut);
+    adjustQuoteBalanceRaw(pool.quoteMint, -woodengRawIn);
+    patchPoolAfterBuy(pool, memeRawOut, woodengRawIn);
 
-// ✅ user MEME balance up
-adjustMemeBalanceRaw(mintStr, +memeRawOut);
+    setTransactionStatus('success');
+    setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
+    await refreshUserNfts();
+    await refreshBalances();
+    setShowBuyModal(false);
 
-// ✅ user quote balance down (SOL or WOODENG) — we spent exactly maxWoodengIn
-adjustQuoteBalanceRaw(selectedPool.quoteMint, -maxWoodengIn);
+    // refresh last price & persist a point if available
+    try {
+      const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
+      const progNow = new Program(poolIdl, POOL_PROGRAM_ID, providerNow);
+      const cfgNow = await progNow.account.soundMemeConfig.fetch(pool.pubkey);
+      const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
+      if (lamportsNow > 0) pushPricePoint(mintStr, lamportsNow);
+    } catch {}
 
-// ✅ pool reserves / bonding progress patched locally
-patchPoolAfterBuy(selectedPool, memeRawOut, maxWoodengIn);
-
-// (you already do these, keep them)
-setTransactionStatus('success');
-setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
-
-// keep your reconciliations
-await refreshUserNfts();
-await refreshBalances();
-
-// (optional) keep the buy modal open for a moment so the live “Balance” line
-// visibly updates, or just close as you do now:
-setShowBuyModal(false);
-
-    // Immediately persist the on-chain price so a page reload keeps your last trade
-try {
-  const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
-  const progNow = new Program(poolIdl, POOL_PROGRAM_ID, providerNow);
-  const cfgNow = await progNow.account.soundMemeConfig.fetch(selectedPool.pubkey);
-  const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
-  if (lamportsNow > 0) {
-  const mintStr = selectedPool.memeMint.toBase58();
-  pushPricePoint(mintStr, lamportsNow);
-  // no direct write; bulk will send it shortly
-}
-
-} catch (e) { /* ignore */ }
-
-
-
-
-      setTransactionStatus('success');
-setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
-   await refreshUserNfts();          // ⬅️ NEW
-   await refreshBalances();
-
-
-   // NEW: refetch pools (so poolType is up-to-date)
-const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
-const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
-const updatedPools = await fetchSoundMemePoolsWithMetadata(poolProgram);
-setPools(updatedPools);
-setShowBuyModal(false);                 // close the buy form
-
-
-
-
-// ---- AUTO-MIGRATE if threshold now met (no click needed) ----
-// ---- AUTO-MIGRATE if threshold now met (no click needed) ----
-if (AUTO_MIGRATE_AFTER_BUY) {
-  try {
-    const fresh = updatedPools.find(p => p.memeMint.equals(selectedPool.memeMint));
-    if (fresh && fresh.poolType === 0) {
-      const v = fresh.ammReserves?.woodeng ?? 0;
-      if (v >= BONDING_MCAP_THRESHOLD_LAMPORTS && v < AMM_MIGRATION_UPPER_CAP_LAMPORTS) {
-        const k = fresh.memeMint.toBase58();
-        if (!autoMigratingRef.current.has(k)) {
-          autoMigratingRef.current.add(k);
-          await migratePool(fresh);  // uses your existing migrateToAmm() helper
-
-          // refresh once more so UI flips to AMM immediately
-          const provider2 = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
-          const poolProgram2 = new Program(poolIdl, POOL_PROGRAM_ID, provider2);
-          const after = await fetchSoundMemePoolsWithMetadata(poolProgram2);
-          setPools(after);
-        }
-      }
-    }
-  } catch (e) {
-    console.warn("Auto-migrate after buy failed:", e);
-  } finally {
-    autoMigratingRef.current.delete(selectedPool.memeMint.toBase58());
+    // filled toast
+    setBuyFilled({
+      open: true,
+      symbol: pool.symbol ?? '',
+      amountMeme: amtUi,
+      priceWoodeng: woodengUiIn,
+      quoteLabel: quoteLabelOf(pool),
+    });
+  } catch (e: any) {
+    setTransactionStatus('error');
+    setTransactionMessage('Error: ' + (e.message || 'Unknown error'));
   }
-}
+};
 
 
-
-// >>> open filled-order pop-up <<<
-setBuyFilled({
-  open: true,
-  symbol: selectedPool.symbol,
-  amountMeme: Number(modalTokensToBuy),
-  priceWoodeng: quoteUiExact,        // we computed this a few lines above
-  quoteLabel: quoteLabelOf(selectedPool),   // ← add this
-});
-
-    } catch (e: any) {
-      setTransactionStatus('error');
-      setTransactionMessage('Error: ' + (e.message || 'Unknown error'));
-    }
-  };
 
   const handleConfirmSell = async () => {
+  // ✅ narrow null and alias
   if (!selectedPool) return;
+  const pool = selectedPool;
 
-  const DEC = selectedPool.decimals ?? MEME_DECIMALS;
+  const DEC = pool.decimals ?? MEME_DECIMALS;
   const amtUi = Number(modalTokensToSell || 0);
   const memeRawIn = Math.floor(amtUi * 10 ** DEC);
 
-  const woodengRawOut  = getQuoteForMemeSell(selectedPool, memeRawIn);
-  const woodengUiOut   = woodengRawOut / 10 ** WOODENG_DECIMALS;
+  const woodengRawOut = getQuoteForMemeSell(pool, memeRawIn);
+  const woodengUiOut = woodengRawOut / 10 ** WOODENG_DECIMALS;
 
-  const spotPrice   = Number(selectedPool.price);
-  const avgPrice    = amtUi > 0 ? (woodengUiOut / amtUi) : 0;
+  const spotPrice = Number(pool.price);
+  const avgPrice = amtUi > 0 ? (woodengUiOut / amtUi) : 0;
   const priceImpact = spotPrice > 0 ? ((spotPrice - avgPrice) / spotPrice) * 100 : 0;
 
-  // slippage guard
-  const minWoodengOut = Math.floor(woodengRawOut * (1 - slippage / 100));
+  // never negative
+const s = Math.max(0, Number(slippage) || 0);
+const minWoodengOut = Math.floor(woodengRawOut * Math.max(0, 1 - s / 100));
+
   if (priceImpact > slippage) {
     setTransactionStatus('error');
     setTransactionMessage('Price impact exceeds slippage tolerance.');
@@ -3389,18 +3375,18 @@ setBuyFilled({
     if (!modalTokensToSell) throw new Error('Select amount to sell');
 
     const tx = await sellSoundMeme({
-      pool: selectedPool,
+      pool,
       memeAmountIn: memeRawIn,
       minWoodengOut,
       wallet,
     });
 
-    const mintStr = selectedPool.memeMint.toBase58();
+    const mintStr = pool.memeMint.toBase58();
 
     // optimistic patches
     adjustMemeBalanceRaw(mintStr, -memeRawIn);
-    adjustQuoteBalanceRaw(selectedPool.quoteMint, +woodengRawOut);
-    patchPoolAfterSell(selectedPool, memeRawIn, woodengRawOut);
+    adjustQuoteBalanceRaw(pool.quoteMint, +woodengRawOut);
+    patchPoolAfterSell(pool, memeRawIn, woodengRawOut);
 
     setTransactionStatus('success');
     setTransactionMessage(`Success! Tx: ${tx.slice(0, 8)}...`);
@@ -3412,28 +3398,27 @@ setBuyFilled({
     try {
       const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
       const progNow = new Program(poolIdl, POOL_PROGRAM_ID, providerNow);
-      const cfgNow = await progNow.account.soundMemeConfig.fetch(selectedPool.pubkey);
+      const cfgNow = await progNow.account.soundMemeConfig.fetch(pool.pubkey);
       const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
       if (lamportsNow > 0) {
-  const mint = selectedPool.memeMint.toBase58();
-  pushPricePoint(mint, lamportsNow);
-}
-
+        pushPricePoint(mintStr, lamportsNow);
+      }
     } catch {}
 
-    // filled-order toast
+    // ✅ filled toast
     setSellFilled({
       open: true,
-      symbol: selectedPool.symbol,
+      symbol: pool.symbol ?? '',
       amountMeme: amtUi,
       priceWoodeng: woodengUiOut,
-      quoteLabel: quoteLabelOf(selectedPool),
+      quoteLabel: quoteLabelOf(pool),
     });
   } catch (e: any) {
     setTransactionStatus('error');
     setTransactionMessage('Error: ' + (e.message || 'Unknown error'));
   }
 };
+
 
 
 
@@ -4328,7 +4313,8 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 
       <p className="text-[#c2c2c9] mb-4">
         You locked&nbsp;
-        <span className="font-semibold">{getMintThreshold(selectedPool ?? {})}</span>
+        <span className="font-semibold">{selectedPool ? getMintThreshold(selectedPool) : 0}
+</span>
         &nbsp;{mintFilled.symbol} and minted locker&nbsp;#
         <span className="font-semibold">{mintFilled.lockId}</span>.
       </p>
