@@ -22,9 +22,27 @@ function filtered(up: Response) {
   return h;
 }
 const restPath = (p?: string[]) => (p ?? []).join('/').replace(/^ipfs\//i,'');
-async function proxy(req: Request, ctx: { params: { path?: string[] } }) {
-  const up = await fetch(`${ORIGIN}/ipfs/${restPath(ctx.params.path)}`, { headers: forwardHeaders(req) });
-  return new Response(up.body, { status: up.status, statusText: up.statusText, headers: filtered(up) });
+
+
+type Ctx = { params: Promise<{ path?: string[] }> };
+
+async function proxy(req: Request, ctx: Ctx) {
+  const { path } = await ctx.params; // ← await params
+  const up = await fetch(`${ORIGIN}/ipfs/${restPath(path)}`, {
+    headers: forwardHeaders(req),
+  });
+  return new Response(up.body, {
+    status: up.status,
+    statusText: up.statusText,
+    headers: filtered(up),
+  });
 }
-export async function GET(req: Request, ctx: { params: { path?: string[] } }) { return proxy(req, ctx); }
-export async function HEAD(req: Request, ctx: { params: { path?: string[] } }) { return proxy(req, ctx); }
+
+export async function GET(req: Request, ctx: Ctx) {
+  return proxy(req, ctx);
+}
+
+export async function HEAD(req: Request, ctx: Ctx) {
+  return proxy(req, ctx);
+}
+

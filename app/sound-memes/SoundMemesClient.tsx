@@ -817,6 +817,56 @@ export default function SoundMemesClient() {
   const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
 
 
+  // ── paint + load gates ─────────────────────────────────────────────
+const [afterPaint, setAfterPaint] = React.useState(false);
+const [poolsLoaded, setPoolsLoaded] = React.useState(false);
+
+// fire after first paint (avoids blocking initial render)
+React.useEffect(() => {
+  const id = requestAnimationFrame(() => setAfterPaint(true));
+  return () => cancelAnimationFrame(id);
+}, []);
+
+
+// load pools once we’ve painted (unblocks the rest of the pipeline)
+useEffect(() => {
+  if (!afterPaint) return;
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const provider = new AnchorProvider(
+        connection,
+        wallet.publicKey
+          ? getAnchorWallet(wallet)
+          : ({ publicKey: new PublicKey('11111111111111111111111111111111') } as any),
+        { preflightCommitment: 'confirmed' }
+      );
+      const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+      const fetched = await fetchSoundMemePoolsWithMetadata(poolProgram);
+      if (!cancelled) setPools(fetched);
+    } catch (e) {
+      console.warn('Failed to load pools', e);
+    } finally {
+      if (!cancelled) setPoolsLoaded(true);
+    }
+  })();
+
+  return () => { cancelled = true; };
+}, [afterPaint, wallet.publicKey]);
+
+
+// run work when the browser is idle (fallback to setTimeout)
+const runIdle = (fn: () => void) => {
+  const ric = (window as any).requestIdleCallback as
+    | ((cb: () => void) => number)
+    | undefined;
+  if (ric) ric(() => fn());
+  else setTimeout(fn, 0);
+};
+
+
+
 // Reusable: open Burn modal for a pool (used by desktop + mobile)
 const handleOpenBurn = async (pool: PoolType) => {
   const canBurn = nftsLoaded && (ownedCounts[pool.memeMint.toBase58()] ?? 0) > 0;
@@ -904,8 +954,9 @@ React.useEffect(() => {
 
 
 
+// Batch 24h OHLC fetch — guard behind afterPaint + poolsLoaded
 useEffect(() => {
-  if (!pools.length) return;
+  if (!afterPaint || !poolsLoaded || !pools.length) return;
   let stop = false;
 
   const fetchBatch24h = async () => {
@@ -913,7 +964,7 @@ useEffect(() => {
       const mints = pools.map(p => p.memeMint.toBase58());
       const qs = new URLSearchParams({ tf: '24h', limit: '200', mints: mints.join(',') });
       const r = await fetch(`/api/ohlc/batch?${qs}`, { cache: 'no-store' });
-      if (!r.ok) return;
+      if (!r.ok || stop) return;
       const byMint: Record<string, any[]> = await r.json();
       if (stop) return;
 
@@ -938,9 +989,8 @@ useEffect(() => {
   fetchBatch24h();
   const id = setInterval(fetchBatch24h, 60_000);
   return () => { stop = true; clearInterval(id); };
-  // keep the dep stable to avoid refetch loops:
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [pools.map(p => p.memeMint.toBase58()).join(',')]);
+}, [afterPaint, poolsLoaded, pools.map(p => p.memeMint.toBase58()).join(',')]);
+
 
 
 
@@ -1463,29 +1513,32 @@ const filteredPools = React.useMemo(() => {
 
 // 2) your existing sorting, but on the filtered set
 const sortedPools = React.useMemo(() => {
-  const arr = [...filteredPools];
+  const rows = filteredPools.map(p => ({
+    p,
+    score: scorePool(p),
+    mcap: p.marketCap ?? 0,
+    chg: change24hFor(p.memeMint.toBase58()),
+    created: createdAtFor(p.memeMint.toBase58()),
+  }));
 
-  // primary: match quality (desc)
-  arr.sort((a, b) => scorePool(b) - scorePool(a));
+  rows.sort((a, b) => {
+    // 1) Primary: relevance (only matters when there is a query)
+    if (query && a.score !== b.score) return b.score - a.score;
 
-  // secondary: your selected mode
-  switch (sortMode) {
-    case 'marketcap':
-      arr.sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0));
-      break;
-    case 'gainers':
-      arr.sort((a, b) =>
-        change24hFor(b.memeMint.toBase58()) - change24hFor(a.memeMint.toBase58())
-      );
-      break;
-    case 'newest':
-      arr.sort((a, b) =>
-        createdAtFor(b.memeMint.toBase58()) - createdAtFor(a.memeMint.toBase58())
-      );
-      break;
-  }
-  return arr;
-}, [filteredPools, sortMode, change24hFor, createdAtFor, seriesTick]);
+    // 2) Secondary: selected mode
+    if (sortMode === 'gainers' && a.chg !== b.chg) return b.chg - a.chg;
+    if (sortMode === 'newest'  && a.created !== b.created) return b.created - a.created;
+    // default: marketcap
+    if (sortMode === 'marketcap' && a.mcap !== b.mcap) return b.mcap - a.mcap;
+
+    // 3) Tertiary: deterministic fallback
+    return a.p.memeMint.toBase58().localeCompare(b.p.memeMint.toBase58());
+  });
+
+  return rows.map(r => r.p);
+}, [filteredPools, sortMode, query, change24hFor, createdAtFor]);
+
+
 
 // 3) paging stays the same, but uses sortedPools
 const totalPages  = Math.min(10, Math.max(1, Math.ceil(sortedPools.length / PER_PAGE)));
@@ -2887,29 +2940,12 @@ const handleMintNft = (pool: PoolType) => {
 
 
 
-  useEffect(() => {
-  if (!wallet.connected) return;
-  const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
-  const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
-  fetchSoundMemePoolsWithMetadata(poolProgram)
-
-    .then(async fetchedPools => {
-    // ✅ keep *every* pool – threshold is **only** for NFT minting
-    const balances = await Promise.all(
-      fetchedPools.map(pool => fetchUserMemeBalance(wallet, pool.memeMint))
-    );
-    setPools(fetchedPools);
-  })
-
-    .catch((e) => setStatus("Failed to load pools: " + e));
-}, [wallet.connected]);
-
+// 3e) Program events — subscribe only after the first paint
 useEffect(() => {
-  if (!wallet.connected) return;
+  if (!afterPaint || !wallet.connected) return;
 
   const provider = new AnchorProvider(connection, getAnchorWallet(wallet), {
-    commitment: 'confirmed',
-    preflightCommitment: 'confirmed',
+    preflightCommitment: "confirmed",
   });
   const prog = new Program(poolIdl, POOL_PROGRAM_ID, provider);
 
@@ -2917,33 +2953,35 @@ useEffect(() => {
 
   (async () => {
     try {
-      subId = await prog.addEventListener('PriceUpdate', (ev, _slot) => {
-  const mintStr = new PublicKey(ev.memeMint).toBase58();
-  const lamports = Number(ev.priceLamports);
-  if (lamports > 0) {
-    pushPricePoint(mintStr, lamports);
-  }
-});
-
+      subId = await prog.addEventListener("PriceUpdate", (ev: any) => {
+        const mintStr = new PublicKey(ev.memeMint).toBase58();
+        const lamports = Number(ev.priceLamports);
+        if (lamports > 0) pushPricePoint(mintStr, lamports);
+      });
     } catch (e) {
-      console.warn('Event subscription failed (RPC may not support logs). Will rely on polling.', e);
+      console.warn("Event subscription failed; will rely on polling.", e);
     }
   })();
 
   return () => {
     if (subId != null) prog.removeEventListener(subId);
   };
-}, [wallet.connected, pushPricePoint]);
+}, [afterPaint, wallet.connected, pushPricePoint]);
 
 
 
 
 
-// Load existing history for each pool so charts show up on first open
+
+
+
+
+// Load existing history for charts — defer until after paint & pools loaded
 useEffect(() => {
-  if (pools.length === 0) return;
+  if (!afterPaint || !poolsLoaded || pools.length === 0) return;
+  let cancelled = false;
 
-  (async () => {
+  runIdle(async () => {
     try {
       const all = await Promise.all(
         pools.map(async (p) => {
@@ -2955,23 +2993,27 @@ useEffect(() => {
         })
       );
 
+      if (cancelled) return;
+
       const updateSeries: Record<string, { time: number; price: number }[]> = {};
-      const updateFirst:  Record<string, number> = {};
+      const updateFirst: Record<string, number> = {};
 
       for (const [mintStr, arr] of all) {
         const series = arr
           .map(pt => ({
             time: new Date(pt.time).getTime(),
-            price: Number(pt.priceLamports) / 1e9,
+            price: Number(pt.priceLamports) / 1e9, // lamports -> WOODENG
           }))
           .filter(p => Number.isFinite(p.time) && Number.isFinite(p.price))
           .sort((a, b) => a.time - b.time);
 
-        if (series.length > 0) {
-          updateSeries[mintStr] = series;      // ✅ only overwrite when non-empty
-          updateFirst[mintStr]  = series[0].time;
+        if (series.length) {
+          updateSeries[mintStr] = series;
+          updateFirst[mintStr] = series[0].time;
         }
       }
+
+      if (cancelled) return;
 
       if (Object.keys(updateSeries).length) {
         setPersistedSeriesByMint(prev => ({ ...prev, ...updateSeries }));
@@ -2980,10 +3022,13 @@ useEffect(() => {
         setFirstSeenAtByMint(prev => ({ ...prev, ...updateFirst }));
       }
     } catch (e) {
-      console.warn('Failed loading history', e);
+      if (!cancelled) console.warn('Failed loading history', e);
     }
-  })();
-}, [pools]);
+  });
+
+  return () => { cancelled = true; };
+}, [afterPaint, poolsLoaded, pools.map(p => p.memeMint.toBase58()).join(',')]);
+
 
 
 
@@ -3020,98 +3065,107 @@ useEffect(() => {
 
 
 
-// seed a point when pools load or refresh, and keep polling every 10s
+// 3c) Baseline seeding + config polling — defer until after paint & pools loaded
 useEffect(() => {
-  if (pools.length === 0) return;
+  if (!afterPaint || !poolsLoaded || pools.length === 0) return;
 
   let stop = false;
+  let interval: number | null = null;
 
-  // seed current price for every pool right away
-    // seed current price for every pool right away
-  const seeds: Record<string, number> = {};
-  for (const p of pools) {
-  const mintStr = p.memeMint.toBase58();
-  if (!seededOnceRef.current.has(mintStr)) {
-    const lamportsFromChain = Number(p.lastMemePrice ?? 0);
+  // 1) seed baseline in idle time so first paint isn't blocked
+  runIdle(() => {
+    if (stop) return;
 
-if (lamportsFromChain > 0) {
-  pushPricePoint(mintStr, lamportsFromChain);
-  flushNow(false); // immediate bulk baseline
-} else if (p.price && p.price > 0) {
-  const derivedLamports = Math.round(p.price * 10 ** WOODENG_DECIMALS);
-  if (derivedLamports > 0) {
-    pushPricePoint(mintStr, derivedLamports); // UI only (bulk will send later)
-  }
-}
+    const seeds: Record<string, number> = {};
 
+    for (const p of pools) {
+      const mintStr = p.memeMint.toBase58();
+      if (seededOnceRef.current.has(mintStr)) continue;
 
-    seededOnceRef.current.add(mintStr);
+      const haveHistory =
+        (persistedSeriesByMint[mintStr]?.length ?? 0) > 0 ||
+        (priceSeriesByMint[mintStr]?.length ?? 0) > 0;
 
-// remember when we seeded, to only accept newer local values
-const seededAt = Date.now();
-seeds[mintStr] = seededAt;
+      if (!haveHistory) {
+        const lamports =
+          Number(p.lastMemePrice ?? 0) > 0
+            ? Number(p.lastMemePrice)
+            : Math.round(Number(p.price ?? 0) * 10 ** WOODENG_DECIMALS);
 
-// try to patch with a more recent local value (if exists)
-try {
-  const raw = localStorage.getItem(`lastPrice:${mintStr}`);
-  if (raw) {
-    const { time, priceLamports } = JSON.parse(raw);
-    if (Number.isFinite(time) && Number.isFinite(priceLamports) && time > seededAt) {
-      pushPricePoint(mintStr, Number(priceLamports));
+        if (lamports > 0) {
+          pushPricePoint(mintStr, lamports);
+          flushNow(false); // ensure DB baseline exists
+        }
+      }
+
+      seededOnceRef.current.add(mintStr);
+
+      // remember when we seeded (for localStorage reconciliation)
+      const seededAt = Date.now();
+      seeds[mintStr] = seededAt;
+
+      try {
+        const raw = localStorage.getItem(`lastPrice:${mintStr}`);
+        if (raw) {
+          const { time, priceLamports } = JSON.parse(raw);
+          if (Number.isFinite(time) && Number.isFinite(priceLamports) && time > seededAt) {
+            pushPricePoint(mintStr, Number(priceLamports));
+          }
+        }
+      } catch {}
     }
-  }
-} catch {}
 
-  }
-}
-
-
-  // set firstSeenAt only for mints that don't have it yet (no clobbering)
-  setFirstSeenAtByMint(prev => {
-    const next = { ...prev };
-    for (const [k, v] of Object.entries(seeds)) {
-      if (next[k] == null) next[k] = v;
+    // set firstSeenAt only for keys that don't have it yet
+    if (!stop && Object.keys(seeds).length) {
+      setFirstSeenAtByMint(prev => {
+        const next = { ...prev };
+        for (const [k, v] of Object.entries(seeds)) {
+          if (next[k] == null) next[k] = v as number;
+        }
+        return next;
+      });
     }
-    return next;
   });
 
-
-  // polling: read config.lastMemePrice every 10s
-  const provider = new AnchorProvider(connection, (wallet.publicKey
-    ? getAnchorWallet(wallet)
-    : ({ publicKey: new PublicKey('11111111111111111111111111111111') } as any)
-  ), { commitment: 'confirmed' });
-  const prog = new Program(poolIdl, POOL_PROGRAM_ID, provider);
-
-  const id = setInterval(async () => {
+  // 2) start config polling after a tiny delay so paint wins
+  const startTimer = setTimeout(() => {
     if (stop) return;
-    try {
-      const cfgKeys = pools.map(p => p.pubkey);
-const infos = await getMultiple(cfgKeys); // your helper (chunks of 100)
 
-for (let i = 0; i < cfgKeys.length; i++) {
-  const acc = infos[i];
-  if (!acc?.data) continue;
+    const provider = new AnchorProvider(
+      connection,
+      wallet.publicKey
+        ? getAnchorWallet(wallet)
+        : ({ publicKey: new PublicKey('11111111111111111111111111111111') } as any),
+      { commitment: 'confirmed' }
+    );
+    const prog = new Program(poolIdl, POOL_PROGRAM_ID, provider);
 
-  const cfg = prog.coder.accounts.decode("SoundMemeConfig", acc.data) as any;
-const lamports = Number(cfg.lastMemePrice ?? 0);
-if (lamports > 0) {
-  const mintStr = pools[i].memeMint.toBase58();
-  pushPricePoint(mintStr, lamports);
-}
-
-}
-
-    } catch (e) {
-      // swallow intermittent RPC errors
-    }
-  }, 10_000);
+    interval = window.setInterval(async () => {
+      if (stop) return;
+      try {
+        const cfgKeys = pools.map(p => p.pubkey);
+        const infos = await getMultiple(cfgKeys);
+        for (let i = 0; i < cfgKeys.length; i++) {
+          const acc = infos[i];
+          if (!acc?.data) continue;
+          const cfg = prog.coder.accounts.decode("SoundMemeConfig", acc.data) as any;
+          const lamports = Number(cfg.lastMemePrice ?? 0);
+          if (lamports > 0) {
+            const mintStr = pools[i].memeMint.toBase58();
+            pushPricePoint(mintStr, lamports);
+          }
+        }
+      } catch {}
+    }, 10_000);
+  }, 300);
 
   return () => {
     stop = true;
-    clearInterval(id);
+    clearTimeout(startTimer);
+    if (interval != null) clearInterval(interval);
   };
-}, [pools, wallet.publicKey, pushPricePoint]);
+}, [afterPaint, poolsLoaded, pools, wallet.publicKey, pushPricePoint, persistedSeriesByMint, priceSeriesByMint]);
+
 
 
 useEffect(() => {
@@ -3192,51 +3246,61 @@ useEffect(() => {
 
 
 
-// place just after the other useEffect hooks
+// Wallet-derived NFTs — run only after paint & pools loaded, and in idle time
 useEffect(() => {
-  // don't run until we know which meme mints to query
-  if (!wallet.publicKey || pools.length === 0) return;
+  if (!afterPaint || !poolsLoaded || !wallet.publicKey || pools.length === 0) return;
+  setNftsLoaded(false);
+  runIdle(() => {
+    if (!wallet.publicKey || pools.length === 0) return; // re-check in case things changed
+    refreshUserNfts();
+  });
+}, [afterPaint, poolsLoaded, wallet.publicKey, pools, refreshUserNfts]);
 
-  setNftsLoaded(false);          // show spinner only while fetching
-  refreshUserNfts();             // will set nftsLoaded → true when done
-}, [wallet.publicKey, pools, refreshUserNfts]);
 
+// Wallet balances — defer to idle, gate by paint & pools loaded
 useEffect(() => {
-  refreshBalances();            // ← fetch raw balances
-}, [refreshBalances]);
+  if (!afterPaint || !poolsLoaded) return;
+  runIdle(() => {
+    refreshBalances();
+  });
+}, [afterPaint, poolsLoaded, refreshBalances]);
 
 
 
-// Auto-migrate any bonding pool that already meets the threshold
+
+// 3f) Auto-migrate watcher — run only after first paint & once pools are loaded
 useEffect(() => {
-  if (!wallet.publicKey) return;
+  if (!afterPaint || !poolsLoaded || !wallet.publicKey || pools.length === 0) return;
 
-  (async () => {
+  let cancelled = false;
+
+  runIdle(async () => {
+    if (cancelled) return;
+
     for (const p of pools) {
       // only bonding pools
       if (p.poolType !== 0) continue;
-      // skip if not yet at the WOODENG threshold
+
       const v = p.ammReserves?.woodeng ?? 0;
       if (v < BONDING_MCAP_THRESHOLD_LAMPORTS || v >= AMM_MIGRATION_UPPER_CAP_LAMPORTS) continue;
 
       const k = p.memeMint.toBase58();
-      if (autoMigratingRef.current.has(k)) continue; // avoid double fire
+      if (autoMigratingRef.current.has(k)) continue; // avoid double-fire
 
       try {
         autoMigratingRef.current.add(k);
-
-        // migrate (this will prompt the wallet once)
-        await migratePool(p);
-
-        
+        await migratePool(p); // will prompt the wallet once
       } catch (e) {
         console.warn("Auto-migrate watcher failed for", k, e);
       } finally {
         autoMigratingRef.current.delete(k);
       }
     }
-  })();
-}, [pools, wallet.publicKey]);
+  });
+
+  return () => { cancelled = true; };
+}, [afterPaint, poolsLoaded, wallet.publicKey, pools]);
+
 
 
 // Récupère le prix USD de SOL (1 WOODENG = 1 SOL)
@@ -3263,16 +3327,18 @@ useEffect(() => {
   // --------------------------------------------
   const buyAutoOpened = useRef(false);
 
-  useEffect(() => {
-    if (buyAutoOpened.current) return;            // already opened once
-    if (!deepLinkedMint || pools.length === 0) return;
+// 3g) Deep-link auto-open — only after first paint & once pools are loaded
+useEffect(() => {
+  if (!afterPaint || !poolsLoaded || buyAutoOpened.current) return;
+  if (!deepLinkedMint || pools.length === 0) return;
 
-    const pool = pools.find(p => p.memeMint.toBase58() === deepLinkedMint);
-    if (pool) {
-      handleOpenBuyModal(pool);
-      buyAutoOpened.current = true;
-    }
-  }, [deepLinkedMint, pools]);                     // ← deps
+  const pool = pools.find(p => p.memeMint.toBase58() === deepLinkedMint);
+  if (pool) {
+    handleOpenBuyModal(pool);
+    buyAutoOpened.current = true;
+  }
+}, [afterPaint, poolsLoaded, deepLinkedMint, pools]);
+
 
 
   const playDemo = (id: string, url?: string) => {
