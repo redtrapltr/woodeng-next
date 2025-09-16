@@ -260,14 +260,15 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
 );
 
 /* ───── Header ─────────────────────────────────────────────────────────── */
-const LOGO_H = 36;
+ const LOGO_H_DESKTOP = 78; // ↑ avant 36
+ const LOGO_H_MOBILE  = 54; // ↑ avant ~2
 
 export default function Header() {
   const wallet = useWallet();
   const router = useRouter();
   const pathname = usePathname();
   const isMobile = useIsMobile(860);
-  const logoH = isMobile ? 28 : LOGO_H; // << prevents first-paint “giant logo”
+  const logoH = isMobile ? LOGO_H_MOBILE : LOGO_H_DESKTOP; // taille responsive du logo
 
   const [woodengBalance, setWoodengBalance] = useState<string>("0");
   const [query, setQuery] = useState("");

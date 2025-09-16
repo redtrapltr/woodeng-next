@@ -25,7 +25,7 @@ const SOLANA_CLUSTER =
 const POOL_PROGRAM_ID = new PublicKey("8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV");
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 const QUOTE_DECIMALS = 9; // WOODENG / SOL
-const CONFIG_VERSION = 7;
+const CONFIG_VERSION = 8;
 
 /* ---------- helpers ---------- */
 const clean = (s?: string) =>

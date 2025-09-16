@@ -195,53 +195,85 @@ function MiniVerticalCard({
   rank,
   onOpen,
   change24h,
-  onBuy,          // <—
-  onSell,         // <—
-  active = false, // <— for the pop-up animation section (next part)
+  onBuy,
+  onSell,
+  onMint,
+  onBurn,
+  onPlay,
+  isPlaying,
+  tokensUiOwned,
+  mintThreshold,
+  nftCount,
+  active = false,
 }: {
   pool: PoolType;
   rank: number;
   onOpen: (p: PoolType) => void;
   change24h: number;
-  onBuy: (p: PoolType) => void;    // <—
-  onSell: (p: PoolType) => void;   // <—
-  active?: boolean;                // <—
+  onBuy: (p: PoolType) => void;
+  onSell: (p: PoolType) => void;
+  onMint: (p: PoolType) => void;                  // NEW
+  onBurn: (p: PoolType) => void;                  // NEW
+  onPlay: (id: string, url?: string) => void;     // NEW (plays audio)
+  isPlaying: boolean;                             // NEW
+  tokensUiOwned: number;                          // NEW
+  mintThreshold: number;                          // NEW
+  nftCount: number;                               // NEW
+  active?: boolean;
 }) {
   const up = change24h >= 0;
-  return (
-  <div
-    role="button"
-    tabIndex={0}
-    onClick={() => onOpen(pool)}
-    onKeyDown={(e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onOpen(pool);
-      }
-    }}
-    className="
-      snap-center w-full h-full text-left
-      bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl
-      overflow-hidden flex flex-col
-      transition-transform duration-300 active:scale-[0.995]
-    "
-    style={{
-      transform: active ? 'scale(1.0)' : 'scale(0.96)',
-      opacity: active ? 1 : 0.8,
-    }}
-  >
+  const canSell = isAmm(pool);
+  const canMint = Number.isFinite(tokensUiOwned) && tokensUiOwned >= mintThreshold;
+  const quote = quoteLabelOf(pool);
+  const decs = pool.decimals ?? MEME_DECIMALS;
 
-     
-      {/* image */}
+  const ownedLabel = Number.isFinite(tokensUiOwned)
+    ? tokensUiOwned.toLocaleString(undefined, { maximumFractionDigits: decs })
+    : '—';
+
+  const pct = Math.max(0, Math.min(100, (Math.max(0, tokensUiOwned || 0) / Math.max(1, mintThreshold)) * 100));
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(pool)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(pool); } }}
+      className="
+        snap-center w-full h-full text-left
+        bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl
+        overflow-hidden flex flex-col
+        transition-transform duration-300 active:scale-[0.995]
+      "
+      style={{ transform: active ? 'scale(1.0)' : 'scale(0.96)', opacity: active ? 1 : 0.8 }}
+    >
+      {/* image + play overlay */}
       <div className="relative flex-1 min-h-0">
         <img
-  src={pool.imageUrl || "https://placehold.co/600x600?text=No+Image"}
-  alt={pool.name ?? "Sound Meme"}
-  className="w-full h-full object-cover"
-/>
+          src={pool.imageUrl || 'https://placehold.co/600x600?text=No+Image'}
+          alt={pool.name ?? 'Sound Meme'}
+          className="w-full h-full object-cover"
+          loading="lazy"
+          decoding="async"
+        />
 
-        <div className="absolute top-2 left-2 ...">#{rank}</div>
-        <div className="absolute top-2 right-2 ...">{pool.symbol ?? 'MEME'}</div>
+        {/* rank + ticker chips */}
+        <div className="absolute top-2 left-2 text-[11px] bg-black/60 px-2 py-0.5 rounded">{`#${rank}`}</div>
+        <div className="absolute top-2 right-2 text-[11px] bg-black/60 px-2 py-0.5 rounded">{pool.symbol ?? 'MEME'}</div>
+
+        {/* play/pause center button */}
+        {pool.audioUrl && (
+          <button
+            type="button"
+            title={isPlaying ? 'Pause' : 'Play'}
+            onClick={(e) => { e.stopPropagation(); onPlay(pool.pubkey.toBase58(), pool.audioUrl); }}
+            className="absolute inset-0 flex items-center justify-center"
+          >
+            <span className="bg-black/65 hover:bg-black/75 rounded-full p-3">
+              {isPlaying ? <Pause className="w-6 h-6 text-white" /> : <Play className="w-6 h-6 text-white" />}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* info + actions */}
@@ -250,43 +282,78 @@ function MiniVerticalCard({
 
         <div className="mt-1 flex items-center gap-2">
           <TinyPrice value={Number(pool.price ?? 0)} className="text-[#ffc371] font-bold" />
-          <span className="text-xs text-[#ffc371]/90">{quoteLabelOf(pool)}</span>
+          <span className="text-xs text-[#ffc371]/90">{quote}</span>
           <span className={`ml-auto text-xs px-2 py-0.5 rounded ${up ? 'bg-green-600/20 text-green-300' : 'bg-red-600/20 text-red-300'}`}>
             {up ? '▲' : '▼'} {Math.abs(change24h).toFixed(2)}%
           </span>
         </div>
 
-        {/* extra detail only when active (the ‘pop up’ feel) */}
-        {active && (
-          <div className="mt-2 text-[11px] text-[#c2c2c9] line-clamp-3">
-            {pool.description || '—'}
+        {/* owned + NFT count */}
+        <div className="mt-2 text-[11px] text-[#c2c2c9] flex items-center justify-between">
+          <span>Your tokens: <span className="text-white/90 font-semibold">{ownedLabel}</span></span>
+          <span>NFTs: <span className="text-white/90 font-semibold">{nftCount}</span></span>
+        </div>
+
+        {/* mint progress toward threshold */}
+        <div className="mt-2 w-full">
+          <div className="relative w-full h-4 bg-[#2b2b37] rounded overflow-hidden">
+            <div
+              className={`h-full bg-gradient-to-r from-[#b484ff] to-[#6c47e2] ${pct >= 100 ? 'animate-pulse' : ''}`}
+              style={{ width: `${pct}%` }}
+            />
+            <span className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-[#f0eaff]">
+              {pct.toFixed(2)}%
+            </span>
           </div>
-        )}
+          <div className="flex justify-between text-[11px] text-[#d6d8ff] mt-1">
+            <span>{Number.isFinite(tokensUiOwned) ? tokensUiOwned.toLocaleString(undefined, { maximumFractionDigits: decs }) : '—'}</span>
+            <span>{mintThreshold.toLocaleString()} required</span>
+          </div>
+        </div>
 
-        {/* ACTIONS */}
-<div className="mt-3 grid grid-cols-2 gap-2">
-  <button
-    type="button"
-    onClick={(e) => { e.stopPropagation(); onBuy(pool); }}
-    className="h-9 w-full inline-flex items-center justify-center whitespace-nowrap leading-none rounded px-3 text-[13px] font-semibold bg-[#ffc371] text-black"
-  >
-    Buy
-  </button>
+        {/* ACTIONS: Buy / Sell / Mint / Burn */}
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onBuy(pool); }}
+            className="h-9 w-full inline-flex items-center justify-center rounded px-3 text-[13px] font-semibold bg-[#ffc371] text-black"
+          >
+            Buy
+          </button>
 
-  <button
-    type="button"
-    onClick={(e) => { e.stopPropagation(); onSell(pool); }}
-    disabled={!isAmm(pool)}
-    className="h-9 w-full inline-flex items-center justify-center whitespace-nowrap leading-none rounded px-3 text-[13px] font-semibold bg-[#ff5656] text-white disabled:opacity-40"
-    title={isAmm(pool) ? '' : 'Sell available after AMM migration'}
-  >
-    Sell
-  </button>
-</div>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); if (canSell) onSell(pool); }}
+            disabled={!canSell}
+            className="h-9 w-full inline-flex items-center justify-center rounded px-3 text-[13px] font-semibold bg-[#ff5656] text-white disabled:opacity-40"
+            title={canSell ? '' : 'Sell available after AMM migration'}
+          >
+            Sell
+          </button>
 
-{/* ✅ Social links live outside buttons so they’re clickable */}
-<SocialLinksBar socials={pool.socials} className="mt-2" />
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMint(pool); }}
+            disabled={!canMint}
+            className="h-9 w-full inline-flex items-center justify-center rounded px-3 text-[13px] font-semibold bg-[#907aff] text-white disabled:opacity-40"
+            title={canMint ? '' : 'Need more tokens to mint'}
+          >
+            Mint NFT
+          </button>
 
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onBurn(pool); }}
+            disabled={nftCount === 0}
+            className="h-9 w-full inline-flex items-center justify-center rounded px-3 text-[13px] font-semibold bg-[#ff5656] text-white disabled:opacity-40"
+            title={nftCount > 0 ? '' : 'No NFTs to burn'}
+          >
+            Burn NFT
+          </button>
+        </div>
+
+        {/* social links */}
+        <SocialLinksBar socials={pool.socials} className="mt-2" />
       </div>
     </div>
   );
@@ -300,6 +367,13 @@ function MobileVerticalSection({
   onOpen,
   onBuy,
   onSell,
+  onMint,
+  onBurn,
+  onPlay,
+  isPlayingFor,
+  tokensUiFor,
+  mintThresholdFor,
+  nftCountFor,
   change24hFor,
 }: {
   title: string;
@@ -307,8 +381,16 @@ function MobileVerticalSection({
   onOpen: (p: PoolType) => void;
   onBuy: (p: PoolType) => void;
   onSell: (p: PoolType) => void;
+  onMint: (p: PoolType) => void;
+  onBurn: (p: PoolType) => void;
+  onPlay: (id: string, url?: string) => void;
+  isPlayingFor: (p: PoolType) => boolean;
+  tokensUiFor: (p: PoolType) => number;
+  mintThresholdFor: (p: PoolType) => number;
+  nftCountFor: (p: PoolType) => number;
   change24hFor: (mint: string) => number;
-}) {
+})
+ {
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const cardRefs = React.useRef<(HTMLDivElement | null)[]>([]);
   const [progress, setProgress] = React.useState(0); // 0..1 bottom→top
@@ -391,14 +473,21 @@ React.useEffect(() => {
         className="h-[calc(100dvh-160px)] flex-none snap-center pb-4"
       >
         <MiniVerticalCard
-          pool={p}
-          rank={i + 1}
-          onOpen={onOpen}
-          onBuy={onBuy}
-          onSell={onSell}
-          change24h={change24hFor(p.memeMint.toBase58())}
-          active={i === activeIdx}
-        />
+  pool={p}
+  rank={i + 1}
+  onOpen={onOpen}
+  onBuy={onBuy}
+  onSell={onSell}
+  onMint={onMint}                                  // NEW
+  onBurn={onBurn}                                  // NEW
+  onPlay={(id, url) => onPlay(id, url)}            // NEW
+  isPlaying={isPlayingFor(p)}                      // NEW
+  tokensUiOwned={tokensUiFor(p)}                   // NEW
+  mintThreshold={mintThresholdFor(p)}              // NEW
+  nftCount={nftCountFor(p)}                        // NEW
+  change24h={change24hFor(p.memeMint.toBase58())}
+  active={i === activeIdx}
+/>
       </div>
     ))}
   </div>
@@ -412,18 +501,33 @@ React.useEffect(() => {
 function MobileVerticalStacks({
   pools,
   onOpen,
-  onBuy,         // NEW
-  onSell,        // NEW
+  onBuy,
+  onSell,
+  onMint,
+  onBurn,
+  onPlay,
+  isPlayingFor,
+  tokensUiFor,
+  mintThresholdFor,
+  nftCountFor,
   change24hFor,
   createdAtFor,
 }: {
   pools: PoolType[];
   onOpen: (p: PoolType) => void;
-  onBuy: (p: PoolType) => void;     // NEW
-  onSell: (p: PoolType) => void;    // NEW
+  onBuy: (p: PoolType) => void;
+  onSell: (p: PoolType) => void;
+  onMint: (p: PoolType) => void;   // NEW
+  onBurn: (p: PoolType) => void;   // NEW
+  onPlay: (id: string, url?: string) => void; // NEW
+  isPlayingFor: (p: PoolType) => boolean;     // NEW
+  tokensUiFor: (p: PoolType) => number;       // NEW
+  mintThresholdFor: (p: PoolType) => number;  // NEW
+  nftCountFor: (p: PoolType) => number;       // NEW
   change24hFor: (mint: string) => number;
   createdAtFor: (mint: string) => number;
-}) {
+})
+{
 
   type Mode = 'gainers' | 'marketcap' | 'newest';
   const [mode, setMode] = React.useState<Mode>('gainers'); // default: Top Gainers
@@ -496,14 +600,22 @@ function MobileVerticalStacks({
       </div>
 
       <MobileVerticalSection
-  key={mode}                        // ⬅️ remount on category change
+  key={mode}
   title={title}
   itemsBestFirst={current}
   onOpen={onOpen}
   onBuy={onBuy}
   onSell={(p) => { if (isAmm(p)) onSell(p); }}
+  onMint={onMint}                   // NEW
+  onBurn={onBurn}                   // NEW
+  onPlay={onPlay}                   // NEW
+  isPlayingFor={isPlayingFor}       // NEW
+  tokensUiFor={tokensUiFor}         // NEW
+  mintThresholdFor={mintThresholdFor} // NEW
+  nftCountFor={nftCountFor}         // NEW
   change24hFor={change24hFor}
 />
+
 
     </div>
   );
@@ -698,11 +810,44 @@ export default function SoundMemesClient() {
 
  // 1) FIRST
   const wallet = useWallet();
+    // simple flag we can re-use in UI
+  const walletMissing = !wallet?.publicKey;
 
     const [pools, setPools] = useState<PoolType[]>([]);
   const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
 
 
+// Reusable: open Burn modal for a pool (used by desktop + mobile)
+const handleOpenBurn = async (pool: PoolType) => {
+  const canBurn = nftsLoaded && (ownedCounts[pool.memeMint.toBase58()] ?? 0) > 0;
+  if (!canBurn) {
+    setStatus("No NFTs to burn for this pool.");
+    return;
+  }
+
+  const lockDict = userPoolNfts[pool.memeMint.toBase58()] ?? {};
+  const maybeNfts = Object.entries(lockDict).map(([lockId, data]) => ({
+    lockId: Number(lockId),
+    mint: new PublicKey(data.mint),
+  }));
+
+  const ownedNfts = (
+    await Promise.all(
+      maybeNfts.map(async (n) =>
+        (await stillOwnsNft(n.mint, wallet.publicKey!)) ? n : null
+      )
+    )
+  ).filter(Boolean) as { lockId: number; mint: PublicKey }[];
+
+  if (!ownedNfts.length) {
+    setStatus("Looks like you’ve already burned every NFT for this meme.");
+    return;
+  }
+
+  setBurnModal({ pool, nfts: ownedNfts, open: true });
+};
+
+  
 const BULK_FLUSH_MS = 30_000;
 type PricePoint = { mint: string; priceLamports: number; at: number };
 
@@ -2648,6 +2793,11 @@ const refreshUserNfts = useCallback(async () => {
 
 
   const handleOpenSellModal = (pool: PoolType) => {
+      // prevent opening modal if no wallet
+  if (!wallet.publicKey) {
+    setStatus("connect your wallet");
+    return;
+  }
   const mcap = pool.ammReserves?.woodeng ?? 0;
   const canSell = isAmm(pool);
   if (!canSell) return;
@@ -3228,7 +3378,7 @@ const lpFeeVault = toPubkey(lpFeeVaultPk);
   // REPLACE the entire handleOpenBuyModal function with this
 const handleOpenBuyModal = async (poolFromGrid: PoolType) => {
   if (!wallet.publicKey) {
-    setStatus("Please connect your wallet first.");          // quick guard
+    setStatus("connect your wallet");          // quick guard
     return;
   }
 
@@ -3548,9 +3698,17 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 
 
   return (
-  <div className="min-h-screen bg-[#181920] text-white px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
+  <div className="min-h-screen bg-[#181920] text-white px-3 sm:px-6 lg:px-8 pt-24 sm:pt-28 lg:pt-32 pb-6">
+
   {/* Header */}
   <h1 className="text-2xl sm:text-3xl font-bold mb-4 sm:mb-8">Sound Meme Pools</h1>
+  {/* Wallet notice */}
+  {!wallet.publicKey && (
+    <div
+      className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 text-yellow-300 px-3 py-2 text-sm"
+      role="status"
+    >connect your wallet</div>
+  )}
 
 
     {/* Status Banner */}
@@ -3624,9 +3782,21 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
   onOpen={(p) => { setDetailPool(p); setShowDetail(true); }}
   onBuy={(p) => handleOpenBuyModal(p)}
   onSell={(p) => handleOpenSellModal(p)}
+  onMint={(p) => handleMintNft(p)}                 // NEW
+  onBurn={(p) => handleOpenBurn(p)}                // NEW
+  onPlay={(id, url) => playDemo(id, url)}          // NEW
+  isPlayingFor={(p) => playing === p.pubkey.toBase58()}  // NEW
+  tokensUiFor={(p) => {
+    const raw = balancesByMint[p.memeMint.toBase58()];
+    const d   = p.decimals ?? MEME_DECIMALS;
+    return raw === undefined ? NaN : raw / 10 ** d;
+  }}                                               // NEW
+  mintThresholdFor={(p) => getMintThreshold(p)}    // NEW
+  nftCountFor={(p) => ownedCounts[p.memeMint.toBase58()] ?? 0} // NEW
   change24hFor={change24hFor}
   createdAtFor={createdAtFor}
 />
+
 
 
 
@@ -3639,6 +3809,7 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 
      // User NFT count for this pool
      const userNftCount = ownedCounts[pool.memeMint.toBase58()] ?? 0;
+     const canBurn = nftsLoaded && userNftCount > 0;
 
      /* ---------- SELL-eligibility ------------------------------------- */
      const mcap    = pool.ammReserves?.woodeng ?? 0;
@@ -3650,7 +3821,7 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
         return (
           <div
             key={pool.pubkey.toBase58()}
-            className="group bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl hover:scale-105 transition-all cursor-pointer flex flex-col"
+            className="group bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl hover:scale-105 transition-all cursor-pointer flex flex-col overflow-hidden"
             onClick={() => { setDetailPool(pool); setShowDetail(true); }}
           >
             {/* IMAGE + Overlay */}
@@ -3783,7 +3954,7 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 {pool.poolType === 0 && <BondingProgressBar pool={pool} />}
 
 {/* ─────────── Action buttons ─────────── */}
-<div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2 text-sm font-semibold">
+<div className="grid grid-cols-2 xl:grid-cols-3 gap-2 mt-2 text-sm font-semibold place-items-stretch">
 
 
 
@@ -3791,7 +3962,10 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
 
   {!( !isAmm(pool) && poolMcap(pool) >= 69 * 10 ** WOODENG_DECIMALS ) && (
   <button
-    className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#907aff] text-white hover:bg-[#37ad71] transition"
+        className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#907aff] text-white hover:bg-[#37ad71] transition disabled:opacity-40"
+    disabled={walletMissing}
+    title={walletMissing ? "connect your wallet" : undefined}
+    
     onClick={e => { e.stopPropagation(); handleOpenBuyModal(pool); }}
   >
     Buy
@@ -3799,10 +3973,13 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
   )}
 
   {/* ► SELL ------------------------------------------------------ */}
- {canSell && (
+{canSell && (
   <button
     onClick={e => { e.stopPropagation(); handleOpenSellModal(pool); }}
-     className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#ff5656] text-white hover:bg-[#f8d648] transition">
+    className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#ff5656] text-white hover:bg-[#f8d648] transition disabled:opacity-40"
+    disabled={walletMissing}
+    title={walletMissing ? "connect your wallet" : undefined}
+  >
     Sell
   </button>
 )}
@@ -3823,7 +4000,8 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
   {/* ► MINT NFT -------------------------------------------------- */}
   <button
      className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#907aff] text-white hover:bg-[#a593ff] transition disabled:opacity-40"
-    disabled={!!txStep || userMemeTokens(pool) < getMintThreshold(pool)}
+    disabled={walletMissing || !!txStep || userMemeTokens(pool) < getMintThreshold(pool)}
+    title={walletMissing ? "connect your wallet" : undefined}
     onClick={e => { e.stopPropagation(); handleMintNft(pool); }}
   >
     <Pickaxe className="w-4 h-4" />
@@ -3831,54 +4009,74 @@ function CompactBondingGauge({ pool }: { pool: PoolType }) {
   </button>
 
   {/* ► BURN NFT -------------------------------------------------- */}
-  <button
-     className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#ff5656] text-white hover:bg-[#ff7373] transition disabled:opacity-40"
-    disabled={!nftsLoaded}
-    title="Burn your NFT to unlock tokens"
-    onClick={async e => {
-      e.stopPropagation();
-      if (!nftsLoaded || !wallet.publicKey) return;
+<button
+  className="
+    h-10 md:h-11 w-full
+    col-span-2 sm:col-span-1 lg:col-span-2
+    inline-flex items-center justify-between gap-2
+    rounded px-3 md:px-4 font-semibold
+    text-[12px] md:text-sm bg-[#ff5656] text-white
+    hover:bg-[#ff7373] transition disabled:opacity-40
+  "
+   disabled={walletMissing || !canBurn}
+  title={
+    walletMissing
+      ? 'connect your wallet'
+      : canBurn
+        ? 'Burn your NFT to unlock tokens'
+        : 'No NFTs to burn'
+  }
+  onClick={async (e) => {
+    e.stopPropagation();
+    if (!canBurn) return;
 
-      // ① raw list from lockers
-      const lockDict = userPoolNfts[pool.memeMint.toBase58()] ?? {};
-      const maybeNfts = Object.entries(lockDict).map(([lockId, data]) => ({
-        lockId: Number(lockId),
-        mint:   new PublicKey(data.mint),
-      }));
+    // ① raw list from lockers
+    const lockDict = userPoolNfts[pool.memeMint.toBase58()] ?? {};
+    const maybeNfts = Object.entries(lockDict).map(([lockId, data]) => ({
+      lockId: Number(lockId),
+      mint: new PublicKey(data.mint),
+    }));
 
-      // ② keep only NFTs still owned
-      const ownedNfts = (
-        await Promise.all(
-          maybeNfts.map(async n =>
-            (await stillOwnsNft(n.mint, wallet.publicKey!)) ? n : null
-          )
+    // ② keep only NFTs still owned
+    const ownedNfts = (
+      await Promise.all(
+        maybeNfts.map(async (n) =>
+          (await stillOwnsNft(n.mint, wallet.publicKey!)) ? n : null
         )
-      ).filter(Boolean) as { lockId: number; mint: PublicKey }[];
+      )
+    ).filter(Boolean) as { lockId: number; mint: PublicKey }[];
 
-      if (ownedNfts.length === 0) {
-        setStatus("Looks like you’ve already burned every NFT for this meme.");
-        return;
-      }
+    if (ownedNfts.length === 0) {
+      setStatus("Looks like you’ve already burned every NFT for this meme.");
+      return;
+    }
 
-      // ③ open modal with filtered list
-      setBurnModal({ pool, nfts: ownedNfts, open: true });
-    }}
-  >
-    {!nftsLoaded ? (
-      <Loader2 className="animate-spin w-4 h-4" />
-    ) : (
-      <>
-        <span role="img" aria-label="burn">🔥</span>
-        Burn&nbsp;NFT
-        {userNftCount > 1 && (
-          <span className="ml-1 text-xs">({userNftCount})</span>
-        )}
-      </>
-    )}
-  </button>
+    // ③ open modal with filtered list
+    setBurnModal({ pool, nfts: ownedNfts, open: true });
+  }}
+>
+       {/* left: icon + label */}
+  <span className="inline-flex items-center gap-2 shrink-0">
+    <span className="text-base leading-none" role="img" aria-label="burn">🔥</span>
+    <span className="leading-none">Burn&nbsp;NFT</span>
+  </span>
+
+  {/* right: badge — only when loaded AND count ≥ 1 */}
+  {nftsLoaded && userNftCount > 0 && (
+    <span className="shrink-0 tabular-nums text-xs font-semibold leading-none
+                     bg-white/10 rounded px-2 py-[2px] min-w-[30px] text-center">
+      ({userNftCount})
+    </span>
+  )}
+</button>
+
 
 </div>
               </div>
+              {/* wallet hint just under actions on each card */}
+              {walletMissing && (
+                <div className="px-4 pb-3 -mt-2 text-[11px] text-[#f8c286]">connect your wallet</div>
+              )}
               <div className="mt-2">
                 {
   (() => {

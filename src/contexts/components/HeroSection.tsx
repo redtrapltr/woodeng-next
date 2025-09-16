@@ -30,10 +30,12 @@ export function HeroSection() {
               />
             </div>
             <img
-              src="https://i.postimg.cc/pTd49kBG/Woo-Logo.png"
-              alt="Woo Logo"
-              className="relative z-10 w-[140px] md:w-[240px] h-auto select-none"
+              src="/brand/logo.png"
+              alt="Woodeng"
+              className="relative z-10 h-[120px] md:h-[200px] w-auto select-none"
               draggable={false}
+              decoding="async"
+              loading="eager"
             />
           </div>
 
