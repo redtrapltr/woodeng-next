@@ -27,7 +27,7 @@ const extraGlowStyles = `
 
 export function TokenPurchaseSection() {
   const [copied, setCopied] = useState(false);
-  const contractAddress = "83zcTaQRqL1s3PxBRdGVkee9PiGLVP6eAR5";
+  const contractAddress = "83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5";
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(contractAddress);
@@ -141,14 +141,14 @@ export function TokenPurchaseSection() {
                   </h2>
 
                   <p className="text-sm md:text-lg text-muted-foreground">
-                    Power your Music NFT transactions and SPL404 Sound Memes deployment
-                    with the native Woodeng token
+                    Power your SWL444 Tokens
+                    with the native Woodeng token and earn platform fees
                   </p>
 
                   {/* Buttons */}
                   <div className="flex flex-col sm:flex-row gap-4">
                     <a
-                      href="https://raydium.io/swap/?inputMint=sol&outputMint=83zcTaQRqL1s3PxBRdGVkee9PiGLVP6eAR5"
+                      href="https://raydium.io/swap/?inputMint=sol&outputMint=83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="px-6 py-3 bg-gradient-to-r from-[#7a5cff] to-[#8e7bfa] text-white rounded-full flex items-center gap-2 transition hover:scale-105 shadow-lg shadow-[#7a5cff]/30"

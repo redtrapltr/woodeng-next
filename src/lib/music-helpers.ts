@@ -1,7 +1,7 @@
 // src/lib/music-helpers.ts
 import { PublicKey } from '@solana/web3.js';
 import { Connection, clusterApiUrl } from '@solana/web3.js';
-const connection = new Connection(clusterApiUrl('devnet'),'confirmed');
+const connection = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string,'confirmed');
 
 
 // quick test – replace with your real PDAs

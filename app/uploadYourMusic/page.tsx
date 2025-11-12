@@ -36,8 +36,11 @@ import MosaicPreview from '../components/MosaicPreview';
 
 // -- CONSTANTS --
 const PROGRAM_ID = new PublicKey('FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS')
-const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad')
+const WOODENG_MINT = new PublicKey('83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5')
 const WSOL_MINT = NATIVE_MINT;      // So11111111111111111111111111111111111111112
+
+
+
 
 // -- HELPERS --
 async function pinFile(file: File): Promise<string> {
@@ -219,6 +222,9 @@ export default function UploadYourMusic() {
   const [tokenType, setTokenType] = useState<'woodeng' | 'sol'>('woodeng')
   const [copies, setCopies] = useState('1')
   const [royalties, setRoyalties] = useState('5')
+  const [ammFeePct, setAmmFeePct] = useState('0');   // AMM fee (%) for pooled trades
+const [listingPrice, setListingPrice] = useState('0');   // Fixed price when Skip Deposit = listing
+
   const [minting, setMinting] = useState(false)
   const [mintedAddrs, setMintedAddrs] = useState<string[]>([])
   const [poolAddr, setPoolAddr] = useState<string | null>(null)
@@ -281,6 +287,8 @@ React.useEffect(() => {
       setFormError('Please connect your wallet')
       return
     }
+
+
     const missingFile = tracks.some(t => {
       const hasImage = isBundle ? !!t.trackImage : !!t.cover;
       return !hasImage || !t.audio?.mp3;
@@ -297,10 +305,18 @@ React.useEffect(() => {
     setMintedAddrs([])
     setPoolAddr(null)
 
+
+    function toRaw(amountUi: string, decimals: number): number {
+  const v = parseFloat(amountUi || '0') || 0;
+  if (v <= 0) throw new Error('Listing price must be > 0');
+  return Math.round(v * 10 ** decimals);
+}
+
+
     try {
       // Normalize initial deposit based on the chosen mint's decimals (wSOL=9, WOODENG may differ)
       const tokenMint = (tokenType === 'sol') ? WSOL_MINT : WOODENG_MINT;
-      const tmpConn = new Connection(clusterApiUrl('devnet'), 'confirmed');
+      const tmpConn = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'confirmed');
       const mintInfo = await getMint(tmpConn, tokenMint);
       const decimals = mintInfo.decimals;
 
@@ -313,7 +329,8 @@ React.useEffect(() => {
       }
 
       // Pools in your UI have no royalties; keep 0. (Change if you want pool fees.)
-      const poolRoyaltyBps = 0;
+      const poolRoyaltyBps = Math.round((parseFloat(ammFeePct || '0') || 0) * 100);
+
 
       // 1) Pin raw assets & metadata
       const uris: string[] = []
@@ -366,7 +383,7 @@ const meta: any = {
       }
 
       // 2) Mint via Metaplex
-      const mx = Metaplex.make(new Connection(clusterApiUrl('devnet'), 'finalized')).use(walletAdapterIdentity(wallet))
+      const mx = Metaplex.make(new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'finalized')).use(walletAdapterIdentity(wallet))
       const nCopies = Math.max(1, parseInt(copies, 10))
       const minted: PublicKey[] = []
 
@@ -412,12 +429,72 @@ const meta: any = {
       setMintedAddrs(minted.map(pk => pk.toBase58()))
 
       if (skipDeposit) {
+        // Auto-list freshly minted NFT(s)
+const conn3 = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'confirmed');
+const provider3 = new AnchorProvider(conn3, wallet as any, {});
+const prog3 = new Program(idl as any, PROGRAM_ID, provider3);
+
+const quoteMint = (tokenType === 'sol') ? WSOL_MINT : WOODENG_MINT;
+const quoteMintInfo = await getMint(conn3, quoteMint);
+const quoteDecimals = quoteMintInfo.decimals;
+
+const rawPrice = toRaw(listingPrice, quoteDecimals);
+
+const orderRoyaltyBps = Math.round((parseFloat(royalties || '0') || 0) * 100);
+
+for (let i = 0; i < minted.length; i++) {
+  const mintAddr = minted[i];
+  const nftAta = await getAssociatedTokenAddress(new PublicKey(mintAddr), publicKey!);
+
+  const orderIdBn = new BN(Date.now()).add(new BN(i));
+
+  const [orderPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from('order'), new PublicKey(mintAddr).toBuffer(), publicKey!.toBuffer(), Buffer.from(orderIdBn.toArray('le', 8))],
+    PROGRAM_ID
+  );
+  const [escrowAuth] = PublicKey.findProgramAddressSync(
+    [Buffer.from('escrow_auth'), orderPda.toBuffer()],
+    PROGRAM_ID
+  );
+  const [escrowPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from('escrow'), orderPda.toBuffer()],
+    PROGRAM_ID
+  );
+
+  const sellerTokenAta = await getAssociatedTokenAddress(quoteMint, publicKey!);
+  const creatorTokenAta = await getAssociatedTokenAddress(quoteMint, publicKey!);
+
+  const preIxsList: TransactionInstruction[] = [];
+  const stSeller = await conn3.getAccountInfo(sellerTokenAta);
+  if (!stSeller) preIxsList.push(createAssociatedTokenAccountInstruction(publicKey!, sellerTokenAta, publicKey!, quoteMint));
+  const stCreator = await conn3.getAccountInfo(creatorTokenAta);
+  if (!stCreator) preIxsList.push(createAssociatedTokenAccountInstruction(publicKey!, creatorTokenAta, publicKey!, quoteMint));
+
+  await prog3.methods
+    .listOrder(orderIdBn, new BN(rawPrice), publicKey!, orderRoyaltyBps)
+    .accounts({
+      order: orderPda,
+      escrowAuthority: escrowAuth,
+      escrow: escrowPda,
+      seller: publicKey!,
+      userNftAta: nftAta,
+      nftMint: new PublicKey(mintAddr),
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      rent: SYSVAR_RENT_PUBKEY,
+    })
+    .preInstructions(preIxsList)
+    .rpc();
+}
+
+
+
         setSuccessModal({ open: true })
       }
 
       // 3) create & seed AMM pool on-chain via Anchor
       if (!skipDeposit) {
-        const conn2 = new Connection(clusterApiUrl('devnet'), 'confirmed')
+        const conn2 = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'confirmed')
         const provider2 = new AnchorProvider(conn2, wallet as any, {})
         const prog2 = new Program(idl as any, PROGRAM_ID, provider2)
 
@@ -983,6 +1060,27 @@ setSuccessModal({ open: true, pool: poolKP.publicKey.toBase58() })
                 />
               </div>
 
+              {!skipDeposit && (
+  <div>
+    <label className="block text-sm font-medium mb-2">
+      AMM Trade Fee (%) <span className="text-xs text-muted-foreground">(split 70% creator / 30% stakers)</span>
+    </label>
+    <input
+      type="number"
+      min="0"
+      max="15"
+      step="0.1"
+      value={ammFeePct}
+      onChange={e => setAmmFeePct(e.target.value)}
+      className="w-full px-4 py-2 bg-card border rounded-lg transition-colors"
+    />
+    <p className="mt-1 text-xs text-muted-foreground">
+      Applied to each AMM trade in your pool/bundle.
+    </p>
+  </div>
+)}
+
+
               <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -995,6 +1093,23 @@ setSuccessModal({ open: true, pool: poolKP.publicKey.toBase58() })
                   Skip Deposit
                 </label>
               </div>
+
+              {skipDeposit && (
+  <div className="mt-4">
+    <label className="block text-sm font-medium mb-2">
+      Listing Price ({tokenType.toUpperCase()})
+    </label>
+    <input
+      type="number"
+      min="0"
+      step="0.000001"
+      value={listingPrice}
+      onChange={e => setListingPrice(e.target.value)}
+      className="w-full px-4 py-2 bg-card border rounded-lg transition-colors"
+    />
+  </div>
+)}
+
 
               {skipDeposit && (
                 <div>

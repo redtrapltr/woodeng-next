@@ -1,6 +1,8 @@
 // app/api/cron/refresh-prices/route.ts
 import { NextResponse } from 'next/server';
-import { pool } from '@/lib/db';
+import { getPool } from '@/lib/db';
+const pool = getPool();
+
 
 // TODO: replace this with real on-chain pricing for each mint
 async function getCurrentLamportsForMint(_mint: string): Promise<number | null> {

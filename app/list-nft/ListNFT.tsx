@@ -240,10 +240,19 @@ export default function ListNFT() {
   const [error,        setError]        = useState<string | null>(null);
   const [success,      setSuccess]      = useState(false);
 
-  /* anchor client */
-  const conn     = new Connection(clusterApiUrl('devnet'));
-  const provider = new AnchorProvider(conn, wallet as any, {});
-  const program  = new Program(idl as any, PROGRAM_ID, provider);
+  // anchor client (mainnet-ready)
+const endpoint =
+  process.env.NEXT_PUBLIC_SOLANA_RPC ??
+  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ??
+  process.env.NEXT_PUBLIC_SOLANA_RPC as string; // fallback
+
+const conn      = new Connection(endpoint, 'confirmed');
+const provider  = new AnchorProvider(conn, wallet as any, {
+  commitment: 'confirmed',
+  preflightCommitment: 'confirmed',
+});
+const program   = new Program(idl as any, PROGRAM_ID, provider);
+
 
 
 

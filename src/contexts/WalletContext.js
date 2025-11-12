@@ -1,22 +1,33 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets';
-import { clusterApiUrl } from '@solana/web3.js';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
 export function WalletContext({ children }) {
-  // Set network to 'mainnet-beta' for production
-  const [network] = useState('devnet');
-
-  // Use your own endpoint if desired or default to clusterApiUrl:
+  // Use your Helius endpoint from .env.local
+  // Fallback to NEXT_PUBLIC_SOLANA_RPC for flexibility
   const endpoint = useMemo(() => {
-    return process.env.NEXT_PUBLIC_SOLANA_RPC_ENDPOINT || clusterApiUrl(network);
-  }, [network]);
+    const envUrl =
+      process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
+      process.env.NEXT_PUBLIC_SOLANA_RPC; // both are fine as long as one is set
+    if (!envUrl) {
+      // Last-resort warning so we don't silently hit api.mainnet-beta.solana.com
+      console.warn(
+        '[WalletContext] No NEXT_PUBLIC_HELIUS_RPC_URL / NEXT_PUBLIC_SOLANA_RPC set. ' +
+          'Browser calls will fail CORS on api.mainnet-beta.solana.com.'
+      );
+    } else {
+      // helpful breadcrumb in dev tools
+      if (typeof window !== 'undefined') {
+        console.debug('[WalletContext] Using RPC endpoint:', envUrl);
+      }
+    }
+    return envUrl ?? 'https://mainnet.helius-rpc.com/?api-key=REQUIRED';
+  }, []);
 
-  // Instantiate the wallet adapters
   const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
 
   return (

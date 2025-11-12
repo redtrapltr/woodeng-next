@@ -4,7 +4,7 @@ import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
 import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 // Hardcode WOODENG mint and decimals
-export const WOODENG_MINT = new PublicKey("CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad");
+export const WOODENG_MINT = new PublicKey("83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5");
 export const WOODENG_DECIMALS = 9;
 
 // Use this hook to get WOODENG + any meme balances (by SPL mint, not NFT)
@@ -27,7 +27,7 @@ export function useSplBalances(mints: PublicKey[]): {
     }
     setLoading(true);
 
-    const conn = new Connection(clusterApiUrl("devnet"));
+    const conn = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string);
 
     async function fetchSplBalance(mint: PublicKey, decimals: number): Promise<number> {
   if (!publicKey) return 0; // <--- add this guard!

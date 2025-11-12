@@ -41,9 +41,10 @@ export function HeroSection() {
 
           {/* WELCOME TEXT */}
           <div className="flex-1 flex flex-col items-center md:items-start justify-center">
-            <div className="w-full md:w-4/6">
+            <div className="w-full md:w-3/6">
               <AnimatedWelcomeText
-                text="Welcome to the New Memetic era : Music NFT's & Sound Memes are the new Sound Money"
+                text="Introducing Solana World Library : 
+                Tokenized Metadada & Sound Memes are the new Sound Money"
                 className="text-[1.1rem] md:text-[1.6rem] font-bold text-primary leading-snug text-center md:text-left"
                 waveDelay={0.17}
                 waveClassName="text-[#b89fff] font-bold"

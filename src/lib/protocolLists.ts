@@ -22,7 +22,7 @@ const POOL_PROGRAM_ID = new PublicKey(
 );
 
 const conn = new Connection(
-  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ?? clusterApiUrl('devnet'),
+  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ?? process.env.NEXT_PUBLIC_SOLANA_RPC as string,
   'confirmed',
 );
 

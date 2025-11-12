@@ -3,6 +3,14 @@
 import React, { useEffect, useRef } from 'react';
 import type { CandlestickData, UTCTimestamp } from 'lightweight-charts';
 
+
+
+// 1 SOL = 1.0 UI unit; 1 lamport = 1e-9 SOL
+const UI_TICK = 1e-9;
+// treat opens smaller than a few ticks as effectively zero
+const EPS = 5 * UI_TICK;
+
+
 // derive types
 type LWC = typeof import('lightweight-charts');
 type ChartApi = ReturnType<LWC['createChart']>;
@@ -31,6 +39,12 @@ export default function CandleChart({ data, latest, volume, yTickFormatter, onBa
   // zoom/fit management
   const didUserZoomRef = useRef(false);
   const didFirstFitRef = useRef(false);
+
+
+
+
+const prevCloseMapRef = useRef<Map<number, number>>(new Map());
+
 
   // default “max 6 decimals, trim trailing zeros”
   const defaultFmt = (p: number) => {
@@ -148,6 +162,19 @@ if (seedCandles.length) {
   candles.setData(seedCandles);
 }
 
+
+// --- PATCH: build time(ms) -> previous close map from initial data ---
+prevCloseMapRef.current = new Map();
+for (let i = 1; i < seedCandles.length; i++) {
+  const cur = seedCandles[i];
+  const prev = seedCandles[i - 1];
+  prevCloseMapRef.current.set(
+    (cur.time as number) * 1000, // store ms to match your Candle.t
+    prev.close as number
+  );
+}
+// --- END PATCH ---
+
 // seed initial volume (if provided)
 if (volumeSeries && volume?.length) {
   volumeSeries.setData(
@@ -214,9 +241,21 @@ if (latest) {
         const fmt = (v: number) => (fmtRef.current ? fmtRef.current(v) : defaultFmt(v));
         let pct: number | null = null;
 
-        if (Number.isFinite(o) && Number.isFinite(c) && o !== 0) {
-          pct = ((c - o) / o) * 100;
-        }
+if (Number.isFinite(o) && Number.isFinite(c)) {
+  // Choose baseline: valid open, else previous bar's close.
+  const tMs = (sd?.time as number) * 1000;
+
+  const baseline =
+    Math.abs(o) > EPS
+      ? o
+      : prevCloseMapRef.current.get(tMs);
+
+  if (Number.isFinite(baseline as number) && Math.abs(baseline as number) > EPS) {
+    pct = ((c - (baseline as number)) / (baseline as number)) * 100;
+  }
+}
+
+
 
         if (Number.isFinite(o)) {
           legendRef.current.innerHTML =
@@ -303,6 +342,19 @@ if (latest) {
 
     s.setData(mapped);
 
+    // --- PATCH: rebuild time(ms) -> previous close map on full reload ---
+prevCloseMapRef.current = new Map();
+for (let i = 1; i < mapped.length; i++) {
+  const cur = mapped[i];
+  const prev = mapped[i - 1];
+  prevCloseMapRef.current.set(
+    (cur.time as number) * 1000,
+    prev.close as number
+  );
+}
+// --- END PATCH ---
+
+
     if (didUserZoomRef.current && prevRange) {
       // keep current zoom
       (ts as any).setVisibleLogicalRange?.(prevRange);
@@ -340,6 +392,19 @@ if (latest) {
       low:  +latest.l,
       close:+latest.c,
     });
+
+    // --- PATCH: ensure prevClose exists for the latest bar ---
+const arr = data ?? [];
+if (arr.length >= 1) {
+  // Use the most recent *completed* bar's close as baseline for the current bar
+  const last = arr[arr.length - 1];
+  // only set if not set; avoids overwriting if we already mapped it
+  if (!prevCloseMapRef.current.has(latest.t)) {
+    prevCloseMapRef.current.set(latest.t, +last.c);
+  }
+}
+// --- END PATCH ---
+
   }, [latest]);
 
   return <div ref={containerRef} className="w-full h-full" />;

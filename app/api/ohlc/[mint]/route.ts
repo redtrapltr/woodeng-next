@@ -17,9 +17,12 @@ export async function GET(
   const mint   = params.mint;
   const url    = new URL(req.url);
   const tf     = url.searchParams.get('tf')    ?? '15m';
-  const limit  = Number(url.searchParams.get('limit') ?? '200');
-  const cursor = url.searchParams.get('cursor'); // ISO timestamp or null
-  const table  = TABLE(tf);
+// clamp the requested limit
+const limitRaw = Number(url.searchParams.get('limit') ?? '200');
+const limit    = Math.max(1, Math.min(2000, limitRaw));
+
+const cursor = url.searchParams.get('cursor');
+const table  = TABLE(tf);
 
   const ts = cursor ? new Date(cursor).toISOString() : new Date().toISOString();
 

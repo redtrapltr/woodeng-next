@@ -5,13 +5,13 @@ import { Shield, Lock } from 'lucide-react';
 import Link from 'next/link';
 
 type SubSection = {
-  subtitle?: string;           // optional – some blocks have no subtitle
+  subtitle?: string; // optional – some blocks have no subtitle
   items: string[];
 };
 
 type Section = {
   title: string;
-  content: SubSection[];       // always an array of subsections
+  content: SubSection[]; // always an array of subsections
 };
 
 /* ——— static data ——— */
@@ -66,6 +66,7 @@ const sections: Section[] = [
     title: '2. How We Use Your Information',
     content: [
       {
+        subtitle: 'Platform Operations',
         items: [
           'Provide and maintain the Platform services',
           'Process transactions and payments',
@@ -108,14 +109,15 @@ const sections: Section[] = [
     title: '4. Data Security',
     content: [
       {
+        subtitle: 'Security Measures',
         items: [
           'Industry-standard encryption for data transmission',
           'Regular security audits and assessments',
           'Secure storage of personal information',
           'Access controls and authentication measures',
           'Incident response procedures',
-          'Employee data-handling training',
-          'Smart-contract security reviews',
+          'Employee data handling training',
+          'Smart contract security reviews',
           'Decentralized storage for content files',
         ],
       },
@@ -125,6 +127,7 @@ const sections: Section[] = [
     title: '5. Your Rights',
     content: [
       {
+        subtitle: 'User Rights',
         items: [
           'Access your personal information',
           'Correct inaccurate data',
@@ -156,6 +159,7 @@ const sections: Section[] = [
     title: "7. Children's Privacy",
     content: [
       {
+        subtitle: 'Age Restrictions',
         items: [
           'The Platform is not intended for users under 18',
           'We do not knowingly collect data from children',
@@ -169,6 +173,7 @@ const sections: Section[] = [
     title: '8. Blockchain Data Considerations',
     content: [
       {
+        subtitle: 'Public Blockchain Data',
         items: [
           'Blockchain transactions are public and immutable',
           'Wallet addresses and transaction history are visible on-chain',
@@ -180,14 +185,17 @@ const sections: Section[] = [
     ],
   },
   {
-    title: '9. SPL404 Token Privacy',
+    title: '9. SWL-444 Token Privacy',
     content: [
       {
+        subtitle: 'Token Data Visibility',
         items: [
-          'Token ownership is recorded on the Solana blockchain',
-          'Transaction history for tokens is publicly visible',
-          'Token balances are linked to wallet addresses',
-          'Trading activity in liquidity pools is transparent',
+          'SWL-444 is a revolutionary token standard on Solana that merges fungible and non-fungible properties',
+          'Token ownership is recorded on the Solana blockchain and publicly visible',
+          'Transaction history for all SWL-444 tokens is transparent and immutable',
+          'Token balances are linked to wallet addresses on-chain',
+          'Trading activity in liquidity pools and bonding curves is publicly accessible',
+          'While initially focused on sound memes, SWL-444 supports any metadata-rich digital asset',
           'Consider using separate wallets for different activities if privacy is a concern',
         ],
       },
@@ -197,10 +205,11 @@ const sections: Section[] = [
     title: '10. International Data Transfers',
     content: [
       {
+        subtitle: 'Cross-Border Data Processing',
         items: [
           'Data may be processed in different jurisdictions',
           'We ensure appropriate safeguards for data transfers',
-          'Compliance with international data-protection laws',
+          'Compliance with international data protection laws',
           'Transparency about data storage locations',
         ],
       },
@@ -210,6 +219,7 @@ const sections: Section[] = [
     title: '11. Changes to Privacy Policy',
     content: [
       {
+        subtitle: 'Policy Updates',
         items: [
           'We may update this policy periodically',
           'Changes will be posted on the Platform',
@@ -223,6 +233,7 @@ const sections: Section[] = [
     title: '12. Retention Period',
     content: [
       {
+        subtitle: 'Data Retention',
         items: [
           'Account data retained while account is active',
           'Transaction records kept for legal requirements',
@@ -235,20 +246,19 @@ const sections: Section[] = [
   },
 ];
 
-/* ————————— component ————————— */
 export default function Privacy() {
   return (
     <div className="py-12 space-y-12">
-      {/* HEADER */}
-      <header className="text-center space-y-6">
+      {/* Header */}
+      <div className="text-center space-y-6">
         <div className="inline-flex p-4 rounded-full bg-primary/10 mb-4">
           <Lock className="w-8 h-8 text-primary" />
         </div>
         <h1 className="text-4xl font-bold">Privacy Policy</h1>
         <p className="text-muted-foreground">Last updated: {lastUpdated}</p>
-      </header>
+      </div>
 
-      {/* INTRO */}
+      {/* Introduction */}
       <div className="max-w-3xl mx-auto">
         <div className="bg-card border border-border rounded-lg p-6 space-y-4">
           <div className="flex items-center gap-2 text-primary">
@@ -256,51 +266,62 @@ export default function Privacy() {
             <p className="font-medium">Your Privacy Matters</p>
           </div>
           <p className="text-muted-foreground">
-            This Privacy Policy explains how Woodeng collects, uses, and safeguards your
-            information. We’re committed to protecting your privacy and ensuring a positive
-            experience on our platform.
+            This Privacy Policy explains how Woodeng collects, uses, and protects your personal
+            information. We are committed to protecting your privacy and ensuring you have
+            a positive experience on our platform.
           </p>
         </div>
       </div>
 
-      {/* SECTIONS */}
+      {/* Privacy Sections */}
       <div className="max-w-3xl mx-auto space-y-12">
-        {sections.map((section, idx) => (
-          <div key={idx} className="space-y-6">
-            <h2 id={`section-${idx + 1}`} className="text-2xl font-bold">
+        {sections.map((section, index) => (
+          <div key={section.title} className="space-y-4">
+            <h2 className="text-2xl font-bold" id={`section-${index + 1}`}>
               {section.title}
             </h2>
-
-            {section.content.map((sub, i) => (
-              <div key={i} className="space-y-4">
-                {sub.subtitle && (
-                  <h3 className="text-lg font-semibold text-primary">{sub.subtitle}</h3>
-                )}
-
-                <ul className="space-y-2">
-                  {sub.items.map((item, j) => (
-                    <li key={j} className="flex items-start gap-3 text-muted-foreground">
-                      <span className="select-none">•</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+            <div className="grid gap-6">
+              {section.content.map((subsection, subIndex) => (
+                <div key={`${section.title}-${subIndex}`} className="bg-card border border-border rounded-lg p-6">
+                  <div className="space-y-4">
+                    {subsection.subtitle && (
+                      <div className="space-y-1">
+                        <h4 className="font-semibold">{subsection.subtitle}</h4>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <ul className="space-y-1">
+                        {subsection.items.map((item, itemIndex) => (
+                          <li
+                            key={`${section.title}-${subIndex}-${itemIndex}`}
+                            className="text-sm text-muted-foreground flex items-center gap-2"
+                          >
+                            <span className="select-none">•</span>
+                            <span>{item}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         ))}
       </div>
 
-      {/* CONTACT BLOCK */}
+      {/* Contact Section */}
       <div className="max-w-3xl mx-auto">
-        <div className="bg-card border border-border rounded-lg p-6 text-center">
+        <div className="bg-card border border-border rounded-lg p-6">
           <div className="flex items-center gap-2 mb-4">
             <Shield className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold">Questions?</h2>
           </div>
-          <p className="text-muted-foreground mb-6">
-            If you have any questions about our use of your data, feel free to reach out.
-          </p>
+          <div className="space-y-2 mb-6">
+            <p className="text-muted-foreground">
+              If you have any questions about our use of your data, please don't hesitate to contact us.
+            </p>
+          </div>
           <Link
             href="/contact"
             className="inline-flex px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"

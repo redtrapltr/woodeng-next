@@ -14,7 +14,7 @@ const keypair = Keypair.fromSecretKey(new Uint8Array(secret));
 
 // 2) Connect to mainnet-beta
 console.log("🔗 Connecting to mainnet-beta...");
-const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+const connection = new Connection("process.env.NEXT_PUBLIC_SOLANA_RPC as string", "confirmed");
 
 // 3) Configure Metaplex
 console.log("⚙️ Initializing Metaplex...");

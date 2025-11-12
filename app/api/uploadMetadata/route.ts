@@ -5,10 +5,11 @@ import { AnchorProvider, Program, BN } from '@project-serum/anchor';
 import { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
 import { getAssociatedTokenAddress } from '@solana/spl-token';
 import idl from '../../../idl/idl.json';
+import { clusterApiUrl } from '@solana/web3.js';
 
 // PROGRAM IDs (same as before)
 const PROGRAM_ID   = new PublicKey('FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS');
-const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad');
+const WOODENG_MINT = new PublicKey('83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5');
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,7 +19,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 1) Set up Anchor provider & Program
-    const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+    const connection = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'confirmed');
     // You cannot sign from an API route—if you want to do on‐chain pool creation, 
     // either the user must sign client‐side OR you need to keep the user's key on a server, which is insecure.
     // For simplicity, here we just echo back success + minted addresses.

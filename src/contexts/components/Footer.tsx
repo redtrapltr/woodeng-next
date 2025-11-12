@@ -25,7 +25,7 @@ export function Footer() {
 
             </div>
             <p className="text-muted-foreground text-sm">
-              Music NFT’s & Sound Memes decentralized platform.
+              Decentralized platform powered by SWL-444 technology.
             </p>
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-3">

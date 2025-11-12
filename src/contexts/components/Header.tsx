@@ -1,12 +1,15 @@
+
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
+import { useConnection } from '@solana/wallet-adapter-react';
 
 import {
   Home,
   Waves,
+  Gift,
   Music,
   ShieldCheck,
   User as UserIcon,
@@ -16,8 +19,18 @@ import {
 
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { Connection, PublicKey } from "@solana/web3.js";
-import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { Connection, PublicKey } from '@solana/web3.js';
+
+
+
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+
+
+
+import { useWoodengBalanceLive } from '@/hooks/useWoodengBalanceLive';
+
+
+
 
 /* ───── mobile breakpoint hook (avoid SSR flash) ───── */
 function useIsMobile(breakpoint = 860) {
@@ -37,9 +50,11 @@ function useIsMobile(breakpoint = 860) {
 }
 
 /* ───── chain + program ids ─────────────────────────────────────────────── */
-const DEVNET = new Connection("https://api.devnet.solana.com", "confirmed");
+
+
 const AMM_PROGRAM_ID = new PublicKey("FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS");
-const WOODENG_MINT = "CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad";
+const WOODENG_MINT_PK = new PublicKey("83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5");
+
 
 /* ───── tiny icon for Sound Memes ───────────────────────────────────────── */
 export function AnimatedSoundWaveIcon() {
@@ -263,14 +278,137 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
  const LOGO_H_DESKTOP = 78; // ↑ avant 36
  const LOGO_H_MOBILE  = 54; // ↑ avant ~2
 
+
+/* ───── small helper to render a nav item that can be disabled ───── */
+function NavItem({
+  href,
+  label,
+  icon,
+  disabled = false,
+  onClick,
+}: {
+  href?: string;
+  label: string;
+  icon: React.ReactNode;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  const baseStyle: React.CSSProperties = {
+    color: "#e6e6ff",
+    fontWeight: 600,
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    textDecoration: "none",
+    fontSize: 15,
+    padding: "0 2px",
+    whiteSpace: "nowrap",
+  };
+
+  if (disabled) {
+    return (
+      <span
+        title="Coming soon"
+        style={{ ...baseStyle, opacity: 0.6, cursor: "not-allowed" }}
+        aria-disabled="true"
+      >
+        {icon}
+        <span style={{ whiteSpace: "nowrap", marginLeft: 3 }}>{label}</span>
+      </span>
+    );
+  }
+
+  return (
+    <Link href={href!} legacyBehavior>
+      <a style={baseStyle} onClick={onClick}>{icon}<span style={{ whiteSpace: "nowrap", marginLeft: 3 }}>{label}</span></a>
+    </Link>
+  );
+}
+
+/* mobile version (block-style button) */
+function MobileNavItem({
+  href,
+  label,
+  icon,
+  disabled = false,
+  onClick,
+}: {
+  href?: string;
+  label: string;
+  icon: React.ReactNode;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  const itemStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    color: "#e6e6ff",
+    textDecoration: "none",
+    fontSize: 15,
+    border: "1px solid #1b1c26",
+    background: "#10121c",
+    borderRadius: 12,
+    marginBottom: 8,
+    fontWeight: 600,
+  };
+
+  if (disabled) {
+    return (
+      <div
+        title="Coming soon"
+        style={{ ...itemStyle, opacity: 0.6, cursor: "not-allowed" }}
+        aria-disabled="true"
+      >
+        {icon}
+        <span style={{ marginLeft: 3 }}>{label}</span>
+      </div>
+    );
+  }
+
+  return (
+    <Link href={href!} legacyBehavior>
+      <a onClick={onClick} style={itemStyle}>
+        {icon}
+        <span style={{ marginLeft: 3 }}>{label}</span>
+      </a>
+    </Link>
+  );
+}
+
+
 export default function Header() {
+  const { connection } = useConnection();
+if (typeof window !== 'undefined') {
+  console.debug('[Header] connection.rpcEndpoint =', (connection as any)?.rpcEndpoint);
+}
+
+
   const wallet = useWallet();
   const router = useRouter();
   const pathname = usePathname();
   const isMobile = useIsMobile(860);
   const logoH = isMobile ? LOGO_H_MOBILE : LOGO_H_DESKTOP; // taille responsive du logo
 
-  const [woodengBalance, setWoodengBalance] = useState<string>("0");
+    // 👇 Force Helius just for this balance widget (testing the 403/CORS issue)
+  const forced = React.useMemo(() => {
+    const url = process.env.NEXT_PUBLIC_SOLANA_RPC!;
+    const conn = new Connection(url, { commitment: 'confirmed' });
+    if (typeof window !== 'undefined') {
+      console.debug('[Header] forced rpcEndpoint =', url);
+    }
+    return conn;
+  }, []);
+
+  // ⬇️ Use the forced connection here
+  const liveWoodengBalance = useWoodengBalanceLive(forced, wallet.publicKey, WOODENG_MINT_PK);
+ 
+
+
+
+
+
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [addrResult, setAddrResult] = useState<ResolvedKind>({ kind: "unknown" });
@@ -279,24 +417,7 @@ export default function Header() {
   const searchRefMobile = useRef<HTMLInputElement>(null!);
   const isOnSoundMemes = pathname?.startsWith("/sound-memes") ?? false;
 
-  /* WOODENG balance */
-  useEffect(() => {
-    const run = async () => {
-      if (!wallet.publicKey) return setWoodengBalance("0");
-      try {
-        const ata = await getAssociatedTokenAddress(new PublicKey(WOODENG_MINT), wallet.publicKey);
-        const bal = await DEVNET.getTokenAccountBalance(ata);
-        setWoodengBalance(
-          (Number(bal.value.amount) / 10 ** bal.value.decimals).toLocaleString(undefined, {
-            maximumFractionDigits: 2,
-          })
-        );
-      } catch {
-        setWoodengBalance("0");
-      }
-    };
-    run();
-  }, [wallet.publicKey]);
+ 
 
   /* lock body scroll + autofocus search when drawer opens */
   useEffect(() => {
@@ -346,17 +467,22 @@ export default function Header() {
         const pk = new PublicKey(q);
         const withTimeout = <T,>(p: Promise<T>, ms = 1200) =>
           Promise.race([p, new Promise<T>((_, r) => setTimeout(() => r(new Error("timeout")), ms))]);
-        const info = await withTimeout(DEVNET.getAccountInfo(pk));
+        const info = await withTimeout(connection.getAccountInfo(pk));
+
 
         if (info?.owner?.equals(AMM_PROGRAM_ID)) {
           const res: ResolvedKind = { kind: "musicPool", addr: pk };
           cacheRef.current.set(q, res);
           setAddrResult(res);
-        } else if (info?.owner?.equals(TOKEN_PROGRAM_ID)) {
-          const res: ResolvedKind = { kind: "soundMemeMint", addr: pk };
-          cacheRef.current.set(q, res);
-          setAddrResult(res);
-        } else {
+        } else if (
+  info?.owner?.equals(TOKEN_PROGRAM_ID) ||
+  info?.owner?.toBase58() === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" // TOKEN_2022_PROGRAM_ID
+) {
+  const res: ResolvedKind = { kind: "soundMemeMint", addr: pk };
+  cacheRef.current.set(q, res);
+  setAddrResult(res);
+}
+ else {
           const res: ResolvedKind = { kind: "unknown" };
           cacheRef.current.set(q, res);
           setAddrResult(res);
@@ -577,34 +703,18 @@ export default function Header() {
             />
           </div>
 
+          
           {/* Desktop nav */}
-          <nav className="hide-on-mobile" style={navStyle}>
-            {[
-              { href: "/", label: "Home", icon: <Home size={17} /> },
-              { href: "/marketplace", label: "Market Place", icon: <Music size={17} /> },
-              { href: "/sound-memes", label: "Sound Memes", icon: <AnimatedSoundWaveIcon /> },
-              { href: "/staking", label: "Staking", icon: <ShieldCheck size={17} /> },
-            ].map((item) => (
-              <Link href={item.href} key={item.href} legacyBehavior>
-                <a
-                  style={{
-                    color: "#e6e6ff",
-                    fontWeight: 600,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 7,
-                    textDecoration: "none",
-                    fontSize: 15,
-                    padding: "0 2px",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {item.icon}
-                  <span style={{ whiteSpace: "nowrap", marginLeft: 3 }}>{item.label}</span>
-                </a>
-              </Link>
-            ))}
-          </nav>
+<nav className="hide-on-mobile" style={navStyle}>
+  <NavItem href="/" label="Home" icon={<Home size={17} />} />
+  {/* Disabled "Market Place" */}
+  <NavItem label="Market Place" icon={<Music size={17} />} disabled />
+  <NavItem href="/sound-memes" label="Sound Memes" icon={<AnimatedSoundWaveIcon />} />
+  <NavItem href="/staking" label="Staking" icon={<ShieldCheck size={17} />} />
+  {/* New disabled "Airdrop" */}
+  <NavItem label="Airdrop" icon={<Gift size={17} />} disabled />
+</nav>
+
         </div>
 
         {/* Right: desktop-only */}
@@ -631,27 +741,32 @@ export default function Header() {
             }}
           >
             <Waves size={18} style={{ color: "#a088fa" }} />
-            {woodengBalance} WOODENG
+            {liveWoodengBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} WOODENG
+
           </div>
 
-          <Link href="/profile" legacyBehavior>
-            <a
-              title="Your profile"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 36,
-                height: 36,
-                borderRadius: "50%",
-                background: "#181929",
-                color: "#e6e6ff",
-                border: "1px solid #232332",
-              }}
-            >
-              <UserIcon size={18} />
-            </a>
-          </Link>
+          <button
+  type="button"
+  title="Profile (coming soon)"
+  aria-disabled="true"
+  onClick={(e) => e.preventDefault()}
+  style={{
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 36,
+    height: 36,
+    borderRadius: "50%",
+    background: "#181929",
+    color: "#e6e6ff",
+    border: "1px solid #232332",
+    cursor: "not-allowed",
+    opacity: 0.6,
+  }}
+>
+  <UserIcon size={18} />
+</button>
+
 
           <WalletMultiButton
             style={{
@@ -752,26 +867,29 @@ export default function Header() {
 
             {/* actions row */}
             <div style={{ display: "flex", gap: 10, margin: "8px 0 6px" }}>
-              <Link href="/profile" legacyBehavior>
-                <a
-                  onClick={() => setMobileOpen(false)}
-                  aria-label="Your profile"
-                  style={{
-                    height: 44,
-                    width: 44,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderRadius: 12,
-                    background: "#181929",
-                    color: "#e6e6ff",
-                    border: "1px solid #232332",
-                    flex: "0 0 44px",
-                  }}
-                >
-                  <UserIcon size={18} />
-                </a>
-              </Link>
+              <button
+  type="button"
+  aria-label="Profile (coming soon)"
+  aria-disabled="true"
+  onClick={(e) => e.preventDefault()}
+  style={{
+    height: 44,
+    width: 44,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    background: "#181929",
+    color: "#e6e6ff",
+    border: "1px solid #232332",
+    flex: "0 0 44px",
+    cursor: "not-allowed",
+    opacity: 0.6,
+  }}
+>
+  <UserIcon size={18} />
+</button>
+
 
               <WalletMultiButton
                 style={{
@@ -800,38 +918,33 @@ export default function Header() {
             />
 
             {/* main nav */}
-            <div style={{ marginTop: 2 }}>
-              <div style={{ color: "#8d92a8", fontSize: 12, margin: "8px 2px" }}>Navigate</div>
-              {[
-                { href: "/", label: "Home", icon: <Home size={17} /> },
-                { href: "/marketplace", label: "Market Place", icon: <Music size={17} /> },
-                { href: "/sound-memes", label: "Sound Memes", icon: <AnimatedSoundWaveIcon /> },
-                { href: "/staking", label: "Staking", icon: <ShieldCheck size={17} /> },
-              ].map((item) => (
-                <Link href={item.href} key={item.href} legacyBehavior>
-                  <a
-                    onClick={() => setMobileOpen(false)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "10px 12px",
-                      color: "#e6e6ff",
-                      textDecoration: "none",
-                      fontSize: 15,
-                      border: "1px solid #1b1c26",
-                      background: "#10121c",
-                      borderRadius: 12,
-                      marginBottom: 8,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {item.icon}
-                    <span style={{ marginLeft: 3 }}>{item.label}</span>
-                  </a>
-                </Link>
-              ))}
-            </div>
+            {/* main nav */}
+<div style={{ marginTop: 2 }}>
+  <div style={{ color: "#8d92a8", fontSize: 12, margin: "8px 2px" }}>Navigate</div>
+
+  <MobileNavItem href="/" label="Home" icon={<Home size={17} />} onClick={() => setMobileOpen(false)} />
+
+  {/* Disabled "Market Place" */}
+  <MobileNavItem label="Market Place" icon={<Music size={17} />} disabled />
+
+  <MobileNavItem
+    href="/sound-memes"
+    label="Sound Memes"
+    icon={<AnimatedSoundWaveIcon />}
+    onClick={() => setMobileOpen(false)}
+  />
+
+  <MobileNavItem
+    href="/staking"
+    label="Staking"
+    icon={<ShieldCheck size={17} />}
+    onClick={() => setMobileOpen(false)}
+  />
+
+  {/* New disabled "Airdrop" */}
+  <MobileNavItem label="Airdrop" icon={<Gift size={17} />} disabled />
+</div>
+
 
             {/* user actions */}
             <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
@@ -869,7 +982,8 @@ export default function Header() {
                 }}
               >
                 <Waves size={18} style={{ color: "#a088fa" }} />
-                {woodengBalance} WOODENG
+                {liveWoodengBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} WOODENG
+
               </div>
             </div>
           </aside>

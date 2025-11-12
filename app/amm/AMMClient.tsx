@@ -81,10 +81,20 @@ export default function AMMClient() {
 
 
 const PROGRAM_ID = new PublicKey('FU6vmNrLCqS5ewMhyW17ydwwY81RX6Tfn8bmbVDya1bS');
-const WOODENG_MINT = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad');
+const WOODENG_MINT = new PublicKey('83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5');
 const WSOL_MINT = NATIVE_MINT; // So11111111111111111111111111111111111111112
 const fmt = (x: number) => Number.isFinite(x) ? x.toFixed(2) : '—';
 const [poolCanPay, setPoolCanPay] = useState(true);
+
+
+// add below PROGRAM_ID/WOODENG_MINT/WSOL_MINT
+const STAKING_PROGRAM_ID = new PublicKey('BFJU3f7PXgzcrYPD2MkQsjRko9wDTpEbyJTtLUzSyhFG');
+
+// staking program seeds (must match the staking program)
+const CONFIG_SEED = 'config';
+const REWARD_V_SEED = 'reward_vault';
+const REWARD_V_WSOL_SEED = 'reward_vault_wsol';
+
 
 
 const newOrderId = () => BigInt(Date.now() * 1_000 + Math.floor(Math.random() * 1_000));
@@ -290,7 +300,7 @@ async function rpcWithLogs<T>(p: Promise<T>, conn: Connection) {
   }
 
   if (ixs.length) {
-    const tx = new anchor.web3.Transaction().add(...ixs);
+    const tx = new Transaction().add(...ixs);
     tx.feePayer = owner;
     tx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash;
     const signed = await wallet.signTransaction!(tx);
@@ -343,6 +353,34 @@ async function rpcWithLogs<T>(p: Promise<T>, conn: Connection) {
   return ata;
 }
 
+
+
+async function getStakingFeeVaults(
+  conn: Connection,
+  _wallet: ReturnType<typeof useWallet>,
+  _payer: PublicKey
+) {
+  const [configPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from(CONFIG_SEED), WOODENG_MINT.toBuffer()],
+    STAKING_PROGRAM_ID
+  );
+
+  const [stakingRewardsVault] = PublicKey.findProgramAddressSync(
+    [Buffer.from(REWARD_V_SEED), WOODENG_MINT.toBuffer()],
+    STAKING_PROGRAM_ID
+  );
+
+  const [stakingRewardsVaultWsol] = PublicKey.findProgramAddressSync(
+    [Buffer.from(REWARD_V_WSOL_SEED), configPda.toBuffer(), WSOL_MINT.toBuffer()],
+    STAKING_PROGRAM_ID
+  );
+
+  console.log("STAKING CONFIG PDA  :", configPda.toBase58());
+  console.log("REWARDS (WOODENG)   :", stakingRewardsVault.toBase58());
+  console.log("REWARDS (WSOL)      :", stakingRewardsVaultWsol.toBase58());
+
+  return { configPda, stakingRewardsVault, stakingRewardsVaultWsol };
+}
 
 
 
@@ -563,11 +601,14 @@ useEffect(() => {
 
 
   useEffect(() => {
-    if (!publicKey || !signTransaction || !signAllTransactions) return;
-    const conn = new Connection(clusterApiUrl('devnet'));
-    const provider = new AnchorProvider(conn, wallet as any, {});
-    setProgram(new Program(idl as Idl, PROGRAM_ID, provider));
-  }, [publicKey, signTransaction, signAllTransactions]);
+  if (!publicKey || !signTransaction || !signAllTransactions) return;
+  const endpoint =
+    process.env.NEXT_PUBLIC_SOLANA_RPC ?? process.env.NEXT_PUBLIC_SOLANA_RPC as string;
+  const conn = new Connection(endpoint, 'confirmed');
+  const provider = new AnchorProvider(conn, wallet as any, { preflightCommitment: 'confirmed' });
+  setProgram(new Program(idl as Idl, PROGRAM_ID, provider));
+}, [publicKey, signTransaction, signAllTransactions]);
+
 
   useEffect(() => {
   if (!program || !initialAddr) return;
@@ -595,11 +636,11 @@ const handleSearchPool = async (addr?: string) => {
       const conn = program.provider.connection;
 let info = await conn.getAccountInfo(pk, 'confirmed');
 if (!info) {
-  // ⏳ give devnet time to finalize after minting
+  // ⏳ give mainnet time to finalize after minting
   info = await waitForAccount(conn, pk, 20000, 700);
 }
 if (!info) {
-  alert('Account not found on devnet (after waiting)');
+  alert('Account not found on mainnet (after waiting)');
   setIsLoading(false);
   return;
 }
@@ -892,6 +933,11 @@ useEffect(() => { fetchOrders().catch(() => {}); }, [program, poolType, activeMi
     if (!program || !poolPk || !poolSigner || !tokenVault || !publicKey || !quoteMint) return;
     const conn = program.provider.connection;
 
+    // fetch staking fee vault ATAs once for both branches
+const { configPda, stakingRewardsVault, stakingRewardsVaultWsol } =
+  await getStakingFeeVaults(conn, wallet, publicKey);
+
+
 // --- OWNERSHIP GUARD: block sells if user doesn't own the selected song ---
 if (poolType === 'single') {
   if ((userBalances[0] ?? 0) < 1) {
@@ -952,7 +998,11 @@ if (outflow <= 0 || vaultBal < outflow) {
     if (poolType === 'single') {
       const sellerAta = await ensureAta(conn, publicKey, poolState!.nftMints[0]);
 
+      
+
+
       const sig = await rpcWithLogs(
+        
   program.methods.sellNft(new BN(0)).accounts({
     pool: poolPk,
     poolSigner,
@@ -963,6 +1013,14 @@ if (outflow <= 0 || vaultBal < outflow) {
     creatorTokenAta,
     user: publicKey,
     tokenProgram: TOKEN_PROGRAM_ID,
+
+    // NEW required placeholders for staking integration:
+  stakingProgram: STAKING_PROGRAM_ID,
+stakingConfig: configPda,                 // <-- real config PDA now
+stakingRewardsVaultWsol,
+stakingRewardsVault,
+
+
   }).rpc(),
   conn
 );
@@ -987,6 +1045,13 @@ if (outflow <= 0 || vaultBal < outflow) {
     creatorTokenAta,
     user: publicKey,
     tokenProgram: TOKEN_PROGRAM_ID,
+
+     // NEW required placeholders for staking integration:
+ stakingProgram: STAKING_PROGRAM_ID,
+stakingConfig: configPda,
+  stakingRewardsVaultWsol,
+  stakingRewardsVault,
+
   }).rpc(),
   conn
 );
@@ -1044,6 +1109,11 @@ if (outflow <= 0 || vaultBal < outflow) {
 
     const conn = program.provider.connection;
 
+    // fetch staking fee vault ATAs once for both branches
+const { configPda, stakingRewardsVault, stakingRewardsVaultWsol } =
+  await getStakingFeeVaults(conn, wallet, publicKey);
+
+
     if (poolType === 'single') {
   if (!poolState) throw new Error('Pool not loaded');
 
@@ -1052,9 +1122,11 @@ if (outflow <= 0 || vaultBal < outflow) {
   const y0 = poolState.tokenReserve.toNumber() + poolState.vy.toNumber();
 
       const k = BigInt(x0) * BigInt(y0);
-      const y1 = k / BigInt(x0 - 1);
-      const lam = Number(y1 - BigInt(y0));               // base units of quote token
-      const maxIn = Math.ceil(lam * 1.03);               // 3% buffer
+const y1 = k / BigInt(x0 - 1);
+const lam = Number(y1 - BigInt(y0));               // net_in (base units)
+const feePct = (poolState.royaltyBps ?? 0) / 10_000;
+const maxIn = Math.ceil(lam * (1 + feePct) * 1.03); // include fee + small buffer
+
 
       const buyerNftAta = await ensureAta(conn, publicKey, poolState.nftMints[0]);
       const buyerTokenAta = await ensureQuoteAtaAndMaybeWrap(
@@ -1074,18 +1146,30 @@ const creatorTokenAta = await ensureAtaFor(
 );
 
 
-      const sig = await program.methods.buyNft(new BN(maxIn)).accounts({
-          pool: poolPk,
-          poolSigner,
-          nftVault: nftVaults[0],
-          tokenVault,
-          userTokenAta: buyerTokenAta,
-          userNftAta: buyerNftAta,
-          creatorTokenAta, 
-          user: publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
+
+
+
+      const sig = await rpcWithLogs(
+  program.methods.buyNft(new BN(maxIn)).accounts({
+    pool: poolPk,
+    poolSigner,
+    nftVault: nftVaults[0],
+    tokenVault,
+    userTokenAta: buyerTokenAta,
+    userNftAta: buyerNftAta,
+    creatorTokenAta, 
+    user: publicKey,
+    tokenProgram: TOKEN_PROGRAM_ID,
+
+    // NEW required placeholders for staking integration:
+    stakingProgram: STAKING_PROGRAM_ID,
+stakingConfig: configPda,
+    stakingRewardsVaultWsol,
+    stakingRewardsVault,
+  }).rpc(),
+  conn
+);
+
 
       // Optional: auto-close wrapped SOL ATA to reclaim rent (if empty)
       if (quoteMint.equals(WSOL_MINT)) {
@@ -1108,14 +1192,16 @@ const creatorTokenAta = await ensureAtaFor(
     } else if (bundleState) {
       // AMM math for bundle
       const vx = bundleState.vx.toNumber();
-      const vy = bundleState.vy.toNumber();
-      let sumX = vx;
-      bundleState.nftReserves.forEach((r: BN) => (sumX += r.toNumber()));
-      const sumY = bundleState.tokenReserve.toNumber() + vy;
-      const k = BigInt(sumX) * BigInt(sumY);
-      const newY = k / BigInt(sumX - 1);
-      const lam = Number(newY - BigInt(sumY));
-      const maxIn = Math.ceil(lam * 1.03);
+const vy = bundleState.vy.toNumber();
+let sumX = vx;
+bundleState.nftReserves.forEach((r: BN) => (sumX += r.toNumber()));
+const sumY = bundleState.tokenReserve.toNumber() + vy;
+const k = BigInt(sumX) * BigInt(sumY);
+const newY = k / BigInt(sumX - 1);
+const lam = Number(newY - BigInt(sumY));                 // net_in (base units)
+const feePct = (bundleState.royaltyBps ?? 0) / 10_000;
+const maxIn = Math.ceil(lam * (1 + feePct) * 1.03);      // include fee + buffer
+
 
       const idx = selectedMintIndex;
       const mint = bundleState.mints[idx] as PublicKey;
@@ -1138,19 +1224,28 @@ const creatorTokenAta = await ensureAtaFor(
   quoteMint!
 );
 
-      const sig = await program.methods.buyBundleNft(new BN(maxIn)).accounts({
-          bundle: poolPk,
-          bundleSigner: poolSigner,
-          tokenVault,
-          vault: vaultPda,
-          mint,
-          userNftAta: buyerNftAta,
-          userTokenAta: buyerTokenAta,
-          creatorTokenAta,
-          user: publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
+      const sig = await rpcWithLogs(
+  program.methods.buyBundleNft(new BN(maxIn)).accounts({
+    bundle: poolPk,
+    bundleSigner: poolSigner,
+    tokenVault,
+    vault: vaultPda,
+    mint,
+    userNftAta: buyerNftAta,
+    userTokenAta: buyerTokenAta,
+    creatorTokenAta,
+    user: publicKey,
+    tokenProgram: TOKEN_PROGRAM_ID,
+
+    // NEW required placeholders for staking integration:
+    stakingProgram: STAKING_PROGRAM_ID,
+stakingConfig: configPda,
+    stakingRewardsVaultWsol,
+    stakingRewardsVault,
+  }).rpc(),
+  conn
+);
+
 
       if (quoteMint.equals(WSOL_MINT)) {
         try {
@@ -1297,19 +1392,33 @@ const creatorTokenAta = await ensureAtaFor(
     quoteMint
   );
 
-  const sig = await program.methods.fillOrder().accounts({
-      order: o.publicKey,
-      escrow: o.account.escrow,
-      escrowAuthority: escAuth,
-      buyer: publicKey,
-      buyerTokenAta,
-      buyerNftAta,
-      seller: o.account.seller,
-      sellerTokenAta,
-      creatorTokenAta,
-      tokenProgram: TOKEN_PROGRAM_ID,
-    })
-    .rpc();
+  // --- add staking fee vault accounts (NEW) ---
+const { configPda, stakingRewardsVault, stakingRewardsVaultWsol } =
+  await getStakingFeeVaults(program.provider.connection, wallet, publicKey);
+
+
+  const sig = await rpcWithLogs(
+  program.methods.fillOrder().accounts({
+    order: o.publicKey,
+    escrow: o.account.escrow,
+    escrowAuthority: escAuth,
+    buyer: publicKey,
+    buyerTokenAta,
+    buyerNftAta,
+    seller: o.account.seller,
+    sellerTokenAta,
+    creatorTokenAta,
+    tokenProgram: TOKEN_PROGRAM_ID,
+
+    // NEW required placeholders for staking integration:
+    stakingProgram: STAKING_PROGRAM_ID,
+stakingConfig: configPda,
+    stakingRewardsVaultWsol,
+    stakingRewardsVault,
+  }).rpc(),
+  program.provider.connection
+);
+
 
   if (quoteMint.equals(WSOL_MINT)) {
     try {
@@ -1353,23 +1462,28 @@ const creatorTokenAta = await ensureAtaFor(
       let ammCost = Infinity;
 
 if (poolType === 'single' && poolState) {
-  const x0 = (pooledNfts) + poolState.vx.toNumber();
+  const x0 = pooledNfts + poolState.vx.toNumber();
   const y0 = pooledWood + poolState.vy.toNumber();
   if (x0 > 1) {
-    const k  = BigInt(x0) * BigInt(y0);
-    const y1 = k / BigInt(x0 - 1);
-    ammCost  = Number(y1 - BigInt(y0)) / (10 ** quoteDecimals);
+    const k   = BigInt(x0) * BigInt(y0);
+    const y1  = k / BigInt(x0 - 1);
+    const lam = Number(y1 - BigInt(y0)); // net_in (base units)
+    const feePct = (poolState.royaltyBps ?? 0) / 10_000;
+    ammCost = (lam * (1 + feePct)) / (10 ** quoteDecimals);
   }
 } else if (poolType === 'bundle' && bundleState) {
   let sumX = bundleState.vx.toNumber();
   bundleState.nftReserves.forEach(r => (sumX += r.toNumber()));
   const sumY = bundleState.tokenReserve.toNumber() + bundleState.vy.toNumber();
   if (sumX > 1) {
-    const k    = BigInt(sumX) * BigInt(sumY);
-    const newY = k / BigInt(sumX - 1);
-    ammCost    = Number(newY - BigInt(sumY)) / (10 ** quoteDecimals);
+    const k     = BigInt(sumX) * BigInt(sumY);
+    const newY  = k / BigInt(sumX - 1);
+    const lam   = Number(newY - BigInt(sumY)); // net_in (base units)
+    const feePct = (bundleState.royaltyBps ?? 0) / 10_000;
+    ammCost = (lam * (1 + feePct)) / (10 ** quoteDecimals);
   }
 }
+
 
 
 

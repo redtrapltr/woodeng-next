@@ -17,72 +17,90 @@ import { Footer } from '@/contexts/components/Footer';
 export default function GuidelinesPage() {
   const guidelines = [
     {
-      category: 'Audio Requirements',
+      category: "Music NFT - Audio Requirements",
       icon: Music2,
       items: [
-        'Minimum quality: 320kbps MP3 or lossless format (WAV, FLAC)',
-        'Maximum file size: 100MB (Musical NFT) & 25MB (Sound Meme)',
-        'Supported formats: Musical NFT : MP3, WAV, MP4, FLAC, AIFF / Sound Meme : MP3 & M4A (AAC)',
-        'No copyrighted samples without proper clearance',
-        'Clean, properly mastered audio',
-      ],
+        "Minimum quality: 320kbps MP3 or lossless format",
+        "Supported formats: MP3, MP4, WAV, FLAC, AIFF",
+        "Maximum file size: 100MB",
+        "No copyrighted samples without proper clearance",
+        "Clean, properly mastered audio"
+      ]
     },
     {
-      category: 'Artwork Requirements',
+      category: "Sound Meme - Audio Requirements",
+      icon: Music2,
+      items: [
+        "Maximum duration: 3 minutes",
+        "Supported formats: MP3, M4A (AAC), OGG",
+        "Maximum file size: 25MB",
+        "Creative and original content",
+        "Clean audio quality"
+      ]
+    },
+    {
+      category: "Music NFT - Artwork Requirements",
       icon: Image,
       items: [
-        'Minimum resolution: 3000x3000 pixels',
-        'Maximum file size: 50MB',
-        'Supported formats: JPG, PNG',
-        'Original artwork only',
-        'No explicit or offensive content',
-      ],
+        "Minimum resolution: 3000x3000 pixels",
+        "Supported formats: JPG, PNG",
+        "Maximum file size: 50MB",
+        "Original artwork only",
+        "No explicit or offensive content"
+      ]
     },
     {
-      category: 'Metadata Standards',
+      category: "Sound Meme - Artwork Requirements",
+      icon: Image,
+      items: [
+        "Image is optional but recommended",
+        "Supported formats: PNG, JPG",
+        "Maximum file size: 50MB",
+        "Original artwork only",
+        "No explicit or offensive content"
+      ]
+    },
+    {
+      category: "Metadata Standards",
       icon: FileText,
       items: [
-        'Clear, accurate title and description',
-        'Proper artist name and credits',
-        'Relevant tags and categories',
-        'Complete licensing information',
-        'Accurate release date',
-      ],
+        "Clear, accurate title and description",
+        "Proper artist name and credits",
+        "Relevant tags and categories",
+        "Complete licensing information",
+        "Accurate release date"
+      ]
     },
     {
-      category: 'Release Timeline',
+      category: "Release Timeline",
       icon: Clock,
       items: [
-        'Minimum 48-hour review period',
-        'Maximum 30-day pre-release window',
-        'Regular communication about delays',
-        'Coordinated marketing timeline',
-        'Clear launch schedule',
-      ],
-    },
+        "Minimum 48-hour review period",
+        "Maximum 30-day pre-release window",
+        "Regular communication about delays",
+        "Coordinated marketing timeline",
+        "Clear launch schedule"
+      ]
+    }
   ];
 
   const bestPractices = [
     {
-      title: 'Quality First',
-      description:
-        'Ensure your music and artwork meet professional standards before submission',
+      title: "Quality First",
+      description: "Ensure your music and artwork meet professional standards before submission"
     },
     {
-      title: 'Clear Communication',
-      description:
-        'Provide detailed information about your release and respond promptly to queries',
+      title: "Clear Communication",
+      description: "Provide detailed information about your release and respond promptly to queries"
     },
     {
-      title: 'Marketing Plan',
-      description:
-        'Develop a promotion strategy before launch to maximize visibility',
+      title: "Marketing Plan",
+      description: "Develop a promotion strategy before launch to maximize visibility"
     },
     {
-      title: 'Community Engagement',
-      description:
-        'Actively engage with your audience before, during, and after release',
-    },
+      title: "Community Engagement",
+      description: "Actively engage with your audience before, during, and after release"
+    }
   ];
 
   return (

@@ -1,4 +1,5 @@
 // app/api/memes/home-panels/route.ts
+
 import { NextResponse } from "next/server";
 import type { Idl } from "@project-serum/anchor";
 import { AnchorProvider, Program } from "@project-serum/anchor";
@@ -6,39 +7,61 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { Metadata } from "@metaplex-foundation/mpl-token-metadata";
 import poolIdlJson from "@/idl/my_sound_meme_pool.json";
 import { pool as pg } from "@/lib/pg";
+import * as Hidden from "@/lib/hidden"
+import bs58 from "bs58";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+/* ---------- IPFS helper (KEEP THIS ONE) ---------- */
+const IPFS_GATEWAY =
+  process.env.NEXT_PUBLIC_IPFS_GATEWAY?.replace(/\/$/, "") || "https://ipfs.io";
+
+const toHttp = (url?: string, absolute = false) => {
+  if (!url) return undefined;
+  if (url.startsWith("ipfs://")) {
+    const rest = url.slice(7).replace(/^ipfs\//, "");
+    return absolute ? `${IPFS_GATEWAY}/ipfs/${rest}` : `/ipfs/${rest}`;
+  }
+  return url;
+};
+
+
+
 /* ---------- env / cluster ---------- */
 const RPC_URL =
   process.env.RPC_URL ||
-  process.env.NEXT_PUBLIC_RPC_URL ||
+  process.env.SOLANA_RPC ||
+  process.env.NEXT_PUBLIC_SOLANA_RPC ||
   process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
-  "https://api.devnet.solana.com";
+  "";
+
+if (!RPC_URL) {
+  throw new Error(
+    "Missing RPC_URL / SOLANA_RPC / NEXT_PUBLIC_SOLANA_RPC / NEXT_PUBLIC_HELIUS_RPC_URL"
+  );
+}
 
 const SOLANA_CLUSTER =
-  process.env.SOLANA_CLUSTER || (RPC_URL.includes("devnet") ? "devnet" : "mainnet-beta");
+  process.env.SOLANA_CLUSTER ||
+  (RPC_URL.toLowerCase().includes("devnet") ? "devnet" :
+   RPC_URL.toLowerCase().includes("testnet") ? "testnet" : "mainnet-beta");
+
+
 
 /* ---------- chain constants ---------- */
 const POOL_PROGRAM_ID = new PublicKey("8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV");
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 const QUOTE_DECIMALS = 9; // WOODENG / SOL
-const CONFIG_VERSION = 8;
+const CONFIG_VERSION = 17;
 
 /* ---------- helpers ---------- */
 const clean = (s?: string) =>
   (s ?? "").replace(/\0/g, "").replace(/[\x00-\x1F\x7F]/g, "").trim();
 
-const toHttp = (url?: string) => {
-  if (!url) return undefined;
-  if (url.startsWith("ipfs://")) {
-    const rest = url.slice(7).replace(/^ipfs\//, "");
-    return `/ipfs/${rest}`;
-  }
-  return url;
-};
+
 
 function readU64LE(buf: Buffer, off: number) {
   return Number(buf.readBigUInt64LE(off));
@@ -82,19 +105,60 @@ async function fetchPools(): Promise<PoolLite[]> {
   const provider = new AnchorProvider(connection, dummy, { commitment: "confirmed" });
   const program = new Program(poolIdlJson as Idl, POOL_PROGRAM_ID, provider);
 
-  // 1) configs
+// 1) configs — try Anchor accessor, fall back to raw scan+decode using discriminator
+let cfgAll: Array<{ publicKey: PublicKey; account: any }>;
+try {
+  cfgAll = await (program.account as any).soundMemeConfig.all();
+} catch (_) {
+  // robust fallback: filter by Anchor discriminator for "SoundMemeConfig"
+  const disc = await (program.coder.accounts as any).accountDiscriminator?.("SoundMemeConfig");
+  if (!disc) throw new Error("Could not compute account discriminator for SoundMemeConfig");
+
   const raw = await connection.getProgramAccounts(POOL_PROGRAM_ID, {
-    filters: [{ dataSize: 8 + 350 }],
+    filters: [
+      {
+        memcmp: {
+          offset: 0,
+          bytes: bs58.encode(Buffer.from(disc)),
+        },
+      },
+    ],
   });
 
-  const cfgs = raw
-    .map(({ pubkey, account }) => ({
-      pubkey,
-      data: program.coder.accounts.decode("SoundMemeConfig", account.data) as any,
-    }))
-    .filter((x) => Number(x.data?.version) === CONFIG_VERSION);
+  const decoded: Array<{ publicKey: PublicKey; account: any }> = [];
+  for (const { pubkey, account } of raw) {
+    try {
+      const acc = program.coder.accounts.decode("SoundMemeConfig", account.data) as any;
+      decoded.push({ publicKey: pubkey, account: acc });
+    } catch {
+      // skip quietly
+    }
+  }
+  cfgAll = decoded;
+}
 
-  if (!cfgs.length) return [];
+// keep only the right version & not blacklisted
+const cfgs = (cfgAll || [])
+  .filter((x) => {
+    const isRightVersion = Number(x.account?.version) === CONFIG_VERSION;
+    // x.account.memeMint may already be a PublicKey; the constructor accepts both
+ const mintB58 = new PublicKey(x.account?.memeMint).toBase58();
+ const HIDDEN: Set<string> =
+   (Hidden as any)?.HIDDEN_SOUND_MEMES instanceof Set
+     ? (Hidden as any).HIDDEN_SOUND_MEMES
+     : new Set<string>();
+ return isRightVersion && !HIDDEN.has(mintB58);
+  })
+  .map((x) => ({
+    pubkey: x.publicKey,
+    data: x.account,
+  }));
+
+if (!cfgs.length) return [];
+
+
+
+
 
   const memeMints = cfgs.map((c) => new PublicKey(c.data.memeMint));
 
@@ -182,19 +246,20 @@ async function fetchPools(): Promise<PoolLite[]> {
   });
 
   // Metadata JSONs (ipfs/http)
-  const jsons = await Promise.all(
-    chain.map(async (c) => {
-      const url = toHttp(c.metaUri);
-      if (!url) return null;
-      try {
-        const r = await fetch(url, { cache: "no-store" });
-        if (!r.ok) return null;
-        return await r.json();
-      } catch {
-        return null;
-      }
-    })
-  );
+const jsons = await Promise.all(
+  chain.map(async (c) => {
+    const url = toHttp(c.metaUri, /*absolute*/ true); // <-- CHANGED
+    if (!url) return null;
+    try {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  })
+);
+
 
   const out: PoolLite[] = cfgs.map((cfg, i) => {
     const raw = cfg.data.poolType as number | { bonding?: {}; amm?: {} };
@@ -223,7 +288,7 @@ async function fetchPools(): Promise<PoolLite[]> {
       mint: new PublicKey(cfg.data.memeMint).toBase58(),
       name: m.metaName || j.name || "",
       symbol: m.metaSymbol || j.symbol || "",
-      image: toHttp(j.image || ""),
+      image: toHttp(j.image || "", /*absolute*/ true), // <-- CHANGED
       price_chain: priceChain,
       mcap_chain: Number.isFinite(mcap) ? mcap : 0,
       supply_ui: m.supplyUi ?? 0,
@@ -241,6 +306,10 @@ async function getDbSignals(
   baseUi: Record<string, number>;
   firstMs: Record<string, number>;
 }> {
+    // Early exit: avoid SQL when there are no mints
+  if (!mints || mints.length === 0) {
+    return { latestUi: {}, baseUi: {}, firstMs: {} };
+  }
   const latestUi: Record<string, number> = {};
   const baseUi: Record<string, number> = {};
   const firstMs: Record<string, number> = {};
@@ -333,13 +402,37 @@ export async function GET() {
   try {
     // 1) chain snapshot (supply, fallback price, metadata)
     const pools = await fetchPools();
-    const mints = pools.map((p) => p.mint);
+
+// apply blacklist again just in case (safe even if already filtered)
+ const HIDDEN2: Set<string> =
+   (Hidden as any)?.HIDDEN_SOUND_MEMES instanceof Set
+     ? (Hidden as any).HIDDEN_SOUND_MEMES
+     : new Set<string>();
+ const poolsVisible = pools.filter((p) => !HIDDEN2.has(p.mint));
+
+// if nothing left, return empty panels (avoid DB queries with empty ANY($1))
+if (!poolsVisible.length) {
+  const headers = { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" };
+  return NextResponse.json(
+    {
+      trending: [],
+      recentlyAdded: [],
+      topMarketCap: [],
+      cluster: SOLANA_CLUSTER,
+    },
+    { headers }
+  );
+}
+
+const mints = poolsVisible.map((p) => p.mint);
+
 
     // 2) DB overlays (latest price, base-24h or first-ever, first seen)
     const { latestUi, baseUi, firstMs } = await getDbSignals(mints);
 
     // 3) merge & compute
-    const merged = pools.map((p) => {
+    const merged = poolsVisible.map((p) => {
+
       const price = Number.isFinite(latestUi[p.mint]) ? latestUi[p.mint] : p.price_chain;
       const market_cap = price * p.supply_ui;
 
@@ -410,7 +503,12 @@ export async function GET() {
       { headers }
     );
   } catch (e: any) {
+    console.error("[home-panels] error:", e);
     const headers = { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" };
-    return NextResponse.json({ error: e?.message || String(e) }, { status: 500, headers });
+    return NextResponse.json(
+  { error: e?.message || String(e), stack: e?.stack },
+  { status: 500, headers }
+);
+
   }
 }

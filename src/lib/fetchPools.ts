@@ -5,7 +5,7 @@ import { Metaplex } from "@metaplex-foundation/js";
 const POOL_PROGRAM_ID = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV');
 
 export async function fetchSoundMemePoolsSortedByLiquidity() {
-  const connection = new Connection("https://api.devnet.solana.com", "confirmed");
+  const connection = new Connection("process.env.NEXT_PUBLIC_SOLANA_RPC as string", "confirmed");
   const dummyWallet = { publicKey: PublicKey.default } as any;
   const provider = new AnchorProvider(connection, dummyWallet, {});
   const program = new Program(poolIdl as Idl, POOL_PROGRAM_ID, provider);

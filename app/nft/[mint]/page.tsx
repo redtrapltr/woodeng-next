@@ -32,6 +32,15 @@ import idl from '@/idl/idl.json';
 import { PROGRAM_ID, WOODENG_MINT } from '@/lib/constants';
 import { cn } from '@/lib/utils';
 
+
+// --- staking integration (same IDs/seeds as AMM page) ---
+const STAKING_PROGRAM_ID = new PublicKey('BFJU3f7PXgzcrYPD2MkQsjRko9wDTpEbyJTtLUzSyhFG');
+const WSOL_MINT = new PublicKey('So11111111111111111111111111111111111111112'); // wSOL
+const CONFIG_SEED = 'config';
+const REWARD_V_SEED = 'reward_vault';
+const REWARD_V_WSOL_SEED = 'reward_vault_wsol';
+
+
 /* -------------------------------------------------- */
 /* helpers                                            */
 /* -------------------------------------------------- */
@@ -128,6 +137,24 @@ async function fetchOrderData(conn: Connection, mintPk: PublicKey) {
   return null;
 }
 
+async function getStakingFeeVaults() {
+  const [configPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from(CONFIG_SEED), WOODENG_MINT.toBuffer()],
+    STAKING_PROGRAM_ID
+  );
+
+  const [stakingRewardsVault] = PublicKey.findProgramAddressSync(
+    [Buffer.from(REWARD_V_SEED), WOODENG_MINT.toBuffer()],
+    STAKING_PROGRAM_ID
+  );
+
+  const [stakingRewardsVaultWsol] = PublicKey.findProgramAddressSync(
+    [Buffer.from(REWARD_V_WSOL_SEED), configPda.toBuffer(), WSOL_MINT.toBuffer()],
+    STAKING_PROGRAM_ID
+  );
+
+  return { configPda, stakingRewardsVault, stakingRewardsVaultWsol };
+}
 
 
 /* -------------------------------------------------- */
@@ -170,7 +197,7 @@ export default function NFTDetailPage() {
     (async () => {
       try {
         setLoading(true);
-        const conn   = new Connection(clusterApiUrl('devnet'));
+        const conn   = new Connection(clusterApiUrl('mainnet-beta'));
         const nftRes = await fetchNftData(conn, mint);
         setNft(nftRes);
 
@@ -195,7 +222,7 @@ export default function NFTDetailPage() {
 
   try {
     setLoading(true);
-    const conn     = new Connection(clusterApiUrl('devnet'));
+    const conn     = new Connection(clusterApiUrl('mainnet-beta'));
     const provider = new AnchorProvider(conn, wallet as any, {});
     const program  = new Program(idl as any, PROGRAM_ID, provider);
 
@@ -230,7 +257,7 @@ export default function NFTDetailPage() {
   try {
     setLoading(true);
 
-    const conn     = new Connection(clusterApiUrl('devnet'));
+    const conn     = new Connection(clusterApiUrl('mainnet-beta'));
     const provider = new AnchorProvider(conn, wallet as any, {});
     const program  = new Program(idl as any, PROGRAM_ID, provider);
 
@@ -265,23 +292,32 @@ export default function NFTDetailPage() {
       PROGRAM_ID
     )[0];
 
-    // 4) fill
-    await program.methods
-      .fillOrder()
-      .accounts({
-        order:           order.orderPda,
-        escrowAuthority: escrowAuthPda,
-        escrow:          order.escrow,
-        buyer:           payer,             // <-- use payer
-        buyerTokenAta:   buyerWdgAta,
-        sellerTokenAta:  sellerWdgAta,
-        creatorTokenAta: creatorWdgAta,     // <-- royalties ATA
-        buyerNftAta:     buyerNftAta,
-        seller:          order.seller,
-        creator:         order.creator,     // <-- often required with creatorTokenAta
-        tokenProgram:    TOKEN_PROGRAM_ID,
-      })
-      .rpc();
+    // 4) fill (with staking accounts)
+const { configPda, stakingRewardsVault, stakingRewardsVaultWsol } = await getStakingFeeVaults();
+
+await program.methods
+  .fillOrder()
+  .accounts({
+    order:           order.orderPda,
+    escrowAuthority: escrowAuthPda,
+    escrow:          order.escrow,
+    buyer:           payer,
+    buyerTokenAta:   buyerWdgAta,
+    sellerTokenAta:  sellerWdgAta,
+    creatorTokenAta: creatorWdgAta,
+    buyerNftAta:     buyerNftAta,
+    seller:          order.seller,
+    creator:         order.creator,
+    tokenProgram:    TOKEN_PROGRAM_ID,
+
+    // NEW (required by program):
+    stakingProgram:          STAKING_PROGRAM_ID,
+    stakingConfig:           configPda,
+    stakingRewardsVaultWsol: stakingRewardsVaultWsol,
+    stakingRewardsVault:     stakingRewardsVault,
+  })
+  .rpc();
+
 
     setOrder(null);
   } catch (e: any) {
@@ -317,7 +353,7 @@ export default function NFTDetailPage() {
     );
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-8">
+    <div className="max-w-6xl mx-auto px-6 space-y-8 pt-28 md:pt-32 pb-8">
       <h1 className="text-3xl font-bold">Music NFT Details</h1>
 
       {/* card */}

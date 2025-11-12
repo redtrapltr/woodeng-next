@@ -8,7 +8,7 @@ import Link from 'next/link';
  *  Types
  * ──────────────────────────────────────────── */
 type Bullet = { subtitle: string; items: string[] };
-type Section = { title: string; content: (string | Bullet)[] };
+type Section = { title: string; content: Bullet[] };
 
 /* ────────────────────────────────────────────
  *  Static data
@@ -19,8 +19,15 @@ const sections: Section[] = [
   {
     title: '1. Acceptance of Terms',
     content: [
-      "By accessing and using the Woo platform ('Platform'), you agree to be bound by these Terms of Service ('Terms'). If you disagree with any part of the terms, you may not access the Platform.",
-      'These Terms constitute a legally binding agreement between you and Woodeng regarding your use of the Platform and any services offered through the Platform, including but not limited to NFT creation, buying, selling, and trading of both music NFTs and sound memes.',
+      {
+        subtitle: 'Agreement to Terms',
+        items: [
+          "By accessing and using the Woo platform ('Platform'), you agree to be bound by these Terms of Service ('Terms')",
+          'If you disagree with any part of the terms, you may not access the Platform',
+          'These Terms constitute a legally binding agreement between you and Woodeng',
+          'Agreement covers use of the Platform and all services offered, including NFT creation, buying, selling, and trading of both music NFTs and sound memes',
+        ],
+      },
     ],
   },
   {
@@ -45,13 +52,14 @@ const sections: Section[] = [
         ],
       },
       {
-        subtitle: 'Sound Meme Creation (SPL404)',
+        subtitle: 'Sound Meme Creation (SWL-444)',
         items: [
-          'Create viral sound meme NFTs with tokenized ownership',
+          'Create sound meme NFTs using the SWL-444 standard that merges fungible and non-fungible token properties',
           'Set token supply and distribution parameters',
           'Choose between liquidity pools or bonding curves for token pricing',
           'Establish initial liquidity pools or set bonding curve parameters',
           'Manage token properties and metadata',
+          'SWL-444 architecture supports any type of metadata-rich digital asset',
         ],
       },
       {
@@ -74,7 +82,7 @@ const sections: Section[] = [
           'Users are solely responsible for all content they upload, create, or share on the Platform',
           'Users must have full rights or permissions for any content they use',
           'Woodeng is not responsible for user-generated content',
-          "Users indemnify Woodeng Ecosystem against any claims related to their content",
+          'Users indemnify Woodeng Ecosystem against any claims related to their content',
         ],
       },
       {
@@ -97,7 +105,12 @@ const sections: Section[] = [
       },
       {
         subtitle: 'Platform Usage',
-        items: ['Use services legally and responsibly', 'Maintain wallet security', 'Report violations and issues', 'Follow community guidelines'],
+        items: [
+          'Use services legally and responsibly',
+          'Maintain wallet security',
+          'Report violations and issues',
+          'Follow community guidelines',
+        ],
       },
     ],
   },
@@ -114,11 +127,7 @@ const sections: Section[] = [
       },
       {
         subtitle: 'Meme Rights',
-        items: [
-          'Sound meme creators must respect source material rights',
-          'Derivative works must comply with copyright law',
-          'Fair use principles apply where relevant',
-        ],
+        items: ['Sound meme creators must respect source material rights', 'Derivative works must comply with copyright law', 'Fair use principles apply where relevant'],
       },
     ],
   },
@@ -133,17 +142,18 @@ const sections: Section[] = [
         subtitle: 'Royalties',
         items: [
           'Automatic royalty distribution for music NFTs without pools',
-          'Secondary sale commissions',
-          'Creator-set royalty rates up to 15%',
-          'Transparent payment tracking',
+          'Primary sales: 80% to Creator, 20% to $WOODENG Holders (100% of platform fee)',
+          'Secondary sales: Creators set royalties up to 15%, with 80% to Creator and 20% to $WOODENG Holders',
+          'Transparent payment tracking through smart contracts',
         ],
       },
       {
         subtitle: 'Liquidity Pools',
         items: [
           'Music NFTs can be created with liquidity pools instead of royalties',
-          'Sound meme SPL404 tokens can include liquidity pools',
-          'Initial liquidity is locked in the smart contract',
+          'Sound meme SWL-444 tokens can include liquidity pools',
+          'All liquidity is permanently locked in Smart Contract Locker with no possibility of withdrawal',
+          'Users may voluntarily add additional liquidity at any time',
           'Creators benefit from price appreciation as tokens are purchased',
         ],
       },
@@ -158,13 +168,14 @@ const sections: Section[] = [
         ],
       },
       {
-        subtitle: 'SPL404 Token Economics',
+        subtitle: 'SWL-444 Token Economics',
         items: [
-          'Sound memes use the SPL404 token standard for fractionalized ownership',
+          'Sound memes use the SWL-444 token standard that merges fungible and non-fungible properties',
           'Tokens represent partial ownership of the sound meme',
-          'Fees applies to all token trades',
-          'Transaction fees are distributed to creators & stakers in the Woodeng ecosystem',
-          'Liquidity cannot be withdrawn after deployment',
+          'For liquidity pool transactions: 0.1% fee (100% to $WOODENG Holders)',
+          'For bonding curve pre-migration: 1% + 4% on early sellers (100% to $WOODENG Holders)',
+          'For bonding curve post-migration: 0.1% fee (100% to $WOODENG Holders)',
+          'Liquidity is permanently locked in Smart Contract Locker and cannot be withdrawn',
         ],
       },
     ],
@@ -199,7 +210,7 @@ const sections: Section[] = [
         items: [
           'Verification status may be revoked for Terms of Service violations',
           'Rejected applications may be resubmitted after 72 hours',
-          "False information in verification applications will result in permanent rejection",
+          'False information in verification applications will result in permanent rejection',
           "Verification decisions are at Woodeng's sole discretion",
         ],
       },
@@ -208,65 +219,113 @@ const sections: Section[] = [
   {
     title: '7. Liability and Warranties',
     content: [
-      "The Platform is provided 'as is' without warranties of any kind",
-      'Woo platform explicitly disclaims all responsibility for user-generated content',
-      'Users are solely responsible for verifying rights to content they upload or use',
-      'Woo platform is not liable for any disputes between users regarding content ownership',
-      'We are not responsible for blockchain network issues',
-      'Users are responsible for wallet security',
-      'No liability for NFT or token value fluctuations',
-      'Platform may experience technical interruptions',
-      'Users agree to indemnify Woodeng against any claims related to their content or platform usage',
-      'Woo platform bears no responsibility for the content of sound memes or music NFTs created by users',
+      {
+        subtitle: 'Platform Disclaimers',
+        items: [
+          "The Platform is provided 'as is' without warranties of any kind",
+          'Woo platform explicitly disclaims all responsibility for user-generated content',
+          'Users are solely responsible for verifying rights to content they upload or use',
+          'Woo platform is not liable for any disputes between users regarding content ownership',
+        ],
+      },
+      {
+        subtitle: 'Technical Limitations',
+        items: [
+          'We are not responsible for blockchain network issues',
+          'Users are responsible for wallet security',
+          'No liability for NFT or token value fluctuations',
+          'Platform may experience technical interruptions',
+        ],
+      },
+      {
+        subtitle: 'User Indemnification',
+        items: [
+          'Users agree to indemnify Woodeng against any claims related to their content or platform usage',
+          'Woo platform bears no responsibility for the content of sound memes or music NFTs created by users',
+        ],
+      },
     ],
   },
   {
     title: '8. Account Security',
-    content: ['Users must secure their wallets', 'Private keys are user responsibility', 'Report unauthorized access immediately', 'Enable additional security features when available'],
+    content: [
+      {
+        subtitle: 'Wallet Security',
+        items: ['Users must secure their wallets', 'Private keys are user responsibility', 'Report unauthorized access immediately', 'Enable additional security features when available'],
+      },
+    ],
   },
   {
     title: '9. Prohibited Activities',
     content: [
-      'No unauthorized content reproduction',
-      'No market manipulation',
-      'No fraudulent activities',
-      'No harmful technical interference',
-      "No violation of others' rights",
-      'No creation of offensive or harmful memes',
-      'No misuse of copyrighted material',
-      'No attempts to withdraw locked liquidity from pools',
+      {
+        subtitle: 'Content Violations',
+        items: ['No unauthorized content reproduction', 'No creation of offensive or harmful memes', 'No misuse of copyrighted material', "No violation of others' rights"],
+      },
+      {
+        subtitle: 'Platform Abuse',
+        items: ['No market manipulation', 'No fraudulent activities', 'No harmful technical interference', 'No attempts to withdraw locked liquidity from pools'],
+      },
     ],
   },
   {
-    title: '10. SPL404 Sound Meme Terms',
+    title: '10. SWL-444 Sound Meme Terms',
     content: [
-      'SPL404 is a token standard for sound memes with tokenized ownership',
-      'Creating a sound meme establishes a token with the specified supply',
-      'Users can choose between liquidity pools or bonding curves for token pricing',
-      'For liquidity pools, initial liquidity is locked in the smart contract and cannot be withdrawn',
-      'For bonding curves, no initial liquidity is required, and price increases with each purchase',
-      'Bonding curve tokens automatically migrate to our WOO DEX when market cap reaches $44,000',
-      'Token holders own a proportional share of the sound meme',
-      'Tokens can be freely traded on the platform subject to the 0.3% transaction fee',
-      'Transaction fees are distributed to stakers in the Woodeng ecosystem',
-      'Creators receive an initial allocation of tokens as specified during creation',
-      'Token prices fluctuate based on market demand and trading activity',
-      'Woo platform is not responsible for token price volatility or market conditions',
+      {
+        subtitle: 'Token Standard',
+        items: [
+          'SWL-444 is a revolutionary token standard on Solana that merges fungible and non-fungible token properties',
+          'While initially focused on sound memes, SWL-444 is designed to support any metadata-rich digital asset',
+          'Creating a sound meme establishes a token with the specified supply',
+          'Token holders own a proportional share of the sound meme',
+          'Architecture enables fractional ownership and enhanced liquidity',
+        ],
+      },
+      {
+        subtitle: 'Pricing Models',
+        items: [
+          'Users can choose between liquidity pools or bonding curves for token pricing',
+          'For liquidity pools, initial liquidity is locked in the smart contract and cannot be withdrawn',
+          'For bonding curves, no initial liquidity is required, and price increases with each purchase',
+          'Bonding curve tokens automatically migrate to our WOO DEX when market cap reaches $44,000',
+        ],
+      },
+      {
+        subtitle: 'Trading and Fees',
+        items: [
+          'Tokens can be freely traded on the platform subject to transaction fees',
+          'Liquidity pool transactions: 0.1% fee (100% to $WOODENG Holders)',
+          'Bonding curve pre-migration: 1% + 4% on early sellers (100% to $WOODENG Holders)',
+          'Bonding curve post-migration: 0.1% fee (100% to $WOODENG Holders)',
+          'Creators benefit from token value appreciation as demand increases',
+        ],
+      },
+      {
+        subtitle: 'Market Risks',
+        items: ['Token prices fluctuate based on market demand and trading activity', 'Woo platform is not responsible for token price volatility or market conditions'],
+      },
     ],
   },
   {
     title: '11. Termination',
-    content: ['We may suspend accounts for violations', 'Users can terminate at any time', 'Some obligations survive termination', 'NFT and token ownership persists post-termination'],
+    content: [
+      {
+        subtitle: 'Account Termination',
+        items: ['We may suspend accounts for violations', 'Users can terminate at any time', 'Some obligations survive termination', 'NFT and token ownership persists post-termination'],
+      },
+    ],
   },
   {
     title: '12. Changes to Terms',
-    content: ['Terms may be updated periodically', 'Changes effective upon posting', 'Continued use implies acceptance', 'Users notified of major changes'],
+    content: [
+      {
+        subtitle: 'Terms Updates',
+        items: ['Terms may be updated periodically', 'Changes effective upon posting', 'Continued use implies acceptance', 'Users notified of major changes'],
+      },
+    ],
   },
 ];
 
-/* ────────────────────────────────────────────
- *  Component
- * ──────────────────────────────────────────── */
 export default function Terms() {
   return (
     <div className="py-12 space-y-12">
@@ -287,8 +346,8 @@ export default function Terms() {
             <p className="font-medium">Please read these terms carefully</p>
           </div>
           <p className="text-muted-foreground">
-            These Terms of Service govern your use of Woo platform and provide important information about your legal rights, remedies, and
-            obligations. By using Woodeng, you agree to these terms and conditions.
+            These Terms of Service govern your use of Woo platform and provide important information about your legal
+            rights, remedies, and obligations. By using Woodeng, you agree to these terms and conditions.
           </p>
         </div>
       </div>
@@ -296,42 +355,28 @@ export default function Terms() {
       {/* Terms Sections */}
       <div className="max-w-3xl mx-auto space-y-12">
         {sections.map((section, index) => (
-          <div key={index} className="space-y-4">
+          <div key={section.title} className="space-y-4">
             <h2 className="text-2xl font-bold" id={`section-${index + 1}`}>
               {section.title}
             </h2>
-
-            <div className="space-y-4">
-              {typeof section.content[0] === 'string' ? (
-                <ul className="space-y-2">
-                  {(section.content as string[]).map((item, itemIndex) => (
-                    <li key={itemIndex} className="flex items-start gap-3 text-muted-foreground">
-                      <span className="select-none">•</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <div className="grid gap-6">
-                  {(section.content as Bullet[]).map((block, typeIndex) => (
-                    <div key={typeIndex} className="bg-card border border-border rounded-lg p-6">
-                      <div className="space-y-4">
-                        <div className="space-y-1">
-                          <h4 className="font-semibold">{block.subtitle}</h4>
-                        </div>
-                        <ul className="space-y-1">
-                          {block.items.map((example, exampleIndex) => (
-                            <li key={exampleIndex} className="text-sm text-muted-foreground flex items-center gap-2">
-                              <span className="select-none">•</span>
-                              <span>{example}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
+            <div className="grid gap-6">
+              {section.content.map((contentSection, i) => (
+                <div key={`${section.title}-${i}`} className="bg-card border border-border rounded-lg p-6">
+                  <div className="space-y-4">
+                    <div className="space-y-1">
+                      <h4 className="font-semibold">{contentSection.subtitle}</h4>
                     </div>
-                  ))}
+                    <ul className="space-y-1">
+                      {contentSection.items.map((item, j) => (
+                        <li key={`${section.title}-${i}-${j}`} className="text-sm text-muted-foreground flex items-center gap-2">
+                          <span className="select-none">•</span>
+                          <span>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 </div>
-              )}
+              ))}
             </div>
           </div>
         ))}
@@ -345,10 +390,9 @@ export default function Terms() {
             <h2 className="text-xl font-bold">Artist Verification</h2>
           </div>
           <p className="text-muted-foreground mb-6">
-            If you're an artist with a record label, agent, or applicable copyright protection, you must request verification before
-            distributing protected music on our platform.
+            If you're an artist with a record label, agent, or applicable copyright protection, you must request
+            verification before distributing protected music on our platform.
           </p>
-
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div className="bg-card border border-border rounded-lg p-4">
               <div className="flex items-center gap-2 mb-2">
@@ -374,15 +418,14 @@ export default function Terms() {
               </ul>
             </div>
           </div>
-
           <div className="flex justify-center">
             <Link
-  href="/contact?topic=artist-verification"
-  className="px-6 py-3 rounded-lg flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
->
-  Request Verification
-  <Shield className="w-4 h-4" />
-</Link>
+              href="/contact?topic=verification"
+              className="px-6 py-3 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
+            >
+              Request Verification
+              <Shield className="w-4 h-4" />
+            </Link>
           </div>
         </div>
       </div>
@@ -391,7 +434,9 @@ export default function Terms() {
       <div className="max-w-3xl mx-auto">
         <div className="bg-card border border-border rounded-lg p-6 text-center">
           <h2 className="text-xl font-bold mb-4">Questions About our Terms?</h2>
-          <p className="text-muted-foreground mb-6">If you have any questions about these Terms of Service, please contact us.</p>
+          <p className="text-muted-foreground mb-6">
+            If you have any questions about these Terms of Service, please contact us.
+          </p>
           <Link
             href="/contact"
             className="inline-flex px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"

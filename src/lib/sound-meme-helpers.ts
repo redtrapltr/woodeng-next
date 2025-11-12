@@ -17,12 +17,14 @@ import {
   getLockerPda,
 } from './sound-memes';
 import type { PoolType } from './sound-meme-types';
+import { clusterApiUrl } from '@solana/web3.js';
+
 
 /* ------------------------------------------------------------------ */
 /*  Basic constants / small helpers                                   */
 /* ------------------------------------------------------------------ */
 const LOCKER_PROGRAM_ID = new PublicKey('cJcMJ8YWacxRPMG5r1E8GmVgxnS9KogUe6m7sN2TaHS');
-export const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+export const connection = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'confirmed');
 const lockerIdl = lockerIdlJson as Idl;
 
 function getAnchorWallet(wallet: WalletContextState) {

@@ -12,7 +12,10 @@ import {
   createInitializeMintInstruction,
 } from '@solana/spl-token';
 import type { WalletContextState } from '@solana/wallet-adapter-react';
-import { AnchorProvider, BN, Program, Idl } from '@project-serum/anchor';
+// option A: split
+import { AnchorProvider, BN, Program } from '@project-serum/anchor';
+import type { Idl } from '@project-serum/anchor';
+
 import { Metaplex } from '@metaplex-foundation/js';
 
 import poolIdlJson   from '../../idl/my_sound_meme_pool.json';
@@ -33,10 +36,13 @@ import {
 export const WOODENG_DECIMALS = 9;
 export const MEME_DECIMALS    = 0;
 
-export const connection = new Connection(
-  'https://api.devnet.solana.com',
-  'confirmed',
-);
+const RPC_URL =
+  (process.env.NEXT_PUBLIC_SOLANA_RPC && process.env.NEXT_PUBLIC_SOLANA_RPC.startsWith('http'))
+    ? process.env.NEXT_PUBLIC_SOLANA_RPC
+    : 'https://mainnet.helius-rpc.com/?api-key=YOUR_KEY';
+
+export const connection = new Connection(RPC_URL, { commitment: 'confirmed' });
+
 
 export const metaplex = Metaplex.make(connection);
 
@@ -44,7 +50,7 @@ export const POOL_PROGRAM_ID = new PublicKey(
   '8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV',
 );
 export const WOODENG_MINT = new PublicKey(
-  'CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad',
+  '83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5',
 );
 export const PROJECT_WALLET = new PublicKey(
   '34JBFxZnw7f6Ye9dsHpeLTnDjA1cU3HnJL1ABFVpjBMb',

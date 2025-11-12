@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   BarChart,
   ArrowUpDown,
+  TrendingUp, // <-- added
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -83,7 +84,7 @@ export default function HowItWorksFull() {
           </div>
           <h1 className="text-4xl md:text-5xl font-bold">How Woodeng Ecosystem Works</h1>
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto">
-            Discover how Woo platform revolutionizes music NFTs and sound memes through innovative technology and fair economics
+            Discover how Woo platform revolutionizes NFTs and memes through innovative technology and fair economics
           </p>
         </div>
 
@@ -95,7 +96,10 @@ export default function HowItWorksFull() {
             Start Creating
             <ArrowRight className="w-4 h-4" />
           </Link>
-          <Link href="/faq" className="px-6 py-3 bg-card hover:bg-muted border border-border rounded-full transition-colors">
+          <Link
+            href="/faq"
+            className="px-6 py-3 bg-card hover:bg-muted border border-border rounded-full transition-colors"
+          >
             Learn More
           </Link>
         </div>
@@ -136,7 +140,10 @@ export default function HowItWorksFull() {
         <h2 className="text-3xl font-bold text-center mb-12">Platform Benefits</h2>
         <div className="grid md:grid-cols-3 gap-8">
           {stakeholderBenefits.map((role, index) => (
-            <div key={index} className="bg-card border border-border rounded-lg p-6 hover:border-primary/50 transition-all duration-300">
+            <div
+              key={index}
+              className="bg-card border border-border rounded-lg p-6 hover:border-primary/50 transition-all duration-300"
+            >
               <div className="flex items-center gap-3 mb-6">
                 <div className="p-2 bg-primary/10 rounded-lg">
                   <role.icon className="w-6 h-6 text-primary" />
@@ -197,7 +204,7 @@ export default function HowItWorksFull() {
           </div>
 
           {/* Music NFTs With AMM */}
-          <div className="bg-card border border-border rounded-lg p-6 hover:border-primary/50 transition-all duration-300">
+          <div className="bg-card border border-border rounded-lg p-6 hover-border-primary/50 transition-all duration-300">
             <div className="flex items-center gap-3 mb-6">
               <div className="p-3 bg-primary/10 rounded-lg">
                 <Music2 className="w-6 h-6 text-primary" />
@@ -239,25 +246,21 @@ export default function HowItWorksFull() {
               <h3 className="text-xl font-semibold">Sound Memes with Liquidity</h3>
             </div>
             <div className="space-y-4">
-              <p className="text-muted-foreground">SPL404 tokenized NFTs with liquidity pools for immediate trading in WOODENG or SOL.</p>
+              <p className="text-muted-foreground">
+                SWL-444 tokenized NFTs with liquidity pools for immediate trading in WOODENG or SOL.
+              </p>
               <div className="bg-muted/50 p-4 rounded-lg">
                 <h4 className="font-medium mb-2">Key Features</h4>
                 <ul className="space-y-2 text-sm">
                   <li className="flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-primary" />
-                    <span>No deployment Fee (only gas fees)</span>
+                    <span>No deployment fee (only gas fees)</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>0.3% transaction Fee</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>0.2% to the Sound Meme Creator</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>0.1% to $WOODENG Holders</span>
+                    <span>
+                      <strong>0.1% transaction fee</strong> (100% distributed to $WOODENG stakers)
+                    </span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
@@ -265,7 +268,11 @@ export default function HowItWorksFull() {
                   </li>
                   <li className="flex items-center gap-2">
                     <Lock className="w-4 h-4 text-primary" />
-                    <span>Permanently locked liquidity</span>
+                    <span>Permanently locked liquidity in Smart Contract Locker</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-primary" />
+                    <span>Creators earn by holding &amp; selling their initial token allocation</span>
                   </li>
                 </ul>
               </div>
@@ -281,44 +288,54 @@ export default function HowItWorksFull() {
               <h3 className="text-xl font-semibold">Sound Memes with Bonding Curve</h3>
             </div>
             <div className="space-y-4">
-              <p className="text-muted-foreground">SPL404 tokenized NFTs with bonding curve for price discovery in WOODENG or SOL.</p>
+              <p className="text-muted-foreground">
+                SWL-444 tokenized NFTs with bonding curve for price discovery in WOODENG or SOL.
+              </p>
               <div className="bg-muted/50 p-4 rounded-lg">
-                <h4 className="font-medium mb-2">Key Features</h4>
+                <h4 className="font-medium mb-2">Pre-Migration Phase (Before $44K Market Cap)</h4>
                 <ul className="space-y-2 text-sm">
                   <li className="flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-primary" />
-                    <span>No deployment Fee (only gas fees)</span>
+                    <span>No deployment fee (only gas fees)</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>1.5% transaction Fee</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>1% to the $WOODENG Holders</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>0.5% to the Sound Meme Creator</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>No initial deposit required</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-primary mt-1" />
                     <span>
-                      Fees change after migration at $44K market cap:
-                      <ul className="ml-6 mt-1 space-y-1 list-disc">
-                        <li>0.3% Fee per transaction</li>
-                        <li>0.2% to the Sound Meme Creator</li>
-                        <li>0.1% to the $WOODENG Holders</li>
-                      </ul>
+                      <strong>1% transaction fee</strong> on all trades (100% to $WOODENG stakers)
+                    </span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" />
+                    <span>
+                      <strong>4% early seller penalty</strong> (100% to $WOODENG stakers)
+                    </span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-primary" />
+                    <span>Creators earn from their initial token allocation as price rises</span>
+                  </li>
+                </ul>
+              </div>
+              <div className="bg-muted/50 p-4 rounded-lg mt-4">
+                <h4 className="font-medium mb-2">Post-Migration Phase (After $44K Market Cap)</h4>
+                <ul className="space-y-2 text-sm">
+                  <li className="flex items-center gap-2">
+                    <Rocket className="w-4 h-4 text-primary" />
+                    <span>Automatic migration to WOO DEX with permanent liquidity</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" />
+                    <span>
+                      <strong>0.1% transaction fee</strong> (100% to $WOODENG stakers)
                     </span>
                   </li>
                   <li className="flex items-center gap-2">
                     <Lock className="w-4 h-4 text-primary" />
-                    <span>Permanently locked liquidity</span>
+                    <span>Liquidity permanently locked in Smart Contract Locker</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-primary" />
+                    <span>Creators continue earning from token appreciation</span>
                   </li>
                 </ul>
               </div>
@@ -329,7 +346,7 @@ export default function HowItWorksFull() {
 
       {/* Creator Benefits Section */}
       <section className="space-y-8">
-        <h2 className="text-3xl font-bold text-center mb-8">Creator Advantages & Revenue</h2>
+        <h2 className="text-3xl font-bold text-center mb-8">Creator Advantages &amp; Revenue</h2>
         <div className="grid md:grid-cols-2 gap-8">
           <div className="bg-card border border-border rounded-lg p-6 hover:border-primary/50 transition-all duration-300">
             <div className="flex items-center gap-3 mb-6">
@@ -339,21 +356,42 @@ export default function HowItWorksFull() {
               <h3 className="text-xl font-semibold">Music NFT Creator Benefits</h3>
             </div>
             <div className="space-y-4">
-              <p className="text-muted-foreground">Maximize your earnings and reach as a music creator on our platform.</p>
+              <p className="text-muted-foreground">
+                Maximize your earnings and reach as a music creator on our platform.
+              </p>
               <div className="bg-muted/50 p-4 rounded-lg">
-                <h4 className="font-medium mb-2">Revenue Streams</h4>
+                <h4 className="font-medium mb-2 flex items-center gap-2">
+                  <Coins className="w-4 h-4 text-primary" />
+                  Primary Revenue
+                </h4>
+                <ul className="space-y-2 text-sm mb-4">
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" />
+                    <span>
+                      <strong>80%</strong> of initial Music NFT sales
+                    </span>
+                  </li>
+                </ul>
+                <h4 className="font-medium mb-2 flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-primary" />
+                  Secondary Revenue
+                </h4>
+                <ul className="space-y-2 text-sm mb-4">
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" />
+                    <span>
+                      <strong>80%</strong> of royalties on resales (capped at 15%)
+                    </span>
+                  </li>
+                </ul>
+                <h4 className="font-medium mb-2 flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-primary" />
+                  Variable Revenue
+                </h4>
                 <ul className="space-y-2 text-sm">
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>80% of primary sales revenue</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>80% of secondary sales royalties (up to 15%)</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>AMM pool price appreciation benefits</span>
+                    <span>Potential gains from price appreciation in AMM pools</span>
                   </li>
                 </ul>
               </div>
@@ -368,21 +406,52 @@ export default function HowItWorksFull() {
               <h3 className="text-xl font-semibold">Sound Meme Creator Benefits</h3>
             </div>
             <div className="space-y-4">
-              <p className="text-muted-foreground">Turn viral sounds into sustainable revenue streams with SPL404 tokenization.</p>
+              <p className="text-muted-foreground">
+                Turn viral sounds into sustainable revenue streams with SWL-444 tokenization.
+              </p>
               <div className="bg-muted/50 p-4 rounded-lg">
-                <h4 className="font-medium mb-2">Revenue Streams</h4>
+                <h4 className="font-medium mb-2 flex items-center gap-2">
+                  <Wallet className="w-4 h-4 text-primary" />
+                  Liquidity Revenue
+                </h4>
+                <ul className="space-y-2 text-sm mb-4">
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" />
+                    <span>
+                      <strong>0.2%</strong> on Sound Meme transactions
+                    </span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" />
+                    <span>
+                      <strong>0.5%</strong> on pre-migration transactions (bonding curve)
+                    </span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" />
+                    <span>
+                      <strong>6%</strong> on pre-migration early sellers (bonding curve)
+                    </span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" />
+                    <span>
+                      <strong>0.2%</strong> on post-migration transactions (bonding curve)
+                    </span>
+                  </li>
+                </ul>
+                <h4 className="font-medium mb-2 flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-primary" />
+                  Variable Revenue
+                </h4>
                 <ul className="space-y-2 text-sm">
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>0.2% of all liquidity pool transactions</span>
+                    <span>Potential gains from price appreciation in AMM pools</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>0.5% of bonding curve transactions (pre-migration)</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>0.2% of bonding curve transactions (post-migration)</span>
+                    <span>Initial token allocation (up to 1% of total supply)</span>
                   </li>
                 </ul>
               </div>
@@ -403,7 +472,9 @@ export default function HowItWorksFull() {
               <h3 className="text-xl font-semibold">Staking Rewards</h3>
             </div>
             <div className="space-y-4">
-              <p className="text-muted-foreground">Earn passive income by staking your WOODENG tokens and receive rewards from platform activity.</p>
+              <p className="text-muted-foreground">
+                Earn passive income by staking your WOODENG tokens and receive rewards from platform activity.
+              </p>
               <div className="bg-muted/50 p-4 rounded-lg">
                 <h4 className="font-medium mb-2">Key Features</h4>
                 <ul className="space-y-2 text-sm">
@@ -446,23 +517,27 @@ export default function HowItWorksFull() {
                 <ul className="space-y-2 text-sm">
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>20% of Music NFT primary sales</span>
+                    <span>20% of Music NFT primary sales (100% of platform fee)</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>20% of Music NFT secondary royalties (up to 15%)</span>
+                    <span>20% of Music NFT secondary royalties (100% of platform fee)</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>0.1% from Sound Meme liquidity transactions</span>
+                    <span>0.1% from Sound Meme liquidity pool transactions (100% of fee)</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>1% from Sound Meme bonding curve transactions (pre-migration)</span>
+                    <span>1% from Sound Meme bonding curve transactions pre-migration (100% of fee)</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>0.1% from Sound Meme bonding curve transactions (post-migration)</span>
+                    <span>4% penalty from early sellers pre-migration (100% of penalty)</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-primary" />
+                    <span>0.1% from Sound Meme transactions post-migration (100% of fee)</span>
                   </li>
                 </ul>
               </div>
@@ -579,7 +654,8 @@ export default function HowItWorksFull() {
             {
               icon: Lock,
               title: 'Smart Contracts',
-              description: 'Secure smart contracts handle all transactions and royalty distributions',
+              description:
+                'Secure smart contracts handle all transactions and royalty distributions',
             },
             {
               icon: Users,
@@ -589,12 +665,14 @@ export default function HowItWorksFull() {
             {
               icon: Shield,
               title: 'Automated Payments',
-              description: 'Instant and secure payment processing with claimed fee distribution',
+              description:
+                'Instant and secure payment processing with claimed fee distribution',
             },
             {
               icon: Wallet,
               title: 'Secure Wallet Connection',
-              description: 'Industry-standard portfolio connection protocol and enhanced security measures',
+              description:
+                'Industry-standard portfolio connection protocol and enhanced security measures',
             },
             {
               icon: Lock,
@@ -605,10 +683,14 @@ export default function HowItWorksFull() {
             {
               icon: Shield,
               title: 'Anti-Sniper Protection',
-              description: 'Advanced measures to prevent bot manipulation and protect fair market dynamics',
+              description:
+                'Advanced measures to prevent bot manipulation and protect fair market dynamics',
             },
           ].map((feature, index) => (
-            <div key={index} className="bg-card border border-border rounded-lg p-6 hover:border-primary/50 transition-all duration-300">
+            <div
+              key={index}
+              className="bg-card border border-border rounded-lg p-6 hover:border-primary/50 transition-all duration-300"
+            >
               <div className="p-3 bg-primary/10 rounded-lg w-fit mb-4">
                 <feature.icon className="w-6 h-6 text-primary" />
               </div>
@@ -630,10 +712,16 @@ export default function HowItWorksFull() {
             Join the next generation of music NFTs and Sound Memes on Woodeng
           </p>
           <div className="flex flex-wrap justify-center gap-4">
-            <Link href="/mint" className="px-6 py-3 bg-primary text-primary-foreground rounded-full hover:bg-primary/90 transition-colors">
+            <Link
+              href="/mint"
+              className="px-6 py-3 bg-primary text-primary-foreground rounded-full hover:bg-primary/90 transition-colors"
+            >
               Start Creating
             </Link>
-            <Link href="/faq" className="px-6 py-3 bg-card hover:bg-muted border border-border rounded-full transition-colors">
+            <Link
+              href="/faq"
+              className="px-6 py-3 bg-card hover:bg-muted border border-border rounded-full transition-colors"
+            >
               Learn More
             </Link>
           </div>

@@ -27,10 +27,10 @@ export async function GET(req: NextRequest) {
       SELECT
         meme_mint,
         EXTRACT(EPOCH FROM bucket)*1000 AS t,
-        open::float8  AS o,
-        high::float8  AS h,
-        low::float8   AS l,
-        close::float8 AS c,
+              (open::float8  / 1e9) AS o,
+        (high::float8  / 1e9) AS h,
+        (low::float8   / 1e9) AS l,
+        (close::float8 / 1e9) AS c,
         trades::int   AS v,
         ROW_NUMBER() OVER (PARTITION BY meme_mint ORDER BY bucket DESC) AS rn
       FROM ${table}

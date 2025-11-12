@@ -78,40 +78,55 @@ function SwipeDeck({ items }: { items: React.ReactNode[] }) {
 
 export default function CreateNFT() {
   /* ─────────── Card: Musical NFT ─────────── */
-  const MusicalCard = (
-    <Link
-      href="/uploadYourMusic"
-      className={`
-        group relative block md:h-full overflow-hidden rounded-2xl border border-[#2b2341] bg-[#171622]
-        p-5 sm:p-6 text-left transition-all
-        shadow-[0_8px_24px_rgba(0,0,0,0.25)]
-        focus:outline-none focus-visible:ring-2 focus-visible:ring-[#7356f0]
-        focus-visible:ring-offset-2 focus-visible:ring-offset-[#181920]
-        motion-safe:hover:bg-[#23253a] motion-safe:hover:border-[#7356f0]
-        active:scale-[0.99]
-      `}
+  /* ─────────── Card: Musical NFT (disabled) ─────────── */
+const MusicalCard = (
+  <div
+    role="button"
+    aria-disabled="true"
+    title="Coming soon"
+    tabIndex={-1}
+    className={`
+      group relative block md:h-full overflow-hidden rounded-2xl border border-[#2b2341] bg-[#171622]
+      p-5 sm:p-6 text-left transition-all
+      shadow-[0_8px_24px_rgba(0,0,0,0.25)]
+      focus:outline-none
+      motion-safe:hover:bg-[#171622] motion-safe:hover:border-[#2b2341]
+      cursor-not-allowed
+    `}
+  >
+    {/* small corner ribbon */}
+    <div
+      className="
+        pointer-events-none absolute right-[-40px] top-8 rotate-45
+        bg-[#7356f0] text-white text-[10px] sm:text-xs font-bold
+        px-14 py-1 shadow-md opacity-90
+      "
     >
-      <div className="flex flex-col gap-3 md:h-full md:justify-between">
-        <div className="flex items-center gap-3 sm:gap-4">
-          <div className="rounded-xl bg-[#7356f0]/10 p-3 transition-colors group-hover:bg-[#7356f0]/20">
-            <Music2 className="h-6 w-6 sm:h-7 sm:w-7 text-[#7356f0]" />
-          </div>
-          <div>
-            <h3 className="text-lg sm:text-xl font-semibold text-white">Musical NFT</h3>
-            <p className="text-xs sm:text-sm text-[#bcbcf0]">Professional music NFT creation</p>
-          </div>
-        </div>
+      COMING SOON
+    </div>
 
-        <ul className="space-y-2 text-sm text-[#bcbcf0]">
-          <li>• Complete music NFT ecosystem</li>
-          <li>• Multiple audio format support</li>
-          <li>• Advanced metadata configuration</li>
-          <li>• Royalty or AMM settings</li>
-          <li>• Collection management</li>
-        </ul>
+    <div className="flex flex-col gap-3 md:h-full md:justify-between opacity-70">
+      <div className="flex items-center gap-3 sm:gap-4">
+        <div className="rounded-xl bg-[#7356f0]/10 p-3">
+          <Music2 className="h-6 w-6 sm:h-7 sm:w-7 text-[#7356f0]" />
+        </div>
+        <div>
+          <h3 className="text-lg sm:text-xl font-semibold text-white">Musical NFT</h3>
+          <p className="text-xs sm:text-sm text-[#bcbcf0]">Professional music NFT creation</p>
+        </div>
       </div>
-    </Link>
-  );
+
+      <ul className="space-y-2 text-sm text-[#bcbcf0]">
+        <li>• Complete music NFT ecosystem</li>
+        <li>• Multiple audio format support</li>
+        <li>• Advanced metadata configuration</li>
+        <li>• Royalty or AMM settings</li>
+        <li>• Collection management</li>
+      </ul>
+    </div>
+  </div>
+);
+
 
   /* ─────────── Card: Sound Meme ─────────── */
   const MemeCard = (
@@ -153,7 +168,7 @@ export default function CreateNFT() {
                 </h3>
                 <Fire className="h-4 w-4 sm:h-5 sm:w-5 text-[#FF6B6B] animate-bounce-slow" />
               </div>
-              <p className="text-xs sm:text-sm text-[#8d95a5]">Quick SPL404 NFT creation</p>
+              <p className="text-xs sm:text-sm text-[#8d95a5]">Quick SWL-444 NFT creation</p>
             </div>
           </div>
 

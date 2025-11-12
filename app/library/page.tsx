@@ -24,7 +24,7 @@ export default function HomePage() {
   // Handle password submission
   const handlePasswordSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (password === 'ilovewoodeng') {
+    if (password === 'itestwoodeng') {
       setAuthorized(true);
       setError('');
     } else {

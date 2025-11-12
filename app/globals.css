@@ -240,5 +240,9 @@ a:hover, .link:hover {
 /* helpful global */
 html, body { overflow-x: hidden; }
 
-
+/* iOS helpers */
+@supports (-webkit-touch-callout: none) {
+  .ios\:min-h-svh { min-height: 100svh; }
+  .ios\:pb-safe   { padding-bottom: calc(env(safe-area-inset-bottom) + 84px); }
+}
 

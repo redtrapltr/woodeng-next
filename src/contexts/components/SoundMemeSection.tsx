@@ -19,7 +19,7 @@ export function SoundMemeSection() {
   useEffect(() => {
     (async () => {
       try {
-        const connection = new Connection("https://api.devnet.solana.com");
+        const connection = new Connection("process.env.NEXT_PUBLIC_SOLANA_RPC as string");
         const dummyWallet = { publicKey: PublicKey.default } as any; // read-only
         const provider = new AnchorProvider(connection, dummyWallet, {});
         const program = new Program(idl as Idl, POOL_PROGRAM_ID, provider);

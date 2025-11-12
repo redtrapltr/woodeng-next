@@ -49,7 +49,7 @@ export function HowItWorks() {
               How It Works
             </h2>
             <p className="mt-2 text-base md:text-lg text-muted-foreground max-w-2xl mx-auto">
-              Create, mint, and trade your music NFTs and SPL404 Sound Memes in just a few simple steps
+              Transform your creativity into digital assets with SWL-444 tokens and music NFTs in just a few simple steps
             </p>
           </div>
 
@@ -110,7 +110,7 @@ export function HowItWorks() {
             <div className="relative flex justify-center">
               <div className="absolute -bottom-4 w-60 h-20 bg-[#221d3a]/40 rounded-t-full opacity-30" />
               <a
-                href="/mint"
+                href="/create"
                 className="relative inline-flex items-center gap-2 px-8 py-3 rounded-full
                            bg-gradient-to-r from-[#8b5cf6] to-[#4f8ef5]
                            text-white font-bold transition-transform duration-300 hover:scale-105

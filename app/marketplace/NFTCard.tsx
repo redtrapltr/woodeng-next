@@ -59,23 +59,26 @@ export function NFTCard({
 
   return (
     <div
-      onClick={() => {
-        // Stop audio before navigating via card click
-        try { stop(); } catch {}
-        onOpen(nft);
-      }}
-      className={cn(
-        'group bg-card border border-border rounded-lg hover:border-primary/50 transition',
-        view === 'list' && 'flex',
-      )}
-    >
+  onClick={() => {
+    try { stop(); } catch {}
+    onOpen(nft);
+  }}
+  className={cn(
+    'group bg-card border border-border rounded-lg hover:border-primary/50 transition',
+    view === 'list' && 'flex w-full items-stretch gap-4 overflow-hidden'
+  )}
+>
+
       {/* -------- cover -------- */}
       <div
-        className={cn(
-          'relative',
-          view === 'grid' ? 'aspect-square' : 'aspect-square sm:w-44',
-        )}
-      >
+  className={cn(
+    'relative',
+    view === 'grid'
+      ? 'aspect-square'
+      : 'w-28 aspect-square sm:w-40 flex-shrink-0'
+  )}
+>
+
         <Web3Image
           src={nft.imageUrl}
           alt={nft.title}
