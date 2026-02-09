@@ -15,6 +15,7 @@ import {
   User as UserIcon,
   Search as SearchIcon,
   ChevronRight,
+  ChevronDown,
 } from "lucide-react";
 
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
@@ -195,7 +196,8 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
             tabIndex={-1}
             style={{
               position: "absolute",
-              top: "calc(100% + 6px)",
+              top: "100%",
+
               left: 0,
               right: 0,
               background: "#11131e",
@@ -275,7 +277,7 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
 );
 
 /* ───── Header ─────────────────────────────────────────────────────────── */
- const LOGO_H_DESKTOP = 78; // ↑ avant 36
+ const LOGO_H_DESKTOP = 68; // ↑ avant 36
  const LOGO_H_MOBILE  = 54; // ↑ avant ~2
 
 
@@ -306,23 +308,27 @@ function NavItem({
   };
 
   if (disabled) {
-    return (
-      <span
-        title="Coming soon"
-        style={{ ...baseStyle, opacity: 0.6, cursor: "not-allowed" }}
-        aria-disabled="true"
-      >
-        {icon}
-        <span style={{ whiteSpace: "nowrap", marginLeft: 3 }}>{label}</span>
-      </span>
-    );
-  }
+  return (
+    <span
+      className="ni"
+      title="Coming soon"
+      style={{ ...baseStyle, opacity: 0.6, cursor: "not-allowed" }}
+      aria-disabled="true"
+    >
+      {icon}
+      <span style={{ whiteSpace: "nowrap", marginLeft: 3 }}>{label}</span>
+    </span>
+  );
+}
 
   return (
-    <Link href={href!} legacyBehavior>
-      <a style={baseStyle} onClick={onClick}>{icon}<span style={{ whiteSpace: "nowrap", marginLeft: 3 }}>{label}</span></a>
-    </Link>
-  );
+  <Link href={href!} legacyBehavior>
+    <a className="ni" style={baseStyle} onClick={onClick}>
+      {icon}
+      <span style={{ whiteSpace: "nowrap", marginLeft: 3 }}>{label}</span>
+    </a>
+  </Link>
+);
 }
 
 /* mobile version (block-style button) */
@@ -376,6 +382,122 @@ function MobileNavItem({
     </Link>
   );
 }
+
+/* desktop dropdown ("Tutorials") */
+function NavMenu({
+  label,
+  icon,
+  items,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  items: { href: string; title: string; subtitle?: string }[];
+}) {
+  const [open, setOpen] = React.useState(false);
+  const wrapRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown as any, { passive: true } as any);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown as any);
+    };
+  }, []);
+
+  return (
+  <div
+    ref={wrapRef}
+    onMouseEnter={() => setOpen(true)}
+    onMouseLeave={() => setOpen(false)}
+   style={{ position: "relative" }}
+
+  >
+    <button
+      type="button"
+      aria-haspopup="menu"
+      aria-expanded={open}
+      style={{
+        color: "#e6e6ff",
+        fontWeight: 600,
+        display: "flex",
+        alignItems: "center",
+        gap: 7,
+        fontSize: 15,
+        padding: "0 2px",
+        whiteSpace: "nowrap",
+        background: "transparent",
+        border: "none",
+        cursor: "pointer",
+      }}
+    >
+      
+      <span style={{ whiteSpace: "nowrap" }}>{label}</span>
+<ChevronDown size={16} style={{ opacity: 0.7, marginLeft: 6 }} />
+
+    </button>
+
+    {/* hover bridge: fills the previous gap so mouse never "leaves" the wrapper */}
+    {open && (
+      <div
+        aria-hidden
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          top: "100%",
+          height: 8,
+        }}
+      />
+    )}
+
+    {open && (
+      <div
+        role="menu"
+        style={{
+          position: "absolute",
+          top: "100%",           // was: calc(100% + 8px)
+          left: 0,
+          minWidth: 280,
+          background: "#0f111a",
+          border: "1px solid #232332",
+          borderRadius: 12,
+          boxShadow: "0 10px 28px rgba(0,0,0,.45)",
+          padding: 8,
+          zIndex: 80,
+          marginTop: 8,          // creates visual space without a “mouse gap”
+        }}
+      >
+        {items.map((it) => (
+          <Link href={it.href} key={it.href} legacyBehavior>
+            <a
+              role="menuitem"
+              style={{
+                display: "block",
+                textDecoration: "none",
+                color: "#e6e6ff",
+                padding: "10px 12px",
+                borderRadius: 10,
+              }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{it.title}</div>
+              {it.subtitle && (
+                <div style={{ fontSize: 12, color: "#9aa0b6", marginTop: 2 }}>{it.subtitle}</div>
+              )}
+            </a>
+          </Link>
+        ))}
+      </div>
+    )}
+  </div>
+);
+
+}
+
 
 
 export default function Header() {
@@ -613,14 +735,20 @@ if (typeof window !== 'undefined') {
     flexWrap: "nowrap",
   };
 
-  const navStyle: React.CSSProperties = {
-    display: "flex",
-    gap: 12,
-    minWidth: 0,
-    flex: "0 1 auto",
-    flexWrap: "nowrap",
-    overflow: "hidden",
-  };
+const navStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 14,
+  minWidth: 0,
+  flex: "0 1 auto",
+  flexWrap: "nowrap",
+  overflow: "visible",
+  paddingRight: 20,
+  alignItems: "center",          // ← add this
+};
+
+
+
+
 
   const createButtonStyle: React.CSSProperties = {
     background: "#a088fa",
@@ -643,6 +771,41 @@ if (typeof window !== 'undefined') {
         .hide-on-mobile { display: flex !important; }
         @media (max-width: 860px) { .hide-on-mobile { display: none !important; } }
       `}</style>
+
+
+      <style jsx global>{`
+  /* Compact header when screen < 1360px */
+  @media (max-width: 1360px) {
+    /* shrink nav text + spacing */
+    .nav-compact .ni {
+      font-size: 14px !important;
+      gap: 6px !important;
+    }
+    .nav-compact {
+      gap: 10px !important;
+    }
+
+    /* shrink Create button and balance pill */
+    .create-btn {
+      padding: 8px 20px !important;
+      font-size: 15px !important;
+      border-radius: 20px !important;
+    }
+    .balance-pill {
+      padding: 6px 14px !important;
+      min-width: 90px !important;
+      max-width: 160px !important;
+      font-size: 14px !important;
+      border-radius: 14px !important;
+    }
+
+    /* if space is still tight, hide Airdrop */
+    .hide-when-tight {
+      display: none !important;
+    }
+  }
+`}</style>
+
 
       {/* local styles (no .logo-img rules anymore) */}
       <style jsx>{`
@@ -705,67 +868,86 @@ if (typeof window !== 'undefined') {
 
           
           {/* Desktop nav */}
-<nav className="hide-on-mobile" style={navStyle}>
+<nav className="hide-on-mobile nav-compact" style={{ ...navStyle, marginRight: 16 }}>
+
+
   <NavItem href="/" label="Home" icon={<Home size={17} />} />
   {/* Disabled "Market Place" */}
   <NavItem label="Market Place" icon={<Music size={17} />} disabled />
   <NavItem href="/sound-memes" label="Sound Memes" icon={<AnimatedSoundWaveIcon />} />
   <NavItem href="/staking" label="Staking" icon={<ShieldCheck size={17} />} />
-  {/* New disabled "Airdrop" */}
+
+  {/* Start here dropdown */}
+  <NavMenu
+  label="Start here"
+  icon={<ChevronRight size={16} />}
+  items={[
+    {
+      href: "/guides/buy-woodeng",
+      title: "How to buy WOODENG",
+      subtitle: "Create a wallet, fund it, and purchase WOODENG safely.",
+    },
+    // ↓ ADD THIS NEW ITEM
+    {
+      href: "/guides/fund-wallet",
+      title: "Fund your wallet with SOL (mobile)",
+      subtitle: "Buy SOL on your phone, then swap for WOODENG.",
+    },
+    {
+      href: "/guides/trade-sound-memes",
+      title: "How to trade Sound Memes",
+      subtitle: "Step-by-step trading on Woodeng AMM & bonding.",
+    },
+  ]}
+/>
+
+
+  {/* Airdrop (disabled) */}
+  <span className="hide-when-tight">
   <NavItem label="Airdrop" icon={<Gift size={17} />} disabled />
+</span>
+
 </nav>
+
+
+ 
 
         </div>
 
         {/* Right: desktop-only */}
-        <div className="hide-on-mobile" style={{ display: "flex", alignItems: "center", gap: 18, flexShrink: 0, marginLeft: "auto" }}>
+        <div className="hide-on-mobile"
+     style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0, marginLeft: "auto" }}>
+
           <Link href="/create" legacyBehavior>
-            <a style={createButtonStyle}>+ Create</a>
-          </Link>
+  <a className="create-btn" style={createButtonStyle}>+ Create</a>
+</Link>
+
 
           <div
-            style={{
-              background: "#232332",
-              color: "#a088fa",
-              fontWeight: 700,
-              borderRadius: 16,
-              padding: "7px 18px",
-              fontSize: 15,
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              whiteSpace: "nowrap",
-              letterSpacing: "0.01em",
-              minWidth: 110,
-              maxWidth: 210,
-            }}
-          >
+  className="balance-pill"
+  style={{
+    background: "#232332",
+    color: "#a088fa",
+    fontWeight: 700,
+    borderRadius: 16,
+    padding: "7px 18px",
+    fontSize: 15,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    whiteSpace: "nowrap",
+    letterSpacing: "0.01em",
+    minWidth: 110,
+    maxWidth: 210,
+  }}
+>
+
             <Waves size={18} style={{ color: "#a088fa" }} />
             {liveWoodengBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} WOODENG
 
           </div>
 
-          <button
-  type="button"
-  title="Profile (coming soon)"
-  aria-disabled="true"
-  onClick={(e) => e.preventDefault()}
-  style={{
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: 36,
-    height: 36,
-    borderRadius: "50%",
-    background: "#181929",
-    color: "#e6e6ff",
-    border: "1px solid #232332",
-    cursor: "not-allowed",
-    opacity: 0.6,
-  }}
->
-  <UserIcon size={18} />
-</button>
+         
 
 
           <WalletMultiButton
@@ -940,6 +1122,32 @@ if (typeof window !== 'undefined') {
     icon={<ShieldCheck size={17} />}
     onClick={() => setMobileOpen(false)}
   />
+
+    {/* Start Here (mobile) */}
+  <div style={{ color: "#8d92a8", fontSize: 12, margin: "14px 2px 6px" }}>Start here</div>
+
+  <MobileNavItem
+  href="/guides/buy-woodeng"
+  label="How to buy WOODENG"
+  icon={<Waves size={17} />}
+  onClick={() => setMobileOpen(false)}
+/>
+
+<MobileNavItem
+  href="/guides/fund-wallet"
+  label="Fund your wallet with SOL (mobile)"
+  icon={<Waves size={17} />}
+  onClick={() => setMobileOpen(false)}
+/>
+
+<MobileNavItem
+  href="/guides/trade-sound-memes"
+  label="How to trade Sound Memes"
+  icon={<AnimatedSoundWaveIcon />}
+  onClick={() => setMobileOpen(false)}
+/>
+
+
 
   {/* New disabled "Airdrop" */}
   <MobileNavItem label="Airdrop" icon={<Gift size={17} />} disabled />

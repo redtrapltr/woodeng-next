@@ -29,7 +29,7 @@ import type { WalletContextState } from '@solana/wallet-adapter-react'
 
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import {
-  TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction,
+  TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction,
   ASSOCIATED_TOKEN_PROGRAM_ID, createInitializeMintInstruction, createMintToInstruction,
   createSetAuthorityInstruction, AuthorityType, createAssociatedTokenAccountIdempotentInstruction
 } from '@solana/spl-token'
@@ -162,9 +162,16 @@ export async function sendIxsOnce(
   if (signers.length) tx.partialSign(...signers);
 
   // 2) Wallet signs
-  const signedByWallet = wallet.signTransaction
-    ? await wallet.signTransaction(tx)
-    : (await wallet.signAllTransactions!([tx]))[0];
+  let signedByWallet: Transaction;
+
+if (wallet.signTransaction) {
+  signedByWallet = await wallet.signTransaction(tx);
+} else if (wallet.signAllTransactions) {
+  signedByWallet = (await wallet.signAllTransactions([tx]))[0];
+} else {
+  throw new Error("Wallet cannot sign transactions (no signTransaction / signAllTransactions). Reconnect wallet.");
+}
+
 
   // 3) Re-attach local signers AFTER wallet sign.
   //    Some mobile wallets drop partial sigs.
@@ -386,16 +393,34 @@ async function ensureAtaExists(
   wallet: WalletContextState,
   isPdaOwner = false
 ): Promise<PublicKey> {
-  const ata = await getAssociatedTokenAddress(mint, owner, isPdaOwner);
-  const ix = createAssociatedTokenAccountIdempotentInstruction(
-    payer, ata, owner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+  const tokenProgram = await getTokenProgramForMint(connection, mint);
+
+  const ata = await getAssociatedTokenAddress(
+    mint,
+    owner,
+    isPdaOwner,
+    tokenProgram,
+    ASSOCIATED_TOKEN_PROGRAM_ID
   );
+
+  const ix = createAssociatedTokenAccountIdempotentInstruction(
+    payer,
+    ata,
+    owner,
+    mint,
+    tokenProgram,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+
   const tx = new Transaction().add(ix);
+  const { blockhash } = await connection.getLatestBlockhash('finalized');
   tx.feePayer = payer;
-  tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-  await sendTx(connection, wallet, tx); // idempotent => safe to always send
+  tx.recentBlockhash = blockhash;
+
+  await sendTx(connection, wallet, tx);
   return ata;
 }
+
 
 
 
@@ -507,19 +532,48 @@ async function pinFile(file: File): Promise<string> {
 
 
 // ───────── ATA (idempotent) builder: returns { ata, ix } — no send ─────────
+async function getTokenProgramForMint(conn: Connection, mint: PublicKey) {
+  const info = await conn.getAccountInfo(mint);
+
+  // ✅ If the mint doesn't exist yet (because we're about to create it in the same tx),
+  // assume it's a classic SPL Token mint.
+  if (!info) return TOKEN_PROGRAM_ID;
+
+  return info.owner.equals(TOKEN_2022_PROGRAM_ID)
+    ? TOKEN_2022_PROGRAM_ID
+    : TOKEN_PROGRAM_ID;
+}
+
+
 async function ensureAtaIx(
   owner: PublicKey,
   mint: PublicKey,
   payer: PublicKey,
   isPdaOwner = false
 ): Promise<{ ata: PublicKey; ix: TransactionInstruction }> {
-  const ata = await getAssociatedTokenAddress(mint, owner, isPdaOwner);
-  // idempotent = safe to include even if ATA already exists
-  const ix = createAssociatedTokenAccountIdempotentInstruction(
-    payer, ata, owner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+  // ✅ detect Tokenkeg vs Token-2022 based on mint owner
+  const tokenProgram = await getTokenProgramForMint(connection, mint);
+
+  const ata = await getAssociatedTokenAddress(
+    mint,
+    owner,
+    isPdaOwner,
+    tokenProgram,                 // ✅ important
+    ASSOCIATED_TOKEN_PROGRAM_ID
   );
+
+  const ix = createAssociatedTokenAccountIdempotentInstruction(
+    payer,
+    ata,
+    owner,
+    mint,
+    tokenProgram,                 // ✅ important
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+
   return { ata, ix };
 }
+
 
 // ───────── Mint creation builder: returns { mint, ixs, signers } — no send ─────────
 async function buildCreateMintIx(
@@ -1049,7 +1103,8 @@ function buildMetadataIx(
 ): TransactionInstruction {
   const mdPda = findMetadataPda(mint);
   return createCreateMetadataAccountV3Instruction(
-    { metadata: mdPda, mint, mintAuthority: payer, payer, updateAuthority: payer },
+    { metadata: mdPda, mint, mintAuthority: payer, payer, updateAuthority: payer, systemProgram: SystemProgram.programId, // ✅ add
+    rent: SYSVAR_RENT_PUBKEY, },
     {
       createMetadataAccountArgsV3: {
         data: { name, symbol, uri, sellerFeeBasisPoints: 0, creators: null, collection: null, uses: null },
@@ -1348,6 +1403,11 @@ if (payerBal < needNow) {
     const DEFAULT_P0_UI = Math.min(0.00000070, 0.95 * P1_UI);
     const p0Lamports = new BN(Math.floor(DEFAULT_P0_UI * 10 ** QUOTE_DECIMALS));
 
+    const poolInfo = await connection.getAccountInfo(POOL_PROGRAM_ID);
+console.log("POOL program exists?", !!poolInfo, "executable?", poolInfo?.executable);
+if (!poolInfo?.executable) throw new Error("POOL_PROGRAM_ID is not executable on this cluster. Wrong cluster or not deployed.");
+
+
 
     const initIx = await poolProgram.methods
   .initializeSoundMemeAndPool(p0Lamports, isBonding, new BN(threshold))
@@ -1587,7 +1647,8 @@ if (isAmm) {
 
 
     try {
-      await sendIxsOnce(connection, wallet, ixsPhase1, signersPhase1, { skipPreflight: true });
+      await sendIxsOnce(connection, wallet, ixsPhase1, signersPhase1, { skipPreflight: false });
+
 
 // keep modal open; next step will update it
 
@@ -2022,12 +2083,10 @@ return; // wait for user to click the CTA
   showStep(1, 1, "❌ Error", full);
   setStatus(`Error: ${msg}`);
 } finally {
-  // Make sure the flow can be started again even after success or error
   inFlight.current = false;
-
-  // If you added a `busy` state for UI disabling, also clear it:
-  // setBusy(false);
+  setBusy(false); // ✅ IMPORTANT: unlock UI + allow a second attempt
 }
+
 
 
 

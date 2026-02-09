@@ -9,7 +9,9 @@ import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountInstruction,
+  
 } from '@solana/spl-token';
+
 
 /* ────────────────────────────────────────────────────────────────────────────
    Program IDs & mints
@@ -111,6 +113,20 @@ export function getStakingProgram(provider: AnchorProvider) {
   return new Program(woodengStakingIdl as Idl, WOODENG_STAKING_PROGRAM_ID, provider);
 }
 
+export async function fetchConfig(connection: Connection, wallet: any) {
+  const provider = getProvider(connection, wallet);
+  const program  = getStakingProgram(provider);
+  const { config } = deriveVaultPdas(WOODENG_MINT);
+
+  const cfg: any = await (program.account as any).config.fetch(config);
+
+  const rewardsVaultWsol = new PublicKey(cfg.rewardsVaultWsol ?? cfg.rewards_vault_wsol);
+  const stakingVault     = new PublicKey(cfg.stakingVault ?? cfg.staking_vault);
+  const rewardsVault     = new PublicKey(cfg.rewardsVault ?? cfg.rewards_vault);
+
+  return { config, cfg, stakingVault, rewardsVault, rewardsVaultWsol };
+}
+
 /* ────────────────────────────────────────────────────────────────────────────
    PDA helpers (must match Rust program)
 ──────────────────────────────────────────────────────────────────────────── */
@@ -135,27 +151,24 @@ export function derivePositionPda(owner: PublicKey, config: PublicKey, modePda: 
 
 
 
-// AFTER
-export function deriveRewardsVaultWsolPda(config: PublicKey, wsolMint = WSOL_MINT) {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from(REWARD_V_WSOL_SEED), config.toBuffer(), wsolMint.toBuffer()],
-    WOODENG_STAKING_PROGRAM_ID
-  )[0];
-}
+
 
 export function deriveVaultPdas(woodengMint = WOODENG_MINT) {
   const config = deriveConfigPda(woodengMint);
+
   const stakingVault = PublicKey.findProgramAddressSync(
     [Buffer.from(STAKE_V_SEED), woodengMint.toBuffer()],
     WOODENG_STAKING_PROGRAM_ID
   )[0];
+
   const rewardsVault = PublicKey.findProgramAddressSync(
     [Buffer.from(REWARD_V_SEED), woodengMint.toBuffer()],
     WOODENG_STAKING_PROGRAM_ID
   )[0];
-  const rewardsVaultWsol = deriveRewardsVaultWsolPda(config, WSOL_MINT);
-  return { config, stakingVault, rewardsVault, rewardsVaultWsol };
+
+  return { config, stakingVault, rewardsVault };
 }
+
 
 
 export function deriveMarkerPda(user: PublicKey, config: PublicKey) {
@@ -210,55 +223,50 @@ export async function loadUserStaking(
   // accRewardPerShareWsol (instant indexed)
   let accWsol: bigint = 0n;
 
-  try {
+    try {
     const cfg: any = await (program.account as any).config.fetch(config);
-    accWsol = toBI(cfg.accRewardPerShareWsol ?? 0);
 
-    const rv = await connection.getTokenAccountBalance(rewardsVault).catch(() => null);
-    const rvLamports = rv?.value?.amount ? BigInt(rv.value.amount) : 0n;
-    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    // read balances
+    const [rvWood, rvWsol] = await Promise.all([
+      connection.getTokenAccountBalance(rewardsVault).catch(() => null),
+      (async () => {
+        // WSOL vault comes from config
+        const wsolVaultPk = new PublicKey(cfg.rewardsVaultWsol ?? cfg.rewards_vault_wsol);
+        return connection.getTokenAccountBalance(wsolVaultPk).catch(() => null);
+      })(),
+    ]);
 
-    const totalShares = toBI(cfg.totalShares);
-    let acc = toBI(cfg.accRewardPerShare);
+    const woodBal = rvWood?.value?.amount ? BigInt(rvWood.value.amount) : 0n;
+    const wsolBal = rvWsol?.value?.amount ? BigInt(rvWsol.value.amount) : 0n;
 
-    if (totalShares > 0n) {
-      // absorb_external_topups
-      let total = toBI(cfg.stream.total);
-      let released = toBI(cfg.stream.released);
-      let startTs = toBI(cfg.stream.startTs);
-      let endTs = toBI(cfg.stream.endTs);
-      let lastTs = toBI(cfg.stream.lastTs);
+    // normalize fields (IDL name can be camelCase or snake_case)
+    const totalShares = toBI(cfg.totalShares ?? cfg.total_shares ?? 0);
+    let accWood = toBI(cfg.accRewardPerShare ?? cfg.acc_reward_per_share ?? 0);
+    let accW    = toBI(cfg.accRewardPerShareWsol ?? cfg.acc_reward_per_share_wsol ?? 0);
 
-      const expectedRemaining = total > released ? total - released : 0n;
-      if (rvLamports > expectedRemaining) {
-        const delta = rvLamports - expectedRemaining;
-        total += delta;
-        startTs = nowSec;
-        endTs = nowSec + BigInt(cfg.streamDays) * SECS_PER_DAY_BI;
-        if (nowSec > lastTs) lastTs = nowSec;
-      }
+    // ✅ WOODENG checkpoint is cfg.stream.total (repurposed)
+    const woodCheckpoint = toBI(cfg.stream?.total ?? cfg.stream_total ?? 0);
 
-      // update_stream_to_now
-      if (total !== 0n && lastTs !== 0n) {
-        const t0 = lastTs > startTs ? lastTs : startTs;
-        const t1 = nowSec < endTs ? nowSec : endTs;
-        if (t1 > t0) {
-          const span = (endTs - startTs) > 0n ? (endTs - startTs) : 1n;
-          const newly = (total * (t1 - t0)) / span;
-          const already = released;
-          const capNew = already + newly <= total ? newly : total - already;
-          if (capNew > 0n) {
-            const addPerShare = (capNew * PREC_BI) / (totalShares > 0n ? totalShares : 1n);
-            acc += addPerShare;
-          }
-        }
-      }
+    if (totalShares > 0n && woodBal > woodCheckpoint) {
+      const delta = woodBal - woodCheckpoint;
+      accWood += (delta * PREC_BI) / totalShares;
     }
-    accPreview = acc;
+
+    // ✅ WSOL checkpoint is cfg.wsol_index_checkpoint
+    const wsolCheckpoint = toBI(cfg.wsolIndexCheckpoint ?? cfg.wsol_index_checkpoint ?? 0);
+
+    if (totalShares > 0n && wsolBal > wsolCheckpoint) {
+      const delta = wsolBal - wsolCheckpoint;
+      accW += (delta * PREC_BI) / totalShares;
+    }
+
+    accPreview = accWood;
+    accWsol    = accW;
   } catch {
     accPreview = 0n;
     accWsol = 0n;
   }
+
 
   const modes: Array<{ mSeed: 0 | 3 | 6 | 12; type: StakingMode; lock?: LockMonths }> = [
     { mSeed: 0, type: 'flexible' },
@@ -316,7 +324,8 @@ export async function loadGlobalStats(connection: Connection, wallet: any): Prom
   try {
     const provider = getProvider(connection, wallet);
     const program = getStakingProgram(provider);
-    const { config, rewardsVault, rewardsVaultWsol } = deriveVaultPdas(WOODENG_MINT);
+    const { config, rewardsVault, rewardsVaultWsol } = await fetchConfig(connection, wallet);
+
 
     const [rvWood, rvWsol] = await Promise.all([
       connection.getTokenAccountBalance(rewardsVault).catch(() => null),
@@ -431,14 +440,15 @@ export async function initializeIfNeeded(
   streamDays = 14
 ) {
   const provider = getProvider(connection, wallet);
-  const program = getStakingProgram(provider);
-  const { config, stakingVault, rewardsVault, rewardsVaultWsol } = deriveVaultPdas(WOODENG_MINT);
+  const program  = getStakingProgram(provider);
   const authority = provider.wallet.publicKey;
+
+  // ✅ derive PDAs without fetching config (fetch would throw if config doesn't exist)
+  const { config, stakingVault, rewardsVault } = deriveVaultPdas(WOODENG_MINT);
 
   const configInfo = await connection.getAccountInfo(config);
 
   if (!configInfo) {
-    // Brand new init: initializeConfig
     const builder = program.methods
       .initializeConfig(flexiblePenaltyBps, minFlexDays, streamDays)
       .accounts({
@@ -455,30 +465,12 @@ export async function initializeIfNeeded(
     await sendBuilder(connection, wallet, authority, builder);
   }
 
-  // Ensure Modes
+  // ✅ Ensure mode PDAs exist
   await initModesIfNeeded(connection, wallet);
-
-  // Ensure WSOL rewards vault
-  {
-    const wsolVaultInfo = await connection.getAccountInfo(rewardsVaultWsol);
-    if (!wsolVaultInfo) {
-      const builder = program.methods
-        .initWsolVaultIfNeeded()
-        .accounts({
-          config,
-          authority,
-          wsolMint: WSOL_MINT,
-          rewardsVaultWsol,
-          systemProgram: SystemProgram.programId,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          rent: SYSVAR_RENT_PUBKEY,
-        });
-      await sendBuilder(connection, wallet, authority, builder);
-    }
-  }
 
   return 'ok';
 }
+
 
 /* ────────────────────────────────────────────────────────────────────────────
    User actions
@@ -520,7 +512,8 @@ export async function stake(
 ) {
   const provider = getProvider(connection, wallet);
   const program = getStakingProgram(provider);
-  const { config, stakingVault, rewardsVault, rewardsVaultWsol } = deriveVaultPdas(WOODENG_MINT);
+  const { config, stakingVault, rewardsVault, rewardsVaultWsol } = await fetchConfig(connection, wallet);
+
 
   if (!wallet?.publicKey || !wallet.publicKey.equals(ownerPk)) {
     throw new Error('wallet.publicKey must equal ownerPk');
@@ -582,7 +575,8 @@ export async function unstake(
 ) {
   const provider = getProvider(connection, wallet);
   const program = getStakingProgram(provider);
-  const { config, stakingVault, rewardsVault, rewardsVaultWsol } = deriveVaultPdas(WOODENG_MINT);
+  const { config, stakingVault, rewardsVault, rewardsVaultWsol } = await fetchConfig(connection, wallet);
+;
 
   const seedByte = pool.type === 'flexible' ? 0 : pool.lockPeriod === 3 ? 3 : pool.lockPeriod === 6 ? 6 : 12;
   const modePda = deriveModePda(config, seedByte as 0 | 3 | 6 | 12);
@@ -617,7 +611,8 @@ export async function unstake(
 export async function claim(connection: Connection, wallet: any, ownerPk: PublicKey, pool?: StakingPool) {
   const provider = getProvider(connection, wallet);
   const program = getStakingProgram(provider);
-  const { config, rewardsVault, rewardsVaultWsol } = deriveVaultPdas(WOODENG_MINT);
+  const { config, rewardsVault, rewardsVaultWsol, cfg } = await fetchConfig(connection, wallet);
+
 
   const { ata: userAta, ix: createUserWoodeng } = await maybeCreateAtaIx(connection, ownerPk, ownerPk, WOODENG_MINT);
   const { ata: userWsolAta, ix: createUserWsol } = await maybeCreateAtaIx(connection, ownerPk, ownerPk, WSOL_MINT);
@@ -716,4 +711,70 @@ export async function setParams(
     .accounts({ config, authority });
 
   return builder.rpc({ commitment: 'confirmed' });
+
+
+
+}
+
+
+export async function setWsolVault(
+  connection: Connection,
+  wallet: any,
+  existingWsolVault: PublicKey
+) {
+  const provider = getProvider(connection, wallet);
+  const program  = getStakingProgram(provider);
+  const { config } = deriveVaultPdas(WOODENG_MINT);
+  const authority = provider.wallet.publicKey;
+
+  const builder = program.methods
+    .setWsolVault()
+    .accounts({
+      config,
+      authority,
+      rewardsVaultWsol: existingWsolVault,
+    });
+
+  return sendBuilder(connection, wallet, authority, builder);
+}
+
+export async function sanitizeWsolIndex(connection: Connection, wallet: any) {
+  const provider = getProvider(connection, wallet);
+  const program  = getStakingProgram(provider);
+  const authority = provider.wallet.publicKey;
+
+  const { rewardsVaultWsol } = await fetchConfig(connection, wallet);
+
+  const builder = program.methods
+    .sanitizeWsolIndex()
+    .accounts({
+      config: deriveConfigPda(WOODENG_MINT),
+      authority,
+      rewardsVaultWsol,
+    });
+
+  return sendBuilder(connection, wallet, authority, builder);
+}
+
+// ⬇️ ADD THIS DIRECTLY AFTER setParams
+
+// Admin: snap WOODENG index + stream to the real rewards vault balance
+export async function sanitizeWoodengIndex(
+  connection: Connection,
+  wallet: any,
+) {
+  const provider = getProvider(connection, wallet);
+  const program  = getStakingProgram(provider);
+  const { config, rewardsVault } = deriveVaultPdas(WOODENG_MINT);
+  const authority = provider.wallet.publicKey;
+
+  const builder = program.methods
+    .sanitizeWoodengIndex() // Rust: sanitize_woodeng_index
+    .accounts({
+      config,
+      authority,
+      rewardsVault,
+    });
+
+  return sendBuilder(connection, wallet, authority, builder);
 }

@@ -1,6 +1,9 @@
 import React from "react"
 import { AnimatedWelcomeText } from "./AnimatedWelcomeText"
 import { Container } from "./Container"
+import Link from "next/link"
+import { ArrowRight, Music2 } from "lucide-react"
+
 
 export function HeroSection() {
   return (
@@ -44,11 +47,46 @@ export function HeroSection() {
             <div className="w-full md:w-3/6">
               <AnimatedWelcomeText
                 text="Introducing Solana World Library : 
-                Tokenized Metadada & Sound Memes are the new Sound Money"
+                Tokenized Metadata & Sound Memes are the new Sound Money"
                 className="text-[1.1rem] md:text-[1.6rem] font-bold text-primary leading-snug text-center md:text-left"
                 waveDelay={0.17}
                 waveClassName="text-[#b89fff] font-bold"
               />
+              {/* CTA (high-converting) */}
+<div className="mt-7 flex items-center gap-3 justify-center md:justify-start">
+  <Link
+    href="/sound-memes"
+    aria-label="Trade Sound Memes now"
+    className="group relative inline-flex items-center gap-3 rounded-full
+               px-6 py-3.5 text-[0.98rem] font-semibold
+               text-white focus:outline-none
+               bg-gradient-to-r from-[#5c3bff] via-[#8a5bff] to-[#b17cff]
+               shadow-[0_10px_30px_-10px_rgba(137,90,255,0.65)]
+               ring-1 ring-white/10 hover:ring-white/20
+               transition-all duration-200 ease-out
+               hover:scale-[1.03] active:scale-[0.99]"
+  >
+    {/* live dot */}
+    <span className="relative flex items-center">
+      <span className="absolute -left-2 -top-2 h-3 w-3 rounded-full bg-emerald-400/70 animate-ping"></span>
+      <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_0_2px_rgba(0,0,0,0.35)]"></span>
+    </span>
+
+    
+    <span className="whitespace-nowrap">Trade Sound Memes Now</span>
+
+    <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[0.72rem] font-medium">
+      Live
+    </span>
+
+    <ArrowRight className="w-4 h-4 translate-x-0 transition-transform duration-200 group-hover:translate-x-0.5" />
+
+    {/* subtle glow on hover */}
+    <span className="pointer-events-none absolute inset-0 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200
+                     shadow-[0_0_0_4px_rgba(255,255,255,0.06),0_20px_60px_-20px_rgba(177,124,255,0.65)]"></span>
+  </Link>
+</div>
+
             </div>
           </div>
         </div>

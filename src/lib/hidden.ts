@@ -3,6 +3,7 @@ export const HIDDEN_SOUND_MEMES_LIST: string[] = [
   'FWpLqRiWk8egYjPfscnmpGxPKMqZcxHhASHrfMLDawoo',
   'J7gVKZQFiFGt5XBkWgZ6anHex978Chemp551yVvuMwoo',
   '8GhRMWqLVo1LtDRmFrgnjviZqDoPG74KiusHL4VTPwoo', // broken test
+  'G7rFNzj8jdVbq3NamfiHtj9xZk2yJGsYpmVXKQJX6woo'
 ];
 
 // (optional helpers still available if other places rely on them)

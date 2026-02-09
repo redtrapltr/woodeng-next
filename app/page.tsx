@@ -58,6 +58,7 @@ type PanelItem = {
   price: number;
   market_cap: number;
   change_24h?: number;
+  quote_symbol?: string; // <-- add
 };
 
 function MCard({ item }: { item: PanelItem }) {
@@ -79,16 +80,20 @@ function MCard({ item }: { item: PanelItem }) {
           <span className="text-xs bg-[#2b323c] px-2 py-0.5 rounded">{item.symbol}</span>
         </div>
         <div className="mt-1 text-sm">
-          <span className="font-semibold text-[#ffc371]">
-            {Number(item.price || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}
-          </span>
-          <span className="text-[#ffc371]/80 ml-1">WOODENG</span>
-        </div>
-        {Number.isFinite(item.market_cap) && (
-          <div className="text-xs text-[#adb] mt-1">
-            MCAP: {Number(item.market_cap).toLocaleString(undefined, { maximumFractionDigits: 2 })} WOODENG
-          </div>
-        )}
+  <span className="font-semibold text-[#ffc371]">
+    {Number(item.price || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}
+  </span>
+  <span className="text-[#ffc371]/80 ml-1">{item.quote_symbol || "WOODENG"}</span>
+</div>
+
+{Number.isFinite(item.market_cap) && (
+  <div className="text-xs text-[#adb] mt-1">
+    MCAP:&nbsp;
+    {Number(item.market_cap).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
+    {item.quote_symbol || "WOODENG"}
+  </div>
+)}
+
         <div
           className={`text-xs mt-1 inline-block px-2 py-0.5 rounded ${
             hasChg ? (up ? "bg-green-600/20 text-green-300" : "bg-red-600/20 text-red-300")
@@ -134,15 +139,17 @@ function Home() {
         const pickImg = (x: any) =>
           toHttp(x.image || x.imageUrl || x.logo || x.thumbnail || x.metadata?.image || x.image_uri);
         const normalize = (arr: any[] = []): PanelItem[] =>
-          arr.map((x) => ({
-            mint: x.mint,
-            name: x.name,
-            symbol: x.symbol,
-            image: pickImg(x),
-            price: Number(x.price ?? x.last_price ?? 0),
-            market_cap: Number(x.market_cap ?? x.marketCap ?? 0),
-            change_24h: Number(x.change_24h ?? x.change24h ?? x.pct_change_24h ?? 0),
-          }));
+  arr.map((x) => ({
+    mint: x.mint,
+    name: x.name,
+    symbol: x.symbol,
+    image: pickImg(x),
+    price: Number(x.price ?? x.last_price ?? 0),
+    market_cap: Number(x.market_cap ?? x.marketCap ?? 0),
+    change_24h: Number(x.change_24h ?? x.change24h ?? x.pct_change_24h ?? 0),
+    quote_symbol: x.quote_symbol || x.quoteSymbol || x.quote?.symbol || "WOODENG", // <-- here
+  }));
+
         if (!mounted) return;
         setTrending(normalize(j.trending));
         setRecent(normalize(j.recentlyAdded));

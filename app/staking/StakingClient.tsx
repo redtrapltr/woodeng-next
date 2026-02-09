@@ -30,6 +30,9 @@ import {
   getProvider,
   getStakingProgram,
   deriveModePda,
+  setWsolVault,
+sanitizeWsolIndex,
+
 } from '@/lib/staking';
 
 import { PublicKey, Connection } from '@solana/web3.js';
@@ -224,7 +227,8 @@ useEffect(() => {
         woodengMint: new PublicKey(cfg.woodengMint).toBase58(),
         stakingVault: new PublicKey(cfg.stakingVault).toBase58(),
         rewardsVault: new PublicKey(cfg.rewardsVault).toBase58(),
-        rewardsVaultWsol: new PublicKey(cfg.rewardsVaultWsol).toBase58(),
+        rewardsVaultWsol: new PublicKey(cfg.rewardsVaultWsol ?? cfg.rewards_vault_wsol).toBase58(),
+
         // 👇 key penalty settings to verify
         flexible_penalty_bps: cfg.flexiblePenaltyBps,
         min_flex_days:        cfg.minFlexDays,
@@ -559,7 +563,7 @@ const confirmIfPossible = async (sig?: string) => {
 
   setIsProcessing(true);
   try {
-    await claimTx(connection, wallet, publicKey); // per-mode claims can loop inside your SDK if needed
+    const res = await claimTx(connection, wallet, publicKey);
 
     // refresh from chain
     const [pools, stats] = await Promise.all([
@@ -569,17 +573,37 @@ const confirmIfPossible = async (sig?: string) => {
     setStakingPools(pools);
     setGlobalStats(stats);
 
-    setTransactionStatus('success');
-    setTransactionMessage('Successfully claimed rewards!');
+    // compute pending after refresh (so we can show correct UX text)
+    const pendingAfter = pools.reduce(
+      (sum, p) => ({
+        woodeng: sum.woodeng + (p.pendingRewards?.woodeng ?? 0),
+        sol: sum.sol + (p.pendingRewards?.sol ?? 0),
+      }),
+      { woodeng: 0, sol: 0 }
+    );
+    const hasRewardsAfter = pendingAfter.woodeng > 0 || pendingAfter.sol > 0;
+
+    if (res === 'no-positions-to-claim') {
+      setTransactionStatus('error');
+      setTransactionMessage('No staking positions found to claim from.');
+    } else if (hasRewardsAfter) {
+      setTransactionStatus('success');
+      setTransactionMessage('Successfully claimed rewards!');
+    } else {
+      // This is the important case for legacy wallets: claim may have synced debt but paid 0
+      setTransactionStatus('success');
+      setTransactionMessage('Position synced. If you had an old stake, click again after new rewards arrive.');
+    }
   } catch (e) {
     console.error(e);
     setTransactionStatus('error');
-    setTransactionMessage('Failed to claim rewards. Please try again.');
+    setTransactionMessage('Failed to claim/sync. Please try again.');
   } finally {
     setIsProcessing(false);
     setTimeout(() => setTransactionStatus('idle'), 3000);
   }
 };
+
 
 
   /* ───────────────────────── UI ───────────────────────── */
@@ -784,28 +808,38 @@ const confirmIfPossible = async (sig?: string) => {
           </div>
         </div>
 
-        {/* Claim Rewards */}
-{!loadingPools && (totalPendingRewards.woodeng > 0 || totalPendingRewards.sol > 0) && (
-  <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 mb-6">
+       {/* Claim / Sync Rewards (also used to sync legacy positions) */}
+{!loadingPools && stakingPools.length > 0 && (() => {
+  const hasRewards = totalPendingRewards.woodeng > 0 || totalPendingRewards.sol > 0;
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h3 className="font-medium text-primary">Rewards Available</h3>
-                <p className="text-sm text-muted-foreground">Claim your staking rewards</p>
-              </div>
-              <div className="flex">
-  <button
-    onClick={handleClaimAll}
-    disabled={isProcessing}
-    className="px-3 py-1.5 md:px-4 md:py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 text-sm md:text-base"
-  >
-    Claim All Rewards
-  </button>
-</div>
+  return (
+    <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h3 className="font-medium text-primary">
+            {hasRewards ? 'Rewards Available' : 'Sync staking position'}
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            {hasRewards
+              ? 'Claim your staking rewards'
+              : 'If you staked before the fix, click once to sync your position. Click again later to claim when new rewards arrive.'}
+          </p>
+        </div>
 
-            </div>
-          </div>
-        )}
+        <div className="flex">
+          <button
+            onClick={handleClaimAll}
+            disabled={isProcessing}
+            className="px-3 py-1.5 md:px-4 md:py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 text-sm md:text-base"
+          >
+            {isProcessing ? 'Processing…' : (hasRewards ? 'Claim All Rewards' : 'Sync / Claim')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+})()}
+
 
         {/* Staking Pools */}
         <div className="space-y-4">
@@ -1207,6 +1241,87 @@ const confirmIfPossible = async (sig?: string) => {
 >
   Apply penalty: 10% / 30 days
 </button>
+
+           {isAuthority && (
+  <div className="flex flex-wrap items-center gap-2">
+    <button
+      onClick={async () => {
+        setIsProcessing(true);
+        try {
+          const { sanitizeWoodengIndex } = await import('@/lib/staking');
+          await sanitizeWoodengIndex(connection, wallet);
+          await refreshAll();
+          setTransactionStatus('success');
+          setTransactionMessage('Rebased WOODENG rewards to vault balance.');
+        } catch (e: any) {
+          console.error(e);
+          setTransactionStatus('error');
+          setTransactionMessage(e.message || 'sanitizeWoodengIndex failed.');
+        } finally {
+          setIsProcessing(false);
+          setTimeout(() => setTransactionStatus('idle'), 3000);
+        }
+      }}
+      disabled={isProcessing}
+      className="px-4 py-2 rounded-lg bg-sky-500 text-black hover:bg-sky-400 disabled:opacity-50"
+    >
+      Rebase WOODENG rewards (admin)
+    </button>
+
+    <button
+      onClick={async () => {
+        setIsProcessing(true);
+        try {
+          await setWsolVault(
+            connection,
+            wallet,
+            new PublicKey('HcWV8aYv7ixaXzK9ZfQddCJdNt1TVDfFQmTkjCLx75Jh')
+          );
+          await refreshAll();
+          setTransactionStatus('success');
+          setTransactionMessage('WSOL vault set to existing fees vault ✅');
+        } catch (e: any) {
+          console.error(e);
+          setTransactionStatus('error');
+          setTransactionMessage(e.message || 'setWsolVault failed.');
+        } finally {
+          setIsProcessing(false);
+          setTimeout(() => setTransactionStatus('idle'), 3000);
+        }
+      }}
+      disabled={isProcessing}
+      className="px-4 py-2 rounded-lg bg-violet-500 text-black hover:bg-violet-400 disabled:opacity-50"
+    >
+      Set WSOL vault (one-time)
+    </button>
+
+    <button
+      onClick={async () => {
+        setIsProcessing(true);
+        try {
+          await sanitizeWsolIndex(connection, wallet);
+          await refreshAll();
+          setTransactionStatus('success');
+          setTransactionMessage('Rebased WSOL index to vault balance ✅');
+        } catch (e: any) {
+          console.error(e);
+          setTransactionStatus('error');
+          setTransactionMessage(e.message || 'sanitizeWsolIndex failed.');
+        } finally {
+          setIsProcessing(false);
+          setTimeout(() => setTransactionStatus('idle'), 3000);
+        }
+      }}
+      disabled={isProcessing}
+      className="px-4 py-2 rounded-lg bg-fuchsia-500 text-black hover:bg-fuchsia-400 disabled:opacity-50"
+    >
+      Rebase WSOL index (admin)
+    </button>
+  </div>
+)}
+
+                
+
 
           </div>
         </div>

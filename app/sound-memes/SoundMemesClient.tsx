@@ -91,6 +91,7 @@ const HIDDEN_POOLS = new Set<string>([
   'FWpLqRiWk8egYjPfscnmpGxPKMqZcxHhASHrfMLDawoo',
   'J7gVKZQFiFGt5XBkWgZ6anHex978Chemp551yVvuMwoo',
   '8GhRMWqLVo1LtDRmFrgnjviZqDoPG74KiusHL4VTPwoo', // bad/legacy pool
+  'G7rFNzj8jdVbq3NamfiHtj9xZk2yJGsYpmVXKQJX6woo'
 ]);
 
 
@@ -297,6 +298,10 @@ function MiniVerticalCard({
   active?: boolean;
 }) {
   const up = change24h >= 0;
+  const [copiedAddr, setCopiedAddr] = React.useState<string | null>(null);
+
+  const [copiedLocal, setCopiedLocal] = React.useState(false);
+
   
 
   // Allow sells on both bonding + AMM. We'll warn on bonding.
@@ -326,7 +331,8 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
   className="snap-center w-full h-full min-h-0 text-left
           bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl
           overflow-hidden flex flex-col
-          active:scale-[0.995]"
+          active:scale-[0.995]
+          relative isolate" 
 
 >
   {/* header ABOVE the image */}
@@ -363,8 +369,16 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
     />
 
     {/* rank + ticker chips */}
-    <div className="absolute top-2 left-2 text-[11px] bg-black/60 px-2 py-0.5 rounded">{`#${rank}`}</div>
-    <div className="absolute top-2 right-2 text-[11px] bg-black/60 px-2 py-0.5 rounded">{pool.symbol ?? 'MEME'}</div>
+    <div
+  className="absolute top-2 right-2 max-w-[48%] bg-black/60 px-2 py-0.5 rounded
+             text-[10px] sm:text-[11px] leading-tight whitespace-nowrap overflow-hidden truncate
+             uppercase z-20 pointer-events-none"
+  title={pool.symbol ?? 'MEME'}
+>
+  {pool.symbol ?? 'MEME'}
+</div>
+
+
 
     {/* play/pause center button */}
     {pool.audioUrl && (
@@ -379,6 +393,40 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
         </span>
       </button>
     )}
+    {/* contract chip + copy (bottom-left) */}
+<div
+  className="absolute bottom-1.5 left-1.5 flex items-center gap-0.5
+             bg-black/55 backdrop-blur
+             px-1 py-[2px] md:px-2 md:py-1
+             rounded-[6px] ring-1 ring-white/10
+             text-[9px] md:text-[11px] leading-none select-text"
+  onClick={(e) => e.stopPropagation()}
+>
+  <span className="font-mono">
+    {/* tighter short address on mobile (3…3), normal on md+ (4…4) */}
+    <span className="md:hidden">{shortAddr(pool.memeMint.toBase58(), 3)}</span>
+    <span className="hidden md:inline">{shortAddr(pool.memeMint.toBase58(), 4)}</span>
+  </span>
+
+  <button
+    type="button"
+    className="p-0.5 md:p-1 rounded hover:bg-white/10"
+    title="Copy contract address"
+    onClick={(e) => {
+      e.stopPropagation();
+      try { navigator.clipboard.writeText(pool.memeMint.toBase58()); } catch {}
+      setCopiedLocal(true);
+      setTimeout(() => setCopiedLocal(false), 1200);
+    }}
+  >
+    {copiedLocal
+      ? <CheckCircle2 className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" />
+      : <Copy         className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" />}
+  </button>
+</div>
+
+
+
   </div>
 
 
@@ -435,7 +483,7 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
 {/* Sticky actions footer */}
 <div
   className="
-    sticky bottom-0 left-0 right-0 z-10 -mx-5 px-5
+    sticky bottom-0 left-0 right-0 z-20 -mx-5 px-5
     pt-2 pb-[max(env(safe-area-inset-bottom),12px)]
     bg-gradient-to-t from-[#22232a] to-[#22232a]/0
     backdrop-blur-[2px]
@@ -977,35 +1025,44 @@ type SignerWallet = {
   signAllTransactions: (txs: Transaction[]) => Promise<Transaction[]>;
 };
 
-// replace your sendIxsOnce with this version
 async function sendIxsOnce(
   connection: Connection,
   wallet: SignerWallet,
   ixs: TransactionInstruction[],
   signers: Keypair[] = [],
-  { skipPreflight = true }: { skipPreflight?: boolean } = {} // <-- default true
+  { skipPreflight = false } = {}
 ) {
   const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash('finalized');
+  await connection.getLatestBlockhash("confirmed");
+
 
   const tx = new Transaction().add(...ixs);
   tx.feePayer = wallet.publicKey;
   tx.recentBlockhash = blockhash;
-  if (signers.length) tx.partialSign(...signers);
 
+  // ✅ Phantom signs FIRST
   const signed = await wallet.signTransaction(tx);
+
+  // ✅ Additional signers sign AFTER
+  if (signers.length) signed.partialSign(...signers);
 
   // expected signature even if sendRawTransaction throws
   const expectedSig = bs58.encode(signed.signatures[0].signature as Buffer);
 
   try {
-    const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight });
-    await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+    const sig = await connection.sendRawTransaction(signed.serialize(), {
+  skipPreflight,
+  preflightCommitment: "confirmed",
+});
+
+    await connection.confirmTransaction(
+      { signature: sig, blockhash, lastValidBlockHeight },
+      'confirmed'
+    );
     return sig;
   } catch (e: any) {
     const msg = (e?.message ?? String(e)).toLowerCase();
 
-    // if RPC claims it's already processed / duplicate, try confirming our expected sig
     if (expectedSig && /already been processed|duplicate signature/.test(msg)) {
       const start = Date.now();
       while (Date.now() - start < 20_000) {
@@ -1016,7 +1073,6 @@ async function sendIxsOnce(
       }
     }
 
-    // enrich SendTransactionError with logs
     if (e instanceof SendTransactionError) {
       const logs = await e.getLogs(connection).catch(() => null);
       throw new Error(logs && logs.length ? `${e.message}\n${logs.join('\n')}` : e.message);
@@ -1024,6 +1080,7 @@ async function sendIxsOnce(
     throw e;
   }
 }
+
 
 
 
@@ -4805,7 +4862,7 @@ const chgUp = chg >= 0;
           >
           
             {/* IMAGE + Overlay */}
-<div className="relative aspect-square w-full overflow-hidden rounded-t-2xl">
+<div className="relative aspect-square w-full overflow-hidden rounded-t-2xl isolate">
   {pool.hydrated && pool.imageUrl ? (
     <img
       src={pool.imageUrl}
@@ -4867,24 +4924,27 @@ const chgUp = chg >= 0;
             
 
             {/* Main Card Info */}
-            <div className="flex flex-col flex-1 p-4">
+            <div className="flex flex-col flex-1 p-4 min-w-0">
+
               
               {/* Name (front page) */}
-<div className="flex items-center justify-between">
-  <h3 className="text-base font-semibold truncate" title={pool.name ?? ""}>
+<div className="flex items-center justify-between min-w-0">
+  <h3 className="text-base font-semibold truncate min-w-0" title={pool.name ?? ""}>
+
     {pool.name ?? "Untitled Meme"}
   </h3>
 </div>
 
 {/* Description */}
-<div className="text-[#c2c2c9] text-sm mt-1 line-clamp-2">
+<div className="text-[#c2c2c9] text-sm mt-1 line-clamp-2 break-words [overflow-wrap:anywhere] hyphens-manual">
+
   {pool.description || "No description"}
 </div>
 
               <SocialLinksBar socials={pool.socials} className="mt-2" />
                <div className="mt-3 flex items-center gap-3 min-w-0">
   {/* left side can shrink & truncate */}
-  <div className="flex items-baseline gap-2 min-w-0 overflow-hidden">
+  <div className="flex items-baseline gap-2 min-w-0 overflow-hidden flex-1">
     <span className="truncate max-w-[140px] sm:max-w-[180px]">
       <TinyPrice
         value={latestPriceOf(pool.memeMint.toBase58())}
@@ -4896,7 +4956,8 @@ const chgUp = chg >= 0;
 
   {/* right side never wraps or shrinks */}
   <div className="ml-auto flex items-center gap-2 shrink-0">
-    <span className="text-xs bg-[#2b323c] px-2 py-[2px] rounded leading-none whitespace-nowrap">
+    <span className="text-xs bg-[#2b323c] px-2 py-[2px] rounded leading-none
+                  whitespace-nowrap truncate max-w-[120px] shrink-0">
       {pool.symbol || "MEME"}
     </span>
     {/* gated badge */}
@@ -5728,27 +5789,39 @@ const basePct = (closed && Number.isFinite(closed.o) && Math.abs(closed.o) > EPS
         <button className="absolute top-4 right-4" onClick={() => setShowDetail(false)}><X /></button>
 
         {/* header */}
-        <div className="flex items-center gap-5 mb-4">
-          <img
-            src={detailPool.imageUrl}
-            alt={detailPool.name || 'meme'}
-            className="w-20 h-20 rounded-xl"
-            loading="lazy"
-            decoding="async"
-            sizes="(max-width: 480px) 80px, 96px"
-          />
-          <div>
-            <h2 className="text-2xl font-bold mb-1">{detailPool.name}</h2>
-            <div className="text-sm text-[#aab]">{detailPool.description}</div>
-            <SocialLinksBar socials={detailPool.socials} className="mt-2" />
-            <div className="flex items-center gap-2 mt-2">
-              <span className="text-[#ffc371] font-bold">
-                <TinyPrice value={Number(detailPool.price ?? 0)} /> {quoteLabelOf(detailPool)}
-              </span>
-              <span className="bg-[#2b323c] text-xs px-2 py-1 rounded">{detailPool.symbol}</span>
-            </div>
-          </div>
-        </div>
+        <div className="flex gap-5 mb-4 items-start flex-wrap">
+  <img
+    src={detailPool.imageUrl}
+    alt={detailPool.name || 'meme'}
+    className="w-20 h-20 rounded-xl shrink-0"
+    loading="lazy"
+    decoding="async"
+    sizes="(max-width: 480px) 80px, 96px"
+  />
+  <div className="min-w-0 flex-1">
+    <h2 className="text-2xl font-bold mb-1 truncate" title={detailPool.name || ''}>
+      {detailPool.name}
+    </h2>
+    <div className="text-sm text-[#aab] leading-snug break-words">
+      {detailPool.description}
+    </div>
+
+    <SocialLinksBar
+      socials={detailPool.socials}
+      className="mt-2 flex flex-wrap gap-2"
+    />
+
+    <div className="flex items-center gap-2 mt-2">
+      <span className="text-[#ffc371] font-bold whitespace-nowrap">
+        <TinyPrice value={Number(detailPool.price ?? 0)} /> {quoteLabelOf(detailPool)}
+      </span>
+      <span className="bg-[#2b323c] text-xs px-2 py-1 rounded whitespace-nowrap">
+        {detailPool.symbol}
+      </span>
+    </div>
+  </div>
+</div>
+
 
         {/* timeframe buttons */}
         <div className="flex gap-2 mt-4 mb-2">
