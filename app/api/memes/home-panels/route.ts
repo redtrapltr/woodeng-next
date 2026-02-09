@@ -28,26 +28,28 @@ const toHttp = (url?: string, absolute = false) => {
   return url;
 };
 
+const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
 
 
 /* ---------- env / cluster ---------- */
-const RPC_URL =
-  process.env.RPC_URL ||
-  process.env.SOLANA_RPC ||
-  process.env.NEXT_PUBLIC_SOLANA_RPC ||
-  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
-  "";
+function getRpcConfig() {
+  const rpc =
+    process.env.RPC_URL ||
+    process.env.SOLANA_RPC ||
+    process.env.NEXT_PUBLIC_SOLANA_RPC ||
+    process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
+    "";
 
-if (!RPC_URL) {
-  throw new Error(
-    "Missing RPC_URL / SOLANA_RPC / NEXT_PUBLIC_SOLANA_RPC / NEXT_PUBLIC_HELIUS_RPC_URL"
-  );
+  const cluster =
+    process.env.SOLANA_CLUSTER ||
+    (rpc.toLowerCase().includes("devnet")
+      ? "devnet"
+      : rpc.toLowerCase().includes("testnet")
+      ? "testnet"
+      : "mainnet-beta");
+
+  return { rpc, cluster };
 }
-
-const SOLANA_CLUSTER =
-  process.env.SOLANA_CLUSTER ||
-  (RPC_URL.toLowerCase().includes("devnet") ? "devnet" :
-   RPC_URL.toLowerCase().includes("testnet") ? "testnet" : "mainnet-beta");
 
 
 
@@ -56,6 +58,11 @@ const POOL_PROGRAM_ID = new PublicKey("8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugE
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 const QUOTE_DECIMALS = 9; // WOODENG / SOL
 const CONFIG_VERSION = 17;
+
+// targets must match the on-chain constants
+const TARGET_PRICE_LAMPORTS_SOL = 44 * 10 ** QUOTE_DECIMALS;        // 44 SOL
+const TARGET_PRICE_LAMPORTS_WOODENG = 4_444_444 * 10 ** QUOTE_DECIMALS; // 4,444,444 WOODENG
+
 
 /* ---------- helpers ---------- */
 const clean = (s?: string) =>
@@ -78,15 +85,24 @@ async function getMultiple(conn: Connection, keys: PublicKey[], chunk = 100) {
 }
 
 /** Bonding-curve spot price (matches client math) */
-function bondingSpotPrice(cfg: { vtokens: number; vwoodeng: number; bondingSold: number }) {
-  const { vtokens, vwoodeng, bondingSold } = cfg;
+/** Bonding-curve spot price in *quote* units (works for WOODENG or WSOL). */
+function bondingSpotPrice(cfg: {
+  vtokens: number;
+  vwoodeng: number;  // virtual quote (WOODENG or WSOL)
+  bondingSold: number;
+  targetLamports: number; // target price at threshold (depends on quote mint)
+}) {
+  const { vtokens, vwoodeng, bondingSold, targetLamports } = cfg;
   if (!vtokens || !vwoodeng) return NaN;
-  const thresholdRaw = 44_000_000; // raw tokens to migration on curve
-  const goalLamports = 35 * 10 ** QUOTE_DECIMALS; // migration threshold in lamports
-  const p0 = vwoodeng / vtokens;
-  const k = Math.log(goalLamports / p0) / thresholdRaw;
+
+  const thresholdRaw = 44_000_000; // raw tokens to migration/threshold
+  const p0 = vwoodeng / vtokens;   // initial quote per raw token
+  const k = Math.log(targetLamports / p0) / thresholdRaw;
+
+  // return UI units of the quote (both WOODENG & WSOL have 9 decimals)
   return (p0 * Math.exp(k * bondingSold)) / 10 ** QUOTE_DECIMALS;
 }
+
 
 type PoolLite = {
   mint: string;
@@ -99,8 +115,9 @@ type PoolLite = {
 };
 
 /** Pull all pools: config + token vaults + token metadata json */
-async function fetchPools(): Promise<PoolLite[]> {
-  const connection = new Connection(RPC_URL, "confirmed");
+async function fetchPools(rpcUrl: string): Promise<PoolLite[]> {
+  const connection = new Connection(rpcUrl, "confirmed");
+
   const dummy = { publicKey: new PublicKey("11111111111111111111111111111111") } as any;
   const provider = new AnchorProvider(connection, dummy, { commitment: "confirmed" });
   const program = new Program(poolIdlJson as Idl, POOL_PROGRAM_ID, provider);
@@ -267,15 +284,31 @@ const jsons = await Promise.all(
     const m = chain[i];
     const j = jsons[i] || {};
 
+
+
+// Quote = WOODENG or WSOL, read directly from config.woodengMint
+const quoteMint = new PublicKey(cfg.data.woodengMint);
+const quote_symbol = quoteMint.equals(WSOL_MINT) ? "SOL" : "WOODENG";
+
+
+
+
     // Price from chain
     let price = Number.NaN;
     if (poolType === 0) {
-      price = bondingSpotPrice({
-        vtokens: Number(cfg.data.vtokens ?? 0),
-        vwoodeng: Number(cfg.data.vwoodeng ?? 0),
-        bondingSold: Number(cfg.data.bondingSold ?? 0),
-      });
-    } else if (m.memeReserveRaw > 0 && m.woodReserveLamports > 0) {
+  const targetLamports =
+    quote_symbol === "SOL"
+      ? TARGET_PRICE_LAMPORTS_SOL
+      : TARGET_PRICE_LAMPORTS_WOODENG;
+
+  price = bondingSpotPrice({
+    vtokens: Number(cfg.data.vtokens ?? 0),
+    vwoodeng: Number(cfg.data.vwoodeng ?? 0),
+    bondingSold: Number(cfg.data.bondingSold ?? 0),
+    targetLamports,
+  });
+}
+ else if (m.memeReserveRaw > 0 && m.woodReserveLamports > 0) {
       price =
         (m.woodReserveLamports / 10 ** QUOTE_DECIMALS) /
         (m.memeReserveRaw / 10 ** m.decimals);
@@ -292,6 +325,7 @@ const jsons = await Promise.all(
       price_chain: priceChain,
       mcap_chain: Number.isFinite(mcap) ? mcap : 0,
       supply_ui: m.supplyUi ?? 0,
+      quote_symbol, // <-- add this
     };
   });
 
@@ -400,8 +434,19 @@ async function getDbSignals(
 
 export async function GET() {
   try {
+    const { rpc: RPC_URL, cluster: SOLANA_CLUSTER } = getRpcConfig();
+
+    if (!RPC_URL) {
+      const headers = { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" };
+      return NextResponse.json(
+        { error: "Missing RPC_URL / SOLANA_RPC / NEXT_PUBLIC_SOLANA_RPC / NEXT_PUBLIC_HELIUS_RPC_URL" },
+        { status: 500, headers }
+      );
+    }
+
     // 1) chain snapshot (supply, fallback price, metadata)
-    const pools = await fetchPools();
+    const pools = await fetchPools(RPC_URL);
+
 
 // apply blacklist again just in case (safe even if already filtered)
  const HIDDEN2: Set<string> =
@@ -432,25 +477,25 @@ const mints = poolsVisible.map((p) => p.mint);
 
     // 3) merge & compute
     const merged = poolsVisible.map((p) => {
+  const price = Number.isFinite(latestUi[p.mint]) ? latestUi[p.mint] : p.price_chain;
+  const market_cap = price * p.supply_ui;
+  const base = baseUi[p.mint];
+  const change_24h =
+    Number.isFinite(base) && base > 0 ? ((price - base) / base) * 100 : undefined;
 
-      const price = Number.isFinite(latestUi[p.mint]) ? latestUi[p.mint] : p.price_chain;
-      const market_cap = price * p.supply_ui;
+  return {
+    mint: p.mint,
+    name: p.name,
+    symbol: p.symbol,
+    image: p.image,
+    price,
+    market_cap,
+    change_24h,
+    created_at: firstMs[p.mint],
+    quote_symbol: (p as any).quote_symbol || "WOODENG", // <-- pass it through
+  };
+});
 
-      const base = baseUi[p.mint];
-      const change_24h =
-        Number.isFinite(base) && base > 0 ? ((price - base) / base) * 100 : undefined;
-
-      return {
-        mint: p.mint,
-        name: p.name,
-        symbol: p.symbol,
-        image: p.image,
-        price,
-        market_cap,
-        change_24h,
-        created_at: firstMs[p.mint],
-      };
-    });
 
     // 4) slices (top-3 each)
     const trending = (() => {
@@ -482,15 +527,17 @@ const mints = poolsVisible.map((p) => p.mint);
       .slice(0, 3);
 
     const pick = (arr: typeof merged) =>
-      arr.map((p) => ({
-        mint: p.mint,
-        name: p.name,
-        symbol: p.symbol,
-        image: p.image,
-        price: p.price,
-        market_cap: p.market_cap,
-        change_24h: p.change_24h,
-      }));
+  arr.map((p) => ({
+    mint: p.mint,
+    name: p.name,
+    symbol: p.symbol,
+    image: p.image,
+    price: p.price,
+    market_cap: p.market_cap,
+    change_24h: p.change_24h,
+    quote_symbol: (p as any).quote_symbol || "WOODENG",
+  }));
+
 
     const headers = { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" };
     return NextResponse.json(
