@@ -158,24 +158,20 @@ export async function sendIxsOnce(
   tx.feePayer = wallet.publicKey;
   tx.recentBlockhash = blockhash;
 
-  // 1) (Optional) pre-attach our local signers
-  if (signers.length) tx.partialSign(...signers);
-
-  // 2) Wallet signs
+  // 1) Wallet signs FIRST (Phantom/Lighthouse expects this)
   let signedByWallet: Transaction;
 
-if (wallet.signTransaction) {
-  signedByWallet = await wallet.signTransaction(tx);
-} else if (wallet.signAllTransactions) {
-  signedByWallet = (await wallet.signAllTransactions([tx]))[0];
-} else {
-  throw new Error("Wallet cannot sign transactions (no signTransaction / signAllTransactions). Reconnect wallet.");
-}
+  if (wallet.signTransaction) {
+    signedByWallet = await wallet.signTransaction(tx);
+  } else if (wallet.signAllTransactions) {
+    signedByWallet = (await wallet.signAllTransactions([tx]))[0];
+  } else {
+    throw new Error("Wallet cannot sign transactions (no signTransaction / signAllTransactions). Reconnect wallet.");
+  }
 
-
-  // 3) Re-attach local signers AFTER wallet sign.
-  //    Some mobile wallets drop partial sigs.
+  // 2) Additional signers sign AFTER wallet
   if (signers.length) signedByWallet.partialSign(...signers);
+
 
   const sig = await connection.sendRawTransaction(
     signedByWallet.serialize(),
