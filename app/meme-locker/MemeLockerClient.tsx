@@ -141,7 +141,9 @@ async function mineVanityKeypair(suffix: string, yieldEvery = 10_000): Promise<K
 
 
 
-// Legacy “single blob” sender (good on mobile)
+
+
+// ✅ Single-blob sender: wallet signs FIRST, then extra signers
 export async function sendIxsOnce(
   connection: Connection,
   wallet: SignerWallet,
@@ -158,7 +160,6 @@ export async function sendIxsOnce(
   tx.feePayer = wallet.publicKey;
   tx.recentBlockhash = blockhash;
 
-  // 1) Wallet signs FIRST (Phantom/Lighthouse expects this)
   let signedByWallet: Transaction;
 
   if (wallet.signTransaction) {
@@ -166,22 +167,33 @@ export async function sendIxsOnce(
   } else if (wallet.signAllTransactions) {
     signedByWallet = (await wallet.signAllTransactions([tx]))[0];
   } else {
-    throw new Error("Wallet cannot sign transactions (no signTransaction / signAllTransactions). Reconnect wallet.");
+    throw new Error("Wallet cannot sign transactions. Reconnect wallet.");
   }
 
-  // 2) Additional signers sign AFTER wallet
+  // ✅ extra signers AFTER wallet
   if (signers.length) signedByWallet.partialSign(...signers);
-
 
   const sig = await connection.sendRawTransaction(
     signedByWallet.serialize(),
     { skipPreflight }
   );
+
   await connection.confirmTransaction(
     { signature: sig, blockhash, lastValidBlockHeight },
     'confirmed'
   );
+
   return sig;
+}
+
+// back-compat shim
+export async function sendTx(
+  connection: Connection,
+  wallet: SignerWallet,
+  tx: Transaction,
+  extraSigners: Keypair[] = []
+) {
+  return sendIxsOnce(connection, wallet, tx.instructions, extraSigners);
 }
 
 
@@ -308,15 +320,7 @@ function makeUniqueMemoIx(tag: string) {
 
 
 
-// -------------------- BACK-COMPAT SHIM (OUTSIDE!) --------------------
-export async function sendTx(
-  connection: Connection,
-  wallet: SignerWallet,
-  tx: Transaction,
-  extraSigners: Keypair[] = []
-) {
-  return sendIxsOnce(connection, wallet, tx.instructions, extraSigners);
-}
+
 
 
 const WOODENG_DECIMALS = 9;
@@ -2137,23 +2141,26 @@ return; // wait for user to click the CTA
     const symbol = String(locker.memeSymbol ?? "SMEME");
     const uri    = String(locker.memeUri ?? ""); // if blank, pass your coin JSON
 
-    await program.methods
-      .lockTokensAndMintNft(name, symbol, uri)
-      .accounts({
-        user: wallet.publicKey,
-        locker: lockerPda,
-        userMemeAccount: userMemeToken,
-        lockerMemeAccount,
-        nftMint,
-        userNftAccount: userNftToken,
-        metadata,                               // 👈 required
-        edition,                                // 👈 pass it
-        tokenMetadataProgram: TOKEN_METADATA_PROGRAM_ID, // 👈 required
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        rent: SYSVAR_RENT_PUBKEY,
-      })
-      .rpc();
+    const ix = await program.methods
+  .lockTokensAndMintNft(name, symbol, uri)
+  .accounts({
+    user: wallet.publicKey,
+    locker: lockerPda,
+    userMemeAccount: userMemeToken,
+    lockerMemeAccount,
+    nftMint,
+    userNftAccount: userNftToken,
+    metadata,
+    edition,
+    tokenMetadataProgram: TOKEN_METADATA_PROGRAM_ID,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    systemProgram: SystemProgram.programId,
+    rent: SYSVAR_RENT_PUBKEY,
+  })
+  .instruction();
+
+await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
+
 
     setStatus("Tokens locked and NFT minted!");
   } catch (e: unknown) {
@@ -2178,18 +2185,21 @@ return; // wait for user to click the CTA
 
       const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" })
       const program = new Program(idlJson as Idl, PROGRAM_ID, provider)
-      await program.methods
-        .burnNftAndUnlockTokens()
-        .accounts({
-          user: wallet.publicKey,
-          userMemeAccount: userMemeToken,
-          locker: lockerPda,
-          lockerMemeAccount: lockerMemeAccount,
-          nftMint,
-          userNftAccount: userNftToken,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc()
+      const ix = await program.methods
+  .burnNftAndUnlockTokens()
+  .accounts({
+    user: wallet.publicKey,
+    userMemeAccount: userMemeToken,
+    locker: lockerPda,
+    lockerMemeAccount: lockerMemeAccount,
+    nftMint,
+    userNftAccount: userNftToken,
+    tokenProgram: TOKEN_PROGRAM_ID,
+  })
+  .instruction();
+
+await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
+
       setStatus("NFT burned and tokens unlocked!")
     } catch (e: unknown) {
       setStatus("Error: " + (e instanceof Error ? e.message : String(e)))
