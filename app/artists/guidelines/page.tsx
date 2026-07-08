@@ -12,7 +12,6 @@ import {
   Clock,
   ArrowRight,
 } from 'lucide-react';
-import { Footer } from '@/contexts/components/Footer';
 
 export default function GuidelinesPage() {
   const guidelines = [
@@ -205,7 +204,6 @@ export default function GuidelinesPage() {
         </section>
       </main>
 
-      <Footer />
     </>
   );
 }

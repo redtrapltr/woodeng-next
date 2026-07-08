@@ -8,7 +8,7 @@ export default function TradeSoundMemesGuide() {
     <main style={{ maxWidth: 900, margin: "90px auto 60px", padding: "0 16px", color: "#e6e6ff" }}>
       <h1 style={{ fontSize: 32, fontWeight: 800, marginBottom: 10 }}>How to trade Sound Memes</h1>
       <p style={{ color: "#9aa0b6", marginBottom: 22 }}>
-        Learn how to discover, buy, and sell Sound Memes on Woodeng.
+        Learn how to discover, buy, and sell tokens on Woodeng.
       </p>
 
       <div

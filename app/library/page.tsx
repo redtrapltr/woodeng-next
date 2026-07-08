@@ -7,6 +7,7 @@ import React, { useEffect, useState, FormEvent } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { Connection } from '@solana/web3.js';
 import { Metaplex, walletAdapterIdentity } from '@metaplex-foundation/js';
+import { useUnifiedWallet } from '@/hooks/useUnifiedWallet';
 
 // Your QuickNode RPC endpoint
 const MAINNET_RPC =
@@ -14,7 +15,10 @@ const MAINNET_RPC =
   'https://misty-smart-panorama.solana-mainnet.quiknode.pro/8bec11e1812457246ec8670f36ef6f54924fc725';
 
 export default function HomePage() {
-  const { publicKey } = useWallet();
+  const wallet = useWallet();
+  const { publicKey: unifiedPublicKey, connected: unifiedConnected } = useUnifiedWallet();
+  const effectivePublicKey = (wallet.connected && wallet.publicKey) ? wallet.publicKey : unifiedPublicKey;
+  const effectiveConnected = wallet.connected || unifiedConnected;
   const [nfts, setNfts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [authorized, setAuthorized] = useState(false);
@@ -34,7 +38,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!authorized) return;
-    if (!publicKey) {
+    if (!effectivePublicKey) {
       setNfts([]);
       return;
     }
@@ -43,8 +47,8 @@ export default function HomePage() {
       setLoading(true);
       try {
         const connection = new Connection(MAINNET_RPC, 'confirmed');
-        const metaplex = new Metaplex(connection).use(walletAdapterIdentity({ publicKey }));
-        const userNfts = await metaplex.nfts().findAllByOwner({ owner: publicKey });
+        const metaplex = new Metaplex(connection).use(walletAdapterIdentity({ publicKey: effectivePublicKey }));
+        const userNfts = await metaplex.nfts().findAllByOwner({ owner: effectivePublicKey });
 
         console.log(
           'Wallet NFT mint addresses:',
@@ -77,7 +81,7 @@ export default function HomePage() {
     };
 
     fetchNFTs();
-  }, [authorized, publicKey]);
+  }, [authorized, effectivePublicKey]);
 
   if (!authorized) {
     return (
@@ -102,8 +106,8 @@ export default function HomePage() {
 
   return (
     <main style={mainStyle}>
-      {!publicKey && <p>Please connect your wallet to access your music library.</p>}
-      {publicKey && (
+      {!effectivePublicKey && <p>Please connect your wallet to access your music library.</p>}
+      {effectivePublicKey && (
         <div style={containerStyle}>
           <h2 style={titleStyle}>Your Library</h2>
           {loading && <p>Loading your tracks...</p>}

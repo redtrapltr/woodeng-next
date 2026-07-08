@@ -5,6 +5,7 @@
 
 export const dynamic = 'force-dynamic'; 
 import poolIdlJson from '../../idl/my_sound_meme_pool.json';
+import poolIdlV2Json from '../../idl/my_sound_meme_pool_v2.json';
 import lockerIdlJson from '../../idl/hybrid_meme_coin_nft_locker.json';
 import stakingIdlJson from '../../idl/woodeng_staking.json';
 
@@ -15,11 +16,15 @@ import {
 } from "@solana/web3.js";
 
 import { useWallet } from "@solana/wallet-adapter-react";
+import { usePrivy } from "@privy-io/react-auth";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { getCachedBalance } from "@/lib/balanceCache";
 import type { Idl } from "@project-serum/anchor";
 import { Program, AnchorProvider, BN } from "@project-serum/anchor";
 import {
   TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
+  getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
   createInitializeMintInstruction
 } from "@solana/spl-token";
@@ -35,13 +40,14 @@ import {
 
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 import { Metaplex } from "@metaplex-foundation/js";
-import { getLockerPda } from "@/lib/sound-memes";
+// getLockerPda removed (SWL-444): wrong seed order; inline PDA derivation used instead
 
 
 import { getMint, NATIVE_MINT, createSyncNativeInstruction, createCloseAccountInstruction } from "@solana/spl-token";
 
 import { Rocket } from "lucide-react";
 import { Metadata } from "@metaplex-foundation/mpl-token-metadata";
+import { CpAmm } from '@meteora-ag/cp-amm-sdk';
 
 import NextDynamic from 'next/dynamic';
 
@@ -54,10 +60,17 @@ import bs58 from "bs58";
 import { BorshAccountsCoder } from "@project-serum/anchor";
 
 // at the top with other next/navigation imports
-import { useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams, usePathname, useRouter } from "next/navigation";
 
 
 
+
+// ── Test tokens to hide everywhere (listings, reputation, cards) ────────────
+const HIDDEN_MINTS = new Set([
+  '35kXDQ7LdSBNdNo9iVfXi3ZRE4Mh4pyJt3t3G5rCDwoo',
+  'Dn5xinGN5HWTCZr1sUVcExx4xcU9q4YpghreSprkVwoo',
+  '9P1S4JQEsVWoW1Yu2Ucp4pLLvj67Z3kaN47k1kj6zwoo',
+]);
 
 // ───── Candles helpers (timeframe-driven) ─────
 type Timeframe = '15m' | '30m' | '1h' | '4h' | '24h';
@@ -147,7 +160,8 @@ const clean = (s?: string) =>
   (s ?? "").replace(/\0/g, "").replace(/[\x00-\x1F\x7F]/g, "").trim();
 
 
-const isAmm = (p: { poolType: 0 | 1 }) => p.poolType === 1;
+const isAmm = (p: { poolType: 0 | 1 | 2 | 3 }) => p.poolType === 1;
+const isGraduated = (p: { poolType: 0 | 1 | 2 | 3 }) => p.poolType === 2 || p.poolType === 3;
 
 
 const format6 = (v: number) =>
@@ -265,6 +279,24 @@ liquidity, it migrates to the AMM.
 }
 
 
+// ── Per-pool performance badge type ──
+type PoolPerfBadge = {
+  launchPrice: number;
+  currentPrice: number;
+  currentMultiplier: number;
+  athMultiplier: number;
+  bondingStatus: 'bonding' | 'bonded' | 'amm-launch';
+};
+
+// ── Creator-level reputation badge type ──
+type CreatorRepBadge = {
+  score: number;
+  launches: number;
+  graduated: number;
+  avgMultiplier: number;
+  bestMultiplier: number;
+};
+
 // ADD props for buy/sell to MiniVerticalCard
 function MiniVerticalCard({
   pool,
@@ -272,6 +304,7 @@ function MiniVerticalCard({
   onOpen,
   change24h,
   onBuy,
+  onQuickBuy,
   onSell,
   onMint,
   onBurn,
@@ -281,12 +314,16 @@ function MiniVerticalCard({
   mintThreshold,
   nftCount,
   active = false,
+  walletConnected,
+  creatorRep,
+  poolPerf,
 }: {
   pool: PoolType;
   rank: number;
   onOpen: (p: PoolType) => void;
   change24h: number;
   onBuy: (p: PoolType) => void;
+  onQuickBuy: (p: PoolType, quoteRawIn: number) => void;
   onSell: (p: PoolType) => void;
   onMint: (p: PoolType) => void;                  // NEW
   onBurn: (p: PoolType) => void;                  // NEW
@@ -296,11 +333,14 @@ function MiniVerticalCard({
   mintThreshold: number;                          // NEW
   nftCount: number;                               // NEW
   active?: boolean;
+  walletConnected: boolean;
+  creatorRep?: CreatorRepBadge;
+  poolPerf?: PoolPerfBadge;
 }) {
   const up = change24h >= 0;
   const [copiedAddr, setCopiedAddr] = React.useState<string | null>(null);
-
   const [copiedLocal, setCopiedLocal] = React.useState(false);
+  const [showMobileQB, setShowMobileQB] = React.useState(false);
 
   
 
@@ -337,7 +377,15 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
 >
   {/* header ABOVE the image */}
   <div className="p-5 pb-3">
-    <div className="font-semibold truncate">{pool.name || 'Untitled Meme'}</div>
+    <div className="flex items-center gap-1.5">
+      <span className="font-semibold truncate">{pool.name || 'Untitled Meme'}</span>
+      {pool.programVersion === 'v1' && (
+        <span className="shrink-0 text-[9px] font-bold bg-[#2b323c] text-[#8a8fa3] px-1.5 py-0.5 rounded-full">V1</span>
+      )}
+      {pool.programVersion === 'v2' && (
+        <span className="shrink-0 text-[9px] font-bold bg-[#1a2e1a] text-[#4ade80] px-1.5 py-0.5 rounded-full">V2</span>
+      )}
+    </div>
 
     <div className="mt-1 flex items-center gap-2">
       <TinyPrice value={Number(pool.price ?? 0)} className="text-[#ffc371] font-bold" />
@@ -354,6 +402,37 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
 )}
 
     </div>
+
+    {/* Bonding status + creator avg multiplier */}
+    {(() => {
+      const perf = poolPerf;
+      const fmtMult = (m: number) => m >= 1000 ? `${(m/1000).toFixed(1)}K` : m >= 10 ? m.toFixed(0) : m.toFixed(1);
+      return (
+        <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+          {/* Bonding status pill */}
+          {perf && (
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+              perf.bondingStatus === 'bonding' ? 'bg-blue-500/20 text-blue-300' :
+              perf.bondingStatus === 'bonded' ? 'bg-emerald-500/20 text-emerald-300' :
+              'bg-purple-500/20 text-purple-300'
+            }`}>
+              {perf.bondingStatus === 'bonding' ? '⏳ Bonding' :
+               perf.bondingStatus === 'bonded' ? '✓ Bonded' : '🚀 AMM'}
+            </span>
+          )}
+          {/* Creator avg multiplier — the key dopamine metric */}
+          {creatorRep && creatorRep.avgMultiplier > 0 && (
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-1 ${
+              creatorRep.avgMultiplier >= 10 ? 'bg-emerald-500/20 text-emerald-300' :
+              creatorRep.avgMultiplier >= 2 ? 'bg-yellow-500/20 text-yellow-300' :
+              creatorRep.avgMultiplier >= 1 ? 'bg-[#2b323c] text-[#8a8fa3]' : 'bg-red-500/20 text-red-300'
+            }`}>
+              🔥 Avg {fmtMult(creatorRep.avgMultiplier)}x
+            </span>
+          )}
+        </div>
+      );
+    })()}
   </div>
 
   {/* image BELOW the header, with a tighter max height */}
@@ -480,7 +559,44 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
 {/* spacer so content can scroll behind sticky footer comfortably */}
 <div className="h-2" />
 
-{/* Sticky actions footer */}
+{/* ── GRADUATED: Meteora trade links (mobile) ──────────────── */}
+{isGraduated(pool) && (
+<div
+  className="sticky bottom-0 left-0 right-0 z-20 -mx-5 px-5
+    pt-2 pb-[max(env(safe-area-inset-bottom),12px)]
+    bg-gradient-to-t from-[#22232a] to-[#22232a]/0"
+  onClick={(e) => e.stopPropagation()}
+>
+  <div className="rounded-xl border border-purple-500/30 bg-purple-500/10 p-3 mb-2">
+    <div className="flex items-center gap-2 mb-2">
+      <span className="text-lg">🎓</span>
+      <span className="text-sm font-bold text-purple-300">
+        {pool.poolType === 3 ? 'Trading on Meteora' : 'Graduated — Creating Meteora Pool…'}
+      </span>
+    </div>
+    {pool.poolType === 3 ? (
+      <a
+        href={`/sound-memes/${pool.memeMint.toBase58()}`}
+        className="h-10 w-full inline-flex items-center justify-center gap-2 rounded font-semibold text-sm bg-purple-600/80 text-white hover:bg-purple-500 transition"
+        onClick={e => e.stopPropagation()}
+      >
+        <Rocket className="w-4 h-4" /> Trade ${pool.symbol || 'Token'}
+      </a>
+    ) : pool.poolType === 2 ? (
+      <a
+        href={`/sound-memes/${pool.memeMint.toBase58()}`}
+        className="h-10 w-full inline-flex items-center justify-center gap-2 rounded font-semibold text-sm bg-[#ffc371]/40 text-black/60 hover:bg-[#ffc371]/60 transition"
+        onClick={e => e.stopPropagation()}
+      >
+        <Rocket className="w-4 h-4" /> Open to Create Pool
+      </a>
+    ) : null}
+  </div>
+</div>
+)}
+
+{/* Sticky actions footer (hidden for graduated) */}
+{!isGraduated(pool) && (
 <div
   className="
     sticky bottom-0 left-0 right-0 z-20 -mx-5 px-5
@@ -490,14 +606,41 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
   "
   onClick={(e) => e.stopPropagation()}
 >
+  {/* Quick-buy preset panel */}
+  <div
+    className="overflow-hidden transition-all duration-300"
+    style={{ maxHeight: showMobileQB ? '120px' : '0px', opacity: showMobileQB ? 1 : 0 }}
+  >
+    <div className="mb-2 rounded-xl bg-[#1a1b23] p-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-bold text-[#ffc371]">Quick Buy</span>
+        <button onClick={() => setShowMobileQB(false)} className="text-xs text-[#6b7084] hover:text-white transition">✕ Cancel</button>
+      </div>
+      <div className="flex gap-2">
+        {quoteIsSol(pool) ? (
+          <>
+            <button onClick={() => { setShowMobileQB(false); onQuickBuy(pool, 0.1e9); }} className="flex-1 py-2.5 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">0.1 SOL</button>
+            <button onClick={() => { setShowMobileQB(false); onQuickBuy(pool, 0.5e9); }} className="flex-1 py-2.5 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">0.5 SOL</button>
+            <button onClick={() => { setShowMobileQB(false); onQuickBuy(pool, 1e9); }} className="flex-1 py-2.5 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">1 SOL</button>
+          </>
+        ) : (
+          <>
+            <button onClick={() => { setShowMobileQB(false); onQuickBuy(pool, 100_000 * 1e9); }} className="flex-1 py-2.5 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">100K $WOODENG</button>
+            <button onClick={() => { setShowMobileQB(false); onQuickBuy(pool, 444_000 * 1e9); }} className="flex-1 py-2.5 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">444K $WOODENG</button>
+            <button onClick={() => { setShowMobileQB(false); onQuickBuy(pool, 1_000_000 * 1e9); }} className="flex-1 py-2.5 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">1M $WOODENG</button>
+          </>
+        )}
+      </div>
+    </div>
+  </div>
   <div className="grid grid-cols-2 gap-2">
     {/* Buy */}
     <button
       type="button"
-      onClick={(e) => { e.stopPropagation(); onBuy(pool); }}
+      onClick={(e) => { e.stopPropagation(); setShowMobileQB(v => !v); }}
       className="h-10 w-full inline-flex items-center justify-center rounded px-3 text-[13px] font-semibold bg-[#ffc371] text-black"
     >
-      Buy
+      {showMobileQB ? '✕ Cancel' : 'Buy'}
     </button>
 
     {/* Sell */}
@@ -533,6 +676,7 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
     </button>
   </div>
 </div>
+)}
 
     
 
@@ -544,209 +688,165 @@ const bondingSellTaxBps = pool.poolType === 0 ? 1000 : 0; // 10% during bonding
   );
 }
 
+// ── Pump.fun-style compact mobile card ────────────────────────────────────────
+function PumpStyleCard({
+  pool, change24h, onOpen, onBuy, onQuickBuy, poolPerf, creatorRep, createdAt,
+}: {
+  pool: PoolType; change24h: number;
+  onOpen: (p: PoolType) => void; onBuy: (p: PoolType) => void;
+  onQuickBuy: (p: PoolType, quoteRawIn: number) => void;
+  poolPerf?: PoolPerfBadge; creatorRep?: CreatorRepBadge;
+  createdAt?: number;
+}) {
+  const up = change24h >= 0;
+  const [showBuyOptions, setShowBuyOptions] = React.useState(false);
+  const isNew = typeof createdAt === 'number' && createdAt > 0 && (Date.now() / 1000) - createdAt < 300;
 
+  // Deterministic sparkline seeded by mint address + trend direction
+  const svgPoints = React.useMemo(() => {
+    let s = pool.memeMint.toBase58().split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 1);
+    const r = () => { s = (s * 1664525 + 1013904223) | 0; return Math.abs(s) / 2147483647; };
+    let cur = 18 + r() * 8;
+    const pts: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      cur = Math.max(3, Math.min(36, cur + (up ? 1.5 : -1.5) + (r() - 0.5) * 9));
+      pts.push(`${(i / 6) * 56 + 2},${40 - cur}`);
+    }
+    return pts.join(' ');
+  }, [pool.memeMint.toBase58(), up]);
+
+  const isLive = poolPerf?.bondingStatus === 'bonding';
+  const mcap = pool.marketCap ?? 0;
+  const fmtMcap = mcap >= 1e6 ? `${(mcap / 1e6).toFixed(1)}M` : mcap >= 1000 ? `${(mcap / 1000).toFixed(1)}K` : mcap > 0 ? mcap.toFixed(0) : '?';
+  const quote = quoteLabelOf(pool);
+
+  const isSOLPair = quoteIsSol(pool);
+
+  return (
+    <div
+      className={`relative flex flex-col border-b border-[#1a1b25] transition-colors active:bg-white/[0.04] ${isNew ? 'animate-rocket-entrance' : ''}`}
+      style={{ background: 'transparent' }}
+    >
+      {isNew && (
+        <div className="absolute -top-2 -right-2 z-10 animate-bounce pointer-events-none">
+          <span className="text-base">🚀</span>
+        </div>
+      )}
+      <div
+        className="flex items-center gap-3 px-3 py-2.5 cursor-pointer"
+        onClick={() => onOpen(pool)}
+      >
+        {/* Left: image with live dot */}
+        <div className="relative w-[68px] h-[68px] rounded-xl overflow-hidden bg-[#1a1b25] shrink-0">
+          {pool.imageUrl
+            ? <img src={pool.imageUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
+            : <div className="w-full h-full flex items-center justify-center text-2xl">🔊</div>
+          }
+          {isLive && (
+            <span
+              className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-400 animate-pulse"
+              style={{ boxShadow: '0 0 6px rgba(52,211,153,0.8)' }}
+            />
+          )}
+        </div>
+
+        {/* Center: name, price, change, mcap */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <span className="font-bold text-sm truncate text-white leading-tight">{pool.name || 'Untitled'}</span>
+            {pool.symbol && <span className="shrink-0 text-[10px] font-mono text-[#6b7084]">{pool.symbol}</span>}
+          </div>
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <span className="text-sm font-black text-[#ffc371] tabular-nums leading-none">
+              <TinyPrice value={pool.price ?? 0} />
+            </span>
+            <span className="text-[9px] text-[#6b7084] shrink-0">{quote}</span>
+            {showPerfBadge(pool) ? (
+              <span className={`text-[10px] font-bold px-1 py-px rounded shrink-0 ${up ? 'text-emerald-400 bg-emerald-400/10' : 'text-red-400 bg-red-400/10'}`}>
+                {up ? '▲' : '▼'}{Math.abs(change24h).toFixed(1)}%
+              </span>
+            ) : (
+              <span className="text-[10px] font-bold px-1 py-px rounded bg-[#2b323c] text-[#d6d8ff] shrink-0">NEW</span>
+            )}
+          </div>
+          <div className="text-[10px] text-[#4a4f63]">MCap {fmtMcap} {quote}</div>
+        </div>
+
+        {/* Right: sparkline + BUY / quick-buy toggle */}
+        <div className="shrink-0 flex flex-col items-end gap-2 ml-1">
+          <svg width="60" height="32" viewBox="0 0 60 40" preserveAspectRatio="none" style={{ overflow: 'visible' }}>
+            <polyline
+              points={svgPoints}
+              fill="none"
+              stroke={up ? '#34d399' : '#f87171'}
+              strokeWidth="4.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity="0.9"
+            />
+          </svg>
+          {!isGraduated(pool) && (
+            <button
+              type="button"
+              className="px-3.5 py-1 rounded-full text-xs font-bold text-white transition-transform active:scale-90"
+              style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)', boxShadow: '0 2px 8px rgba(34,197,94,0.35)' }}
+              onClick={(e) => { e.stopPropagation(); setShowBuyOptions(v => !v); }}
+            >
+              {showBuyOptions ? '✕' : 'BUY'}
+            </button>
+          )}
+          {isGraduated(pool) && (
+            <a
+              href={`/sound-memes/${pool.memeMint.toBase58()}`}
+              className="px-2.5 py-1 rounded-full text-[10px] font-bold text-purple-300 bg-purple-500/20 transition active:scale-90"
+              onClick={e => e.stopPropagation()}
+            >
+              TRADE
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* Inline quick-buy panel */}
+      {!isGraduated(pool) && (
+        <div
+          className="overflow-hidden transition-all duration-300"
+          style={{ maxHeight: showBuyOptions ? '120px' : '0px', opacity: showBuyOptions ? 1 : 0 }}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="px-3 pb-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-bold text-[#ffc371]">Quick Buy</span>
+              <button onClick={() => setShowBuyOptions(false)} className="text-[11px] text-[#6b7084] hover:text-white transition">✕ Cancel</button>
+            </div>
+            <div className="flex gap-2">
+              {isSOLPair ? (
+                <>
+                  <button onClick={() => { setShowBuyOptions(false); onQuickBuy(pool, 0.1e9); }} className="flex-1 py-2 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">0.1 SOL</button>
+                  <button onClick={() => { setShowBuyOptions(false); onQuickBuy(pool, 0.5e9); }} className="flex-1 py-2 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">0.5 SOL</button>
+                  <button onClick={() => { setShowBuyOptions(false); onQuickBuy(pool, 1e9); }} className="flex-1 py-2 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">1 SOL</button>
+                </>
+              ) : (
+                <>
+                  <button onClick={() => { setShowBuyOptions(false); onQuickBuy(pool, 100_000 * 1e9); }} className="flex-1 py-2 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">100K $WOODENG</button>
+                  <button onClick={() => { setShowBuyOptions(false); onQuickBuy(pool, 444_000 * 1e9); }} className="flex-1 py-2 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">444K $WOODENG</button>
+                  <button onClick={() => { setShowBuyOptions(false); onQuickBuy(pool, 1_000_000 * 1e9); }} className="flex-1 py-2 rounded-lg text-xs font-bold bg-[#ffc371] text-black active:scale-95 transition">1M $WOODENG</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function MobileVerticalSection({
   title,
   itemsBestFirst,
   onOpen,
   onBuy,
-  onSell,
-  onMint,
-  onBurn,
-  onPlay,
-  isPlayingFor,
-  tokensUiFor,
-  mintThresholdFor,
-  nftCountFor,
-  change24hFor,
-}: {
-  title: string;
-  itemsBestFirst: PoolType[];
-  onOpen: (p: PoolType) => void;
-  onBuy: (p: PoolType) => void;
-  onSell: (p: PoolType) => void;
-  onMint: (p: PoolType) => void;
-  onBurn: (p: PoolType) => void;
-  onPlay: (id: string, url?: string) => void;
-  isPlayingFor: (p: PoolType) => boolean;
-  tokensUiFor: (p: PoolType) => number;
-  mintThresholdFor: (p: PoolType) => number;
-  nftCountFor: (p: PoolType) => number;
-  change24hFor: (mint: string) => number;
-})
- {
-  const scrollRef = React.useRef<HTMLDivElement | null>(null);
-  const cardRefs = React.useRef<(HTMLDivElement | null)[]>([]);
-  const [progress, setProgress] = React.useState(0); // 0..1 bottom→top
-  const [activeIdx, setActiveIdx] = React.useState(0);
-  const rafRef = React.useRef<number | null>(null);
-
-
-  // decorate cards based on distance to viewport center
-  const applyDecorations = React.useCallback(() => {
-  const el = scrollRef.current;
-  if (!el) return;
-
-  const mid = el.getBoundingClientRect().top + el.clientHeight / 2;
-  let best = -1, bestDist = Infinity;
-
-  cardRefs.current.forEach((c, i) => {
-    if (!c) return;
-    const r = c.getBoundingClientRect();
-    const center = r.top + r.height / 2;
-    const d = Math.abs(center - mid);
-
-    if (d < bestDist) { bestDist = d; best = i; }
-
-    const t = Math.min(1, d / (el.clientHeight * 0.6));
-    c.style.transform  = `scale(${0.92 + (1 - t) * 0.08}) translateY(${(t * 20).toFixed(1)}px)`;
-    c.style.opacity    = `${0.6 + (1 - t) * 0.4}`;
-    c.style.zIndex     = `${1000 - Math.round(d)}`;
-    // ❌ no blur on iOS (causes jank)
-    c.style.transition = 'transform 180ms ease, opacity 180ms ease';
-    c.style.willChange = 'transform, opacity';
-  });
-
-  if (best !== -1) setActiveIdx(best);
-}, []);
-
-const scheduleDecorations = React.useCallback(() => {
-  if (rafRef.current != null) return;                 // already queued
-  rafRef.current = requestAnimationFrame(() => {
-    rafRef.current = null;
-    applyDecorations();                               // read+write once per frame
-  });
-}, [applyDecorations]);
-
-
-  React.useEffect(() => {
-  const el = scrollRef.current;
-  if (!el) return;
-  requestAnimationFrame(() => {
-    el.scrollTop = 0;
-    setProgress(0);
-    scheduleDecorations();
-  });
-}, [itemsBestFirst, scheduleDecorations]);
-
-
-
-
-  const onScroll = React.useCallback((e: React.UIEvent<HTMLDivElement>) => {
-  const el = e.currentTarget;
-  const max = Math.max(1, el.scrollHeight - el.clientHeight);
-  const pct = el.scrollTop / max;
-  setProgress(Math.min(1, Math.max(0, pct)));
-  scheduleDecorations();                          // ← coalesced behind rAF
-}, [scheduleDecorations]);
-
-
-React.useEffect(() => {
-  return () => {
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-  };
-}, []);
-
-
-
-  // subtract your app header + safe-area bottom so nothing hides behind them
- const railH = 'calc(100svh - var(--app-header-h,72px) - max(16px, env(safe-area-inset-bottom)))'
-
-  return (
-    <section className="md:hidden">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-lg font-bold">{title}</h2>
-      </div>
-
-      <div className="relative">
-        
-
-        <div className="relative">
-  
-
-  {/* slider */}
-   <div
-  ref={scrollRef}
-  onScroll={onScroll}
-  className="no-scrollbar px-4 pr-[48px] snap-y snap-proximity overflow-y-auto overscroll-y-none touch-pan-y
-             pb-[max(env(safe-area-inset-bottom),16px)] scroll-pt-3 scroll-pb-3
-             min-h-0"     // ⬅️ add this
-
-  style={{
-  height: railH,
-  WebkitOverflowScrolling: 'touch',
-  scrollPaddingTop: 'calc(var(--app-header-h,72px) + 8px)',
-  scrollPaddingBottom: 'max(16px, env(safe-area-inset-bottom))',
-  scrollSnapStop: 'always' // ⟵ prevents “fly-past” to next card on iOS
-}}
-
->
-
-
-
-    {itemsBestFirst.map((p, i) => (
-      // slide item wrapper
-<div
-  key={p.pubkey.toBase58()}
-  ref={(el) => { cardRefs.current[i] = el; }}
-  className="h-[calc(100svh-var(--app-header-h,72px)-max(16px,env(safe-area-inset-bottom)))]
-             min-h-[calc(100svh-var(--app-header-h,72px)-max(16px,env(safe-area-inset-bottom)))]
-             flex-none snap-start
-             min-h-0"                    // ⬅️ add this
-  style={{
-    willChange: 'transform, opacity',
-    WebkitBackfaceVisibility: 'hidden',
-    backfaceVisibility: 'hidden',
-    contain: 'layout paint',
-  }}
->
-  {/* INNER SCROLLER */}
-  <div
-    className="h-full overflow-y-auto overscroll-y-contain touch-pan-y no-scrollbar"
-    style={{
-      WebkitOverflowScrolling: 'touch',
-      paddingBottom: 'max(52px, calc(env(safe-area-inset-bottom) + 20px))', // ⬅️ was 24px
-      scrollbarGutter: 'stable'
-    }}
-  >
-    
-
-    <MiniVerticalCard
-      pool={p}
-      rank={i + 1}
-      onOpen={onOpen}
-      onBuy={onBuy}
-      onSell={onSell}
-      onMint={onMint}
-      onBurn={onBurn}
-      onPlay={(id, url) => onPlay(id, url)}
-      isPlaying={isPlayingFor(p)}
-      tokensUiOwned={tokensUiFor(p)}
-      mintThreshold={mintThresholdFor(p)}
-      nftCount={nftCountFor(p)}
-      change24h={change24hFor(p.memeMint.toBase58())}
-      active={i === activeIdx}
-    />
-  </div>
-</div>
-
-    ))}
-  </div>
-</div>
-</div> {/* close the outer .relative */}
-    </section>
-  );
-}
-
-
-function MobileVerticalStacks({
-  pools,
-  onOpen,
-  onBuy,
+  onQuickBuy,
   onSell,
   onMint,
   onBurn,
@@ -757,10 +857,84 @@ function MobileVerticalStacks({
   nftCountFor,
   change24hFor,
   createdAtFor,
+  walletConnected,
+  creatorRepFor,
+  poolPerfLookup,
+}: {
+  title: string;
+  itemsBestFirst: PoolType[];
+  onOpen: (p: PoolType) => void;
+  onBuy: (p: PoolType) => void;
+  onQuickBuy: (p: PoolType, quoteRawIn: number) => void;
+  onSell: (p: PoolType) => void;
+  onMint: (p: PoolType) => void;
+  onBurn: (p: PoolType) => void;
+  onPlay: (id: string, url?: string) => void;
+  isPlayingFor: (p: PoolType) => boolean;
+  tokensUiFor: (p: PoolType) => number;
+  mintThresholdFor: (p: PoolType) => number;
+  nftCountFor: (p: PoolType) => number;
+  change24hFor: (mint: string) => number;
+  createdAtFor: (mint: string) => number;
+  walletConnected: boolean;
+  creatorRepFor?: (mint: string) => CreatorRepBadge | undefined;
+  poolPerfLookup?: Record<string, PoolPerfBadge>;
+}) {
+
+
+  const railH = 'calc(100svh - var(--app-header-h,72px) - max(16px, env(safe-area-inset-bottom)))';
+
+  return (
+    <section className="md:hidden">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-lg font-bold">{title}</h2>
+      </div>
+      <div
+        className="no-scrollbar overflow-y-auto rounded-2xl bg-[#0c0d12] border border-[#1e1f2e]"
+        style={{ height: railH, WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+      >
+        {itemsBestFirst.map((p) => (
+          <PumpStyleCard
+            key={p.pubkey.toBase58()}
+            pool={p}
+            change24h={change24hFor(p.memeMint.toBase58())}
+            onOpen={onOpen}
+            onBuy={onBuy}
+            onQuickBuy={onQuickBuy}
+            poolPerf={poolPerfLookup?.[p.memeMint.toBase58()]}
+            creatorRep={creatorRepFor?.(p.memeMint.toBase58())}
+            createdAt={createdAtFor(p.memeMint.toBase58())}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+
+function MobileVerticalStacks({
+  pools,
+  onOpen,
+  onBuy,
+  onQuickBuy,
+  onSell,
+  onMint,
+  onBurn,
+  onPlay,
+  isPlayingFor,
+  tokensUiFor,
+  mintThresholdFor,
+  nftCountFor,
+  change24hFor,
+  createdAtFor,
+  walletConnected,
+  creatorRepFor,
+  poolPerfLookup,
 }: {
   pools: PoolType[];
   onOpen: (p: PoolType) => void;
   onBuy: (p: PoolType) => void;
+  onQuickBuy: (p: PoolType, quoteRawIn: number) => void;
   onSell: (p: PoolType) => void;
   onMint: (p: PoolType) => void;   // NEW
   onBurn: (p: PoolType) => void;   // NEW
@@ -771,11 +945,14 @@ function MobileVerticalStacks({
   nftCountFor: (p: PoolType) => number;       // NEW
   change24hFor: (mint: string) => number;
   createdAtFor: (mint: string) => number;
+  walletConnected: boolean;
+  creatorRepFor?: (mint: string) => CreatorRepBadge | undefined;
+  poolPerfLookup?: Record<string, PoolPerfBadge>;
 })
 {
 
-  type Mode = 'gainers' | 'marketcap' | 'newest';
-  const [mode, setMode] = React.useState<Mode>('marketcap'); // faster first paint
+  type Mode = 'gainers' | 'marketcap' | 'newest' | 'bonding';
+  const [mode, setMode] = React.useState<Mode>('newest');
 
 
 
@@ -787,6 +964,7 @@ function MobileVerticalStacks({
     if (h === 'top-gainers') setMode('gainers');
     if (h === 'top-marketcap') setMode('marketcap');
     if (h === 'newest') setMode('newest');
+    if (h === 'to-market') setMode('bonding');
   };
   applyHash();
   window.addEventListener('hashchange', applyHash);
@@ -794,15 +972,20 @@ function MobileVerticalStacks({
 }, []);
 
 
-  const topMcap = React.useMemo(
-    () => [...pools].sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0)),
+  const mobileVisiblePools = React.useMemo(
+    () => pools.filter(p => !HIDDEN_MINTS.has(p.memeMint.toBase58())),
     [pools]
   );
+
+  const topMcap = React.useMemo(
+    () => [...mobileVisiblePools].sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0)),
+    [mobileVisiblePools]
+  );
   const topGainers = React.useMemo(
-    () => [...pools].sort(
+    () => [...mobileVisiblePools].sort(
       (a, b) => change24hFor(b.memeMint.toBase58()) - change24hFor(a.memeMint.toBase58())
     ),
-    [pools, change24hFor]
+    [mobileVisiblePools, change24hFor]
   );
 
 
@@ -815,34 +998,50 @@ function MobileVerticalStacks({
 
 
   const newest = React.useMemo(() => {
-  return [...pools].sort((a, b) => {
-    const ta = createdAtFor(a.memeMint.toBase58()) || 0;
-    const tb = createdAtFor(b.memeMint.toBase58()) || 0;
+  return [...mobileVisiblePools].sort((a, b) => {
+    const ta = createdAtFor(a.memeMint.toBase58()) || Infinity;
+    const tb = createdAtFor(b.memeMint.toBase58()) || Infinity;
     if (tb !== ta) return tb - ta;
-    // tie-breakers to keep order stable
     const ma = a.marketCap ?? 0, mb = b.marketCap ?? 0;
     if (mb !== ma) return mb - ma;
     return a.memeMint.toBase58().localeCompare(b.memeMint.toBase58());
   });
-}, [pools, createdAtFor]);
+}, [mobileVisiblePools, createdAtFor]);
 
+  const toMarket = React.useMemo(() => {
+    return [...mobileVisiblePools].sort((a, b) => {
+      const aB = a.poolType === 0 ? 1 : 0;
+      const bB = b.poolType === 0 ? 1 : 0;
+      if (aB !== bB) return bB - aB;
+      if (aB && bB) return (b.bondingSold ?? 0) - (a.bondingSold ?? 0);
+      return (b.marketCap ?? 0) - (a.marketCap ?? 0);
+    });
+  }, [mobileVisiblePools]);
 
-  const current = mode === 'gainers' ? topGainers : mode === 'marketcap' ? topMcap : newest;
-  const title   = mode === 'gainers' ? 'Top Gainers (24h)' : mode === 'marketcap' ? 'Top Market Cap' : 'Newest';
+  const current = mode === 'gainers' ? topGainers : mode === 'bonding' ? toMarket : mode === 'newest' ? newest : topMcap;
+  const title   = mode === 'gainers' ? '📈 24h Gainers' : mode === 'bonding' ? '🚀 To Market' : mode === 'newest' ? '✨ Newest' : '💰 Top MCap';
 
   return (
     <div className="md:hidden">
-  <div className="mt-5 mb-3 flex items-center justify-between">
-        <div className="text-sm opacity-80">Category</div>
-        <select
-          value={mode}
-          onChange={(e) => setMode(e.target.value as Mode)}
-          className="bg-[#262635] border border-[#33334a] rounded px-3 py-1 text-sm"
-        >
-          <option value="gainers">Top Gainers (24h)</option>
-          <option value="marketcap">Top Market Cap</option>
-          <option value="newest">Newest</option>
-        </select>
+  <div className="mt-3 mb-3 flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+        {([
+          { key: 'newest', label: '✨ New' },
+          { key: 'bonding', label: '🚀 To Market' },
+          { key: 'gainers', label: '📈 Gainers' },
+          { key: 'marketcap', label: '💰 MCap' },
+        ] as const).map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setMode(tab.key)}
+            className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+              mode === tab.key
+                ? 'bg-[#ffc371] text-black shadow-md shadow-[#ffc371]/20'
+                : 'bg-[#1a1b25] text-[#8a8fa3] border border-[#2a2b3a]'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       <MobileVerticalSection
@@ -851,6 +1050,7 @@ function MobileVerticalStacks({
   itemsBestFirst={current}
   onOpen={onOpen}
   onBuy={onBuy}
+  onQuickBuy={onQuickBuy}
   onSell={onSell}
   onMint={onMint}                   // NEW
   onBurn={onBurn}                   // NEW
@@ -860,6 +1060,10 @@ function MobileVerticalStacks({
   mintThresholdFor={mintThresholdFor} // NEW
   nftCountFor={nftCountFor}         // NEW
   change24hFor={change24hFor}
+  createdAtFor={createdAtFor}
+  walletConnected={walletConnected}
+  creatorRepFor={creatorRepFor}
+  poolPerfLookup={poolPerfLookup}
 />
 
 
@@ -882,7 +1086,13 @@ type PoolType = {
   hydrated?: boolean;       // whether off-chain JSON was merged
 
   /* on-chain config ------------------------------------ */
-  poolType: 0 | 1;           // 0 = bonding, 1 = AMM
+  poolType: 0 | 1 | 2 | 3;      // 0 = bonding, 1 = AMM, 2 = graduated, 3 = migrated DAMM v2
+
+  /* graduation info (only when poolType === 2) --------- */
+  graduationTimestamp?: number;
+  meteoraPool?: string;          // DAMM v2 pool address
+  meteoraPositionNft?: string;   // position NFT mint
+  graduationConfirmed?: boolean; // true when poolType === 3
   lastMemePrice?: number;    // starting price for bonding curve
 
   /* reserves & mints ----------------------------------- */
@@ -923,12 +1133,21 @@ type PoolType = {
   /* local upload scratch ------------------------------- */
   imageFile?: File;
   audioFile?: File;
+
+  /* creation timestamp --------------------------------- */
+  createdAt?: number;
+
+  /* program version ----------------------------------- */
+  programVersion?: 'v1' | 'v2';  // which pool program this came from
+
+  /* v2 gate ------------------------------------------- */
+  minAvgHoldDays?: number;        // holder requirement (v2 only)
 };
 
 
 
 
-// Filled trade toast payloads (used by buy/sell “filled” modals)
+// Filled trade toast payloads (used by buy/sell "filled" modals)
 type FilledTrade = {
   open: boolean;
   symbol: string;
@@ -948,31 +1167,71 @@ const quoteLabelOf = (p: PoolType) => (quoteIsSol(p) ? "SOL" : "WOODENG");
 const MEME_DECIMALS = 0;
 const PROTOCOL_FEE_BPS = 100; // 1 %
 
+const calcAvgDays = (hp: any): number => {
+  try {
+    const totalSold = BigInt(hp.totalSold?.toString() ?? '0')
+    const firstBuyTs = BigInt(hp.firstBuyTs?.toString() ?? '0')
+    const nowSecs = BigInt(Math.floor(Date.now() / 1000))
+
+    if (totalSold === 0n) {
+      // Never sold → time since first buy until NOW (simulated)
+      if (firstBuyTs === 0n) return 0
+      return Number(nowSecs - firstBuyTs) / 86400
+    }
+    // Has sold → classic weighted average + elapsed since last trade
+    const cumul = BigInt(hp.cumulativeTokenSecs?.toString() ?? '0')
+    const balance = BigInt(hp.currentBalance?.toString() ?? '0')
+    const total = balance + totalSold
+    if (total === 0n) return 0
+    const lastTs = BigInt(hp.lastUpdateTs?.toString() ?? '0')
+    const elapsed = lastTs > 0n && balance > 0n ? (nowSecs - lastTs) * balance : 0n
+    return Number((cumul + elapsed) / total) / 86400
+  } catch { return 0 }
+}
+
+const fmtHoldTime = (days: number): string => {
+  if (days <= 0) return '0h'
+  const totalMinutes = Math.floor(days * 24 * 60)
+  const d = Math.floor(totalMinutes / 1440)
+  const h = Math.floor((totalMinutes % 1440) / 60)
+  const m = totalMinutes % 60
+  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`
+  return `${m}m`
+}
+
 
 // --- Chain-aligned targets & thresholds (LAMPORTS = 1e9) ---
-const CURVE_THRESHOLD_RAW_COMMON = 44_000_000n; // 44,000,000 raw MEME (same for both pairs)
+const CURVE_THRESHOLD_RAW_COMMON = 44_000_000n; // 44,000,000 raw MEME (same for both pairs & versions)
 
-// Pricing target p1 (used in the bonding-curve exponential)
-const PRICE_TARGET_WOODENG_LAMPORTS = 4_444_444n * 10n ** 9n; // TARGET_PRICE_LAMPORTS_WOODENG
-const PRICE_TARGET_SOL_LAMPORTS     = 44n       * 10n ** 9n; // TARGET_PRICE_LAMPORTS_SOL
+// ── V2 constants (new pools) ──────────────────────────────────────────────
+const V2_PRICE_TARGET_WOODENG_LAMPORTS = 100_000_000n; // 0.1 WOODENG/MEME
+const V2_MIGRATE_LOWER_WOODENG = 1_400_000n * 10n ** 9n;
+const V2_MIGRATE_UPPER_WOODENG = 3_000_000n * 10n ** 9n;
 
-// Migration window bounds (pool vault 'quote' lamports)
-const MIGRATE_LOWER_WOODENG = 4_317_460n * 10n ** 9n; // MIGRATE_LOWER_LAMPORTS_WOODENG
-const MIGRATE_UPPER_WOODENG = 9_284_888n * 10n ** 9n; // MIGRATE_UPPER_LAMPORTS_WOODENG
+// ── V1 constants (existing mainnet pools) ─────────────────────────────────
+const V1_PRICE_TARGET_WOODENG_LAMPORTS = 4_444_444n * 10n ** 9n; // 4,444,444 WOODENG/MEME
+const V1_MIGRATE_LOWER_WOODENG = 4_317_460n * 10n ** 9n;
+const V1_MIGRATE_UPPER_WOODENG = 9_284_888n * 10n ** 9n;
 
-const MIGRATE_LOWER_SOL     = 40n       * 10n ** 9n; // MIGRATE_LOWER_LAMPORTS_SOL
-const MIGRATE_UPPER_SOL     = 100n       * 10n ** 9n; // MIGRATE_UPPER_LAMPORTS_SOL
+// ── SOL constants (same in both versions) ─────────────────────────────────
+const PRICE_TARGET_SOL_LAMPORTS     = 44n       * 10n ** 9n;
+const MIGRATE_LOWER_SOL     = 40n       * 10n ** 9n;
+const MIGRATE_UPPER_SOL     = 100n       * 10n ** 9n;
 
-// Helper: pick the right set for the pool's quote mint
+// Helper: pick the right set for the pool's quote mint AND program version
 function targetsFor(pool: PoolType) {
   const isSol = quoteIsSol(pool);
+  const isV1 = pool.programVersion === 'v1';
   return {
     // p1 for the exponential curve
-    priceTargetLamports: isSol ? PRICE_TARGET_SOL_LAMPORTS : PRICE_TARGET_WOODENG_LAMPORTS,
+    priceTargetLamports: isSol
+      ? PRICE_TARGET_SOL_LAMPORTS
+      : (isV1 ? V1_PRICE_TARGET_WOODENG_LAMPORTS : V2_PRICE_TARGET_WOODENG_LAMPORTS),
 
     // migration window [lower, upper)
-    migrateLowerLamports: isSol ? MIGRATE_LOWER_SOL : MIGRATE_LOWER_WOODENG,
-    migrateUpperLamports: isSol ? MIGRATE_UPPER_SOL : MIGRATE_UPPER_WOODENG,
+    migrateLowerLamports: isSol ? MIGRATE_LOWER_SOL : (isV1 ? V1_MIGRATE_LOWER_WOODENG : V2_MIGRATE_LOWER_WOODENG),
+    migrateUpperLamports: isSol ? MIGRATE_UPPER_SOL : (isV1 ? V1_MIGRATE_UPPER_WOODENG : V2_MIGRATE_UPPER_WOODENG),
 
     // x-threshold (raw MEME sold) to reach p1
     curveThresholdRaw: CURVE_THRESHOLD_RAW_COMMON,
@@ -989,7 +1248,7 @@ function targetsFor(pool: PoolType) {
 
 // % toward AMM migration based on WOODENG liquidity in the pool vault
 function ammMigrationPct(pool: PoolType): number {
-  if (pool.poolType === 1) return 1;
+  if (pool.poolType === 1 || pool.poolType === 2 || pool.poolType === 3) return 1;
   const wood = Math.max(0, pool.ammReserves?.woodeng ?? 0);
   const lower = Number(targetsFor(pool).migrateLowerLamports);
   return Math.min(1, wood / Math.max(1, lower));
@@ -998,13 +1257,16 @@ function ammMigrationPct(pool: PoolType): number {
 
 // Show performance metrics?
 function showPerfBadge(pool: PoolType): boolean {
-  // AMM always shows perf; bonding only after 10% of the lower migration target
-  return isAmm(pool) || ammMigrationPct(pool) >= 0.10;
+  // AMM and graduated always show perf; bonding only after 10% of the lower migration target
+  return isAmm(pool) || isGraduated(pool) || ammMigrationPct(pool) >= 0.10;
 }
 
 
 // Show the Buy button?
 function canShowBuy(pool: PoolType): boolean {
+  // Graduated pools: trade on Meteora, not here
+  if (isGraduated(pool)) return false;
+
   // AMM pools: always show Buy
   if (isAmm(pool)) return true;
 
@@ -1143,8 +1405,13 @@ export default function SoundMemesClient() {
 
  // 1) FIRST
   const wallet = useWallet();
+  const { authenticated } = usePrivy();
+  const { publicKey: unifiedPublicKey, connected: unifiedConnected, sendTransaction: unifiedSendTransaction, signTransaction: unifiedSignTransaction } = useUnifiedWallet();
+  const effectivePublicKey = (wallet.connected && wallet.publicKey) ? wallet.publicKey : unifiedPublicKey;
+  const effectiveConnected = wallet.connected || unifiedConnected;
+  const router = useRouter();
     // simple flag we can re-use in UI
-  const walletMissing = !wallet?.publicKey;
+  const walletMissing = !effectivePublicKey && !authenticated;
 
   // a tiny record we use to sort/paginate cheaply
 type LitePoolKey = {
@@ -1154,7 +1421,7 @@ type LitePoolKey = {
   name?: string;
   marketCap: number;
   createdAt?: number;    // firstSeenAtByMint or 0
-  poolType: 0 | 1;
+  poolType: 0 | 1 | 2 | 3;
   metaUri?: string;
   quoteMint: string;
 };
@@ -1170,6 +1437,10 @@ const [pools, setPools] = useState<PoolType[]>([]);
 
   const [balancesByMint, setBalancesByMint] = useState<Record<string, number>>({});
 
+  // ── Top Diamond Hands ──────────────────────────────────────────────
+  type DiamondEntry = { pda: string; avgDays: number; currentBalance: any; isMe: boolean }
+  const [topHolders, setTopHolders] = useState<DiamondEntry[]>([])
+  const [topHoldersLoading, setTopHoldersLoading] = useState(false)
 
   // ── paint + load gates ─────────────────────────────────────────────
 const [afterPaint, setAfterPaint] = React.useState(false);
@@ -1189,7 +1460,86 @@ async function fetchSoundMemePoolsWithMetadata(poolProgram: Program): Promise<Po
   return await hydratePoolsDetails(headers);
 }
 
+async function fetchJupiterPrice(memeMintStr: string): Promise<number> {
+  try {
+    const WOODENG_MINT_STR = "83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5";
+    const [memeRes, woodRes] = await Promise.all([
+      fetch(`https://api.jup.ag/price/v2?ids=${memeMintStr}`).then(r => r.json()),
+      fetch(`https://api.jup.ag/price/v2?ids=${WOODENG_MINT_STR}`).then(r => r.json()),
+    ]);
+    const memeUsd = Number(memeRes?.data?.[memeMintStr]?.price ?? 0);
+    const woodUsd = Number(woodRes?.data?.[WOODENG_MINT_STR]?.price ?? 0);
+    if (memeUsd > 0 && woodUsd > 0) return memeUsd / woodUsd;
+    return 0;
+  } catch { return 0; }
+}
 
+async function fetchDexScreenerPrice(memeMintStr: string): Promise<number> {
+  try {
+    const WOODENG_MINT_STR = "83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5";
+    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${memeMintStr}`);
+    const json = await res.json();
+    const pairs = json?.pairs;
+    if (!pairs || pairs.length === 0) return 0;
+    const woodPair = pairs.find((p: any) =>
+      p.quoteToken?.address === WOODENG_MINT_STR ||
+      p.baseToken?.address === WOODENG_MINT_STR
+    );
+    const pair = woodPair || pairs[0];
+    if (!pair) return 0;
+    const priceUsd = Number(pair.priceUsd ?? 0);
+    const woodRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${WOODENG_MINT_STR}`);
+    const woodJson = await woodRes.json();
+    const woodPriceUsd = Number(woodJson?.pairs?.[0]?.priceUsd ?? 0);
+    if (priceUsd > 0 && woodPriceUsd > 0) return priceUsd / woodPriceUsd;
+    return 0;
+  } catch { return 0; }
+}
+
+async function fetchBirdeyePrice(memeMintStr: string): Promise<number> {
+  try {
+    const WOODENG_MINT = "83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5";
+    const res = await fetch(
+      `https://public-api.birdeye.so/defi/multi_price?list_address=${memeMintStr},${WOODENG_MINT}`,
+      { headers: { "X-API-KEY": "" } }
+    );
+    const json = await res.json();
+    const memeUsd = json?.data?.[memeMintStr]?.value ?? 0;
+    const woodUsd = json?.data?.[WOODENG_MINT]?.value ?? 0;
+    if (memeUsd > 0 && woodUsd > 0) return memeUsd / woodUsd;
+    return 0;
+  } catch { return 0; }
+}
+
+
+
+// fetch Top Diamond Hands from devnet HolderProfile accounts
+useEffect(() => {
+  if (!afterPaint) return;
+  setTopHoldersLoading(true);
+  (async () => {
+    try {
+      const dummyProvider = new AnchorProvider(connection, { publicKey: PublicKey.default } as any, {});
+      const v2Program = new Program(poolV2Idl, V2_POOL_PROGRAM_ID, dummyProvider);
+      const allProfiles = await (v2Program.account as any).holderProfile.all() as Array<{ publicKey: PublicKey; account: any }>;
+      const HOLDER_SEED = Buffer.from("holder");
+      const myPda = effectivePublicKey
+        ? PublicKey.findProgramAddressSync([HOLDER_SEED, effectivePublicKey.toBuffer()], V2_POOL_PROGRAM_ID)[0].toBase58()
+        : null;
+      const sorted: DiamondEntry[] = allProfiles
+        .map(({ publicKey, account }) => {
+          return { pda: publicKey.toBase58(), avgDays: calcAvgDays(account), currentBalance: account.currentBalance, isMe: publicKey.toBase58() === myPda };
+        })
+        .sort((a, b) => b.avgDays - a.avgDays)
+        .slice(0, 10);
+      setTopHolders(sorted);
+    } catch (e) {
+      console.error("[TopHolders] fetch error", e);
+    } finally {
+      setTopHoldersLoading(false);
+    }
+  })();
+}, [afterPaint, effectivePublicKey?.toBase58()]);
 
 // load pools once we’ve painted (unblocks the rest of the pipeline)
 useEffect(() => {
@@ -1200,15 +1550,16 @@ useEffect(() => {
     try {
       const provider = new AnchorProvider(
         connection,
-        wallet.publicKey
-          ? getAnchorWallet(wallet)
+        effectivePublicKey
+          ? {
+              publicKey: effectivePublicKey,
+              signTransaction: ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction) as any,
+              signAllTransactions: ((wallet.connected && wallet.signAllTransactions) ? wallet.signAllTransactions : ((txs: any[]) => Promise.all(txs.map((tx: any) => ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction)(tx))))) as any,
+            }
           : ({ publicKey: new PublicKey('11111111111111111111111111111111') } as any),
         { preflightCommitment: 'processed' }
       );
-      const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
-
-      // 1) fetch headers (fast + no HTTP JSON)
-// 1) fetch headers (fast + no HTTP JSON)
+      const poolProgram = new Program(poolIdl, V2_POOL_PROGRAM_ID, provider);
 const rawHeaderPools = await fetchPoolHeadersOnly(poolProgram);
 
 // hide any blacklisted pool by either config PDA *or* meme mint
@@ -1257,9 +1608,82 @@ setPools(headerPools);
   })();
 
   return () => { cancelled = true; };
-}, [afterPaint, wallet.publicKey]);
+}, [afterPaint, effectivePublicKey?.toBase58()]);
 
+// Fetch live prices for graduated (poolType 2 or 3) pools once headers are loaded.
+// Mirrors the detail page: fetch GraduationInfo PDA individually if meteoraPool missing,
+// then Meteora vault first, Jupiter/DexScreener as fallbacks.
+useEffect(() => {
+  if (!poolsLoaded) return;
+  const graduated = pools.filter(p => p.poolType === 2 || p.poolType === 3);
+  if (!graduated.length) return;
+  let cancelled = false;
+  (async () => {
+    const updates: Record<string, number> = {};
+    await Promise.all(graduated.map(async p => {
+      const mint = p.memeMint.toBase58();
+      let lp = 0;
 
+      // If meteoraPool not already populated, fetch GraduationInfo PDA directly
+      let meteoraPoolAddr = p.meteoraPool;
+      if (!meteoraPoolAddr) {
+        try {
+          const programId = p.programVersion === 'v1' ? V1_POOL_PROGRAM_ID : V2_POOL_PROGRAM_ID;
+          const [gradPda] = PublicKey.findProgramAddressSync(
+            [Buffer.from('graduation'), p.pubkey.toBuffer()],
+            programId
+          );
+          const gradInfo = await connection.getAccountInfo(gradPda, 'confirmed');
+          if (gradInfo?.data && gradInfo.data.length >= 8 + 106) {
+            const raw = new PublicKey(gradInfo.data.subarray(8 + 40, 8 + 72)).toBase58();
+            if (raw !== '11111111111111111111111111111111') {
+              meteoraPoolAddr = raw;
+              p.meteoraPool = raw;
+            }
+          }
+        } catch (e) {
+          console.warn('[GRAD PDA]', mint, e);
+        }
+      }
+
+      // Try Meteora vault price
+      if (meteoraPoolAddr) {
+        try {
+          lp = await fetchMeteoraPoolPrice(connection, meteoraPoolAddr, mint, p.decimals ?? 0, 9);
+          if (lp > 0) console.log('[METEORA PRICE]', mint, '→', lp);
+        } catch (e) {
+          console.warn('[METEORA ERROR]', mint, e);
+        }
+      }
+
+      // Birdeye fallback (most reliable for listed tokens)
+      if (lp <= 0) {
+        lp = await fetchBirdeyePrice(mint);
+        if (lp > 0) console.log('[BIRDEYE FALLBACK]', mint, '→', lp);
+      }
+
+      // Jupiter fallback
+      if (lp <= 0) {
+        lp = await fetchJupiterPrice(mint);
+        if (lp > 0) console.log('[JUPITER FALLBACK]', mint, '→', lp);
+      }
+
+      // DexScreener fallback
+      if (lp <= 0) {
+        lp = await fetchDexScreenerPrice(mint);
+        if (lp > 0) console.log('[DEXSCREENER FALLBACK]', mint, '→', lp);
+      }
+
+      if (lp > 0) updates[mint] = lp;
+    }));
+    if (cancelled || !Object.keys(updates).length) return;
+    setPools(prev => prev.map(p => {
+      const lp = updates[p.memeMint.toBase58()];
+      return lp ? { ...p, price: lp } : p;
+    }));
+  })();
+  return () => { cancelled = true; };
+}, [poolsLoaded]);
 
 // run work when the browser is idle (fallback to setTimeout)
 const runIdle = (fn: () => void) => {
@@ -1289,7 +1713,7 @@ const handleOpenBurn = async (pool: PoolType) => {
   const ownedNfts = (
     await Promise.all(
       maybeNfts.map(async (n) =>
-        (await stillOwnsNft(n.mint, wallet.publicKey!)) ? n : null
+        (await stillOwnsNft(n.mint, effectivePublicKey!)) ? n : null
       )
     )
   ).filter(Boolean) as { lockId: number; mint: PublicKey }[];
@@ -1471,17 +1895,55 @@ function StepModal({ step, total, message }:{
   step:number; total:number; message:string;
 }) {
   return (
-    <div className="fixed inset-0 z-[2000] pointer-events-none">
-      {/* centred card */}
-      <div className="
-        absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2
-        w-72 rounded-2xl bg-[#23232e]/90 backdrop-blur-sm
-        shadow-2xl p-6 text-center text-white pointer-events-auto
-      ">
-        <h2 className="text-lg font-bold mb-1">
-          Step {step} of {total}
+    <div className="fixed inset-0 z-[2000] bg-black/60 backdrop-blur-[2px] flex items-center justify-center">
+      <div className="w-[min(88vw,340px)] rounded-2xl bg-[#1e1f28] border border-[#33334a]
+                      shadow-2xl p-6 text-white">
+        {/* step dots */}
+        {total > 1 && (
+          <div className="flex items-center justify-center gap-3 mb-5">
+            {Array.from({ length: total }, (_, i) => {
+              const idx = i + 1;
+              const done = idx < step;
+              const active = idx === step;
+              return (
+                <React.Fragment key={idx}>
+                  {i > 0 && (
+                    <div className={`h-[2px] w-8 rounded-full transition-colors duration-300 ${
+                      done ? 'bg-[#ffc371]' : 'bg-[#33334a]'
+                    }`} />
+                  )}
+                  <div className={`
+                    w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold
+                    transition-all duration-300 shrink-0
+                    ${done ? 'bg-[#ffc371] text-black' : ''}
+                    ${active ? 'bg-[#ffc371]/20 text-[#ffc371] ring-2 ring-[#ffc371]' : ''}
+                    ${!done && !active ? 'bg-[#2b2b37] text-[#666]' : ''}
+                  `}>
+                    {done ? <CheckCircle2 className="w-4 h-4" /> : idx}
+                  </div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        )}
+
+        {/* spinner */}
+        <div className="flex justify-center mb-4">
+          <Loader2 className="w-8 h-8 text-[#ffc371] animate-spin" />
+        </div>
+
+        {/* title */}
+        <h2 className="text-center text-base font-bold mb-1">
+          {total > 1 ? `Step ${step} of ${total}` : 'Processing'}
         </h2>
-        <p className="text-sm opacity-90">{message}</p>
+
+        {/* message */}
+        <p className="text-center text-sm text-[#a0a0b0]">{message}</p>
+
+        {/* hint */}
+        <p className="text-center text-[11px] text-[#666] mt-3">
+          Please confirm in your wallet
+        </p>
       </div>
     </div>
   );
@@ -1494,9 +1956,9 @@ function getAnchorWallet(wallet: WalletContextState): {
   publicKey: PublicKey,
   signTransaction: (tx: Transaction) => Promise<Transaction>,
   signAllTransactions: (txs: Transaction[]) => Promise<Transaction[]>
-} {
+} | null {
   if (!wallet.publicKey || !wallet.signTransaction || !wallet.signAllTransactions) {
-    throw new Error("Wallet not ready for Anchor.");
+    return null;
   }
   return {
     publicKey: wallet.publicKey,
@@ -1506,6 +1968,7 @@ function getAnchorWallet(wallet: WalletContextState): {
 }
 
 const poolIdl = poolIdlJson as Idl;
+const poolV2Idl = poolIdlV2Json as Idl;
 const lockerIdl = lockerIdlJson as Idl;
 
 
@@ -1602,10 +2065,40 @@ function decodeAnchorCustomError(code: number, idl?: Idl) {
 }
 
 
-const POOL_PROGRAM_ID = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV');
+// ── DEVNET TESTING ──────────────────────────────────────────────────────────
+// Flip this to false when you go back to mainnet
+const USE_DEVNET = false;
+
+// ── V1 mainnet pool program (existing pools, bonding + AMM only) ──
+const V1_POOL_PROGRAM_ID = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV');
+const V1_CONFIG_VERSION = 17;
+const V1_ACCOUNT_SIZE = 330; // 8 discriminator + 322 SoundMemeConfig::LEN
+
+// ── V2 mainnet pool program ──
+const V2_POOL_PROGRAM_ID = new PublicKey(
+  'C1pGixxtxw1z8x7eGcG2kzs4ZWBkXKVLwPJsDjxWTsin'
+);
+const V2_CONFIG_VERSION = 22;
+const V2_ACCOUNT_SIZE = 332; // 8 discriminator + 324 SoundMemeConfig::LEN
+const V2_DEPLOYED_ON_MAINNET = true;
+
+// ── Devnet connection for V2 testing ──
+const DEVNET_RPC_URL = 'https://api.devnet.solana.com';
+const devnetConnection = new Connection(DEVNET_RPC_URL, { commitment: "processed" });
+
+// For new pool creation (once v2 is on mainnet)
+const POOL_PROGRAM_ID = V2_POOL_PROGRAM_ID;
+
 const LOCKER_PROGRAM_ID = new PublicKey('cJcMJ8YWacxRPMG5r1E8GmVgxnS9KogUe6m7sN2TaHS');
-// ⬇️ ADD THIS
-const STAKING_PROGRAM_ID = new PublicKey('BFJU3f7PXgzcrYPD2MkQsjRko9wDTpEbyJTtLUzSyhFG');
+
+
+const STAKING_PROGRAM_ID = new PublicKey(
+  'BFJU3f7PXgzcrYPD2MkQsjRko9wDTpEbyJTtLUzSyhFG'   // mainnet staking (same code as devnet)
+);
+
+const WOODENG_MINT = new PublicKey(
+  '83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5'   // mainnet WOODENG
+);
 
 // Admin wallet allowed to run the initializer
 const ADMIN_INIT_PUBKEY = new PublicKey('34JBFxZnw7f6Ye9dsHpeLTnDjA1cU3HnJL1ABFVpjBMb');
@@ -1614,16 +2107,21 @@ const ADMIN_INIT_PUBKEY = new PublicKey('34JBFxZnw7f6Ye9dsHpeLTnDjA1cU3HnJL1ABFV
 const stakingIdl = stakingIdlJson as Idl;
 
 
-const WOODENG_MINT = new PublicKey('83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5');
+
 const PROJECT_WALLET = new PublicKey('34JBFxZnw7f6Ye9dsHpeLTnDjA1cU3HnJL1ABFVpjBMb');
 
 
-const RPC_URL =
-  (process.env.NEXT_PUBLIC_SOLANA_RPC && process.env.NEXT_PUBLIC_SOLANA_RPC.startsWith('http'))
+// MAINNET RPC — override any .env devnet setting
+const RPC_URL = (
+  process.env.NEXT_PUBLIC_SOLANA_RPC &&
+  process.env.NEXT_PUBLIC_SOLANA_RPC.startsWith('http') &&
+  !process.env.NEXT_PUBLIC_SOLANA_RPC.includes('devnet')  // reject devnet URLs
+)
     ? process.env.NEXT_PUBLIC_SOLANA_RPC
-    : 'https://mainnet.helius-rpc.com/?api-key=YOUR_KEY';
+    : 'https://mainnet.helius-rpc.com/?api-key=6b56ae36-a263-4599-a807-43a5289701dc';
 
 const connection = new Connection(RPC_URL, { commitment: "processed" });
+if (typeof window !== 'undefined') console.log('[SoundMemes] RPC:', RPC_URL.replace(/api-key=.*/, 'api-key=***'));
 
 
 
@@ -1632,16 +2130,22 @@ function feeRecipientFor(pool: PoolType): PublicKey {
   return pool.creator ?? PROJECT_WALLET;
 }
 
+// Get the correct pool program ID for a given pool (v1 vs v2)
+function poolProgramIdFor(pool: PoolType): PublicKey {
+  return pool.programVersion === 'v1' ? V1_POOL_PROGRAM_ID : V2_POOL_PROGRAM_ID;
+}
+
 
 const poolMcap = (p: PoolType) => p.ammReserves?.woodeng ?? 0;
 
-const CONFIG_VERSION = 17;
+// CONFIG_VERSION is used for new pool creation (always v2)
+const CONFIG_VERSION = V2_CONFIG_VERSION;
 
 
-type SortMode = 'marketcap' | 'gainers' | 'newest';
+type SortMode = 'marketcap' | 'gainers' | 'newest' | 'bonding';
 const PER_PAGE = 12;
 
-const [sortMode, setSortMode] = useState<SortMode>('marketcap');
+const [sortMode, setSortMode] = useState<SortMode>('newest');
 const [page, setPage] = useState(1);
 
 
@@ -1692,11 +2196,8 @@ function getStakingPdas(quoteMint: PublicKey) {
     STAKING_PROGRAM_ID
   );
 
-  // WSOL rewards vault (mint = WSOL) — includes CONFIG + WSOL mint
-  const [rewardsVaultWsol] = PublicKey.findProgramAddressSync(
-    [Buffer.from('reward_vault_wsol'), stakingConfig.toBuffer(), NATIVE_MINT.toBuffer()],
-    STAKING_PROGRAM_ID
-  );
+// WSOL rewards vault is an ATA owned by the staking config PDA
+  const rewardsVaultWsol = getAssociatedTokenAddressSync(NATIVE_MINT, stakingConfig, true);
 
   // keep return shape the same so call sites don't change
   return { stakingConfig, rewardsVault, rewardsVaultWsol };
@@ -1715,7 +2216,7 @@ async function ensureWsolRewardsVault(setStatus: (m: string) => void, walletCtx:
       throw new Error("Only the admin wallet can run this initializer.");
     }
 
-    const provider = new AnchorProvider(connection, getAnchorWallet(walletCtx), {
+    const provider = new AnchorProvider(connection, getAnchorWallet(walletCtx)!, {
       preflightCommitment: "confirmed",
     });
     const stakingProgram = new Program(stakingIdl, STAKING_PROGRAM_ID, provider);
@@ -1756,7 +2257,7 @@ async function ensureWsolRewardsVault(setStatus: (m: string) => void, walletCtx:
       })
       .instruction();
 
-    await sendIxsOnce(connection, getAnchorWallet(walletCtx), [
+    await sendIxsOnce(connection, getAnchorWallet(walletCtx)!, [
       ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
       ix,
     ]);
@@ -1891,6 +2392,37 @@ async function ensureIpfsUri(src?: string, filenameHint?: string) {
   return `ipfs://${cid}`;
 }
 
+
+// Fetch live price from a Meteora DAMM v2 pool by reading vault balances
+async function fetchMeteoraPoolPrice(
+  conn: Connection,
+  meteoraPoolAddress: string,
+  memeMintStr: string,
+  memeDecimals = 6,
+  quoteDecimals = 9,
+): Promise<number> {
+  try {
+    console.log('[fetchMeteoraPoolPrice] Fetching pool:', meteoraPoolAddress);
+    const cpAmm = new CpAmm(conn);
+    const poolState = await cpAmm.fetchPoolState(new PublicKey(meteoraPoolAddress));
+    console.log('[fetchMeteoraPoolPrice] Pool state OK, vaults:', poolState.tokenAVault.toBase58(), poolState.tokenBVault.toBase58());
+    const [vaultA, vaultB] = await Promise.all([
+      conn.getTokenAccountBalance(poolState.tokenAVault),
+      conn.getTokenAccountBalance(poolState.tokenBVault),
+    ]);
+    const amountA = Number(vaultA.value.amount);
+    const amountB = Number(vaultB.value.amount);
+    if (amountA <= 0 || amountB <= 0) return 0;
+    if (poolState.tokenAMint.toBase58() === memeMintStr) {
+      return (amountB / 10 ** quoteDecimals) / (amountA / 10 ** memeDecimals);
+    } else {
+      return (amountA / 10 ** quoteDecimals) / (amountB / 10 ** memeDecimals);
+    }
+  } catch (e) {
+    console.error('[fetchMeteoraPoolPrice] FAILED:', meteoraPoolAddress, e);
+    return 0;
+  }
+}
 
 // put this near the other top-level utils
 
@@ -2124,15 +2656,30 @@ const scorePool = (p: PoolType): number => {
   return s;
 };
 
+// ── Living Meme: locker URI overrides state (populated by effect below) ───
+const [lockerMetaOverrides, setLockerMetaOverrides] = useState<
+  Record<string, { imageUrl: string; audioUrl: string; description?: string; metaUri: string }>
+>({});
+
 // 1) reduce the set by query (if any)
-const filteredPools = React.useMemo(() => {
-  if (!query) return pools;
+const filteredPoolsRaw = React.useMemo(() => {
+  const visible = pools.filter(p => !HIDDEN_MINTS.has(p.memeMint.toBase58()));
+  if (!query) return visible;
 
   if (isPubkey(queryRaw)) {
-    return pools.filter(p => p.memeMint.toBase58() === queryRaw);
+    return visible.filter(p => p.memeMint.toBase58() === queryRaw);
   }
-  return pools.filter(p => scorePool(p) > 0);
+  return visible.filter(p => scorePool(p) > 0);
 }, [pools, query, queryRaw, seriesTick]);
+
+// 1b) Apply locker metadata overrides (Living Meme feature)
+const filteredPools = React.useMemo(() => {
+  if (!Object.keys(lockerMetaOverrides).length) return filteredPoolsRaw;
+  return filteredPoolsRaw.map(p => {
+    const ov = lockerMetaOverrides[p.memeMint.toBase58()];
+    return ov ? { ...p, imageUrl: ov.imageUrl, audioUrl: ov.audioUrl, metaUri: ov.metaUri } : p;
+  });
+}, [filteredPoolsRaw, lockerMetaOverrides]);
 
 // 2) sorting on the filtered set
 const sortedPools = React.useMemo(() => {
@@ -2147,7 +2694,21 @@ const sortedPools = React.useMemo(() => {
   rows.sort((a, b) => {
     if (query && a.score !== b.score) return b.score - a.score;
     if (sortMode === 'gainers' && a.chg !== b.chg) return b.chg - a.chg;
-    if (sortMode === 'newest'  && a.created !== b.created) return b.created - a.created;
+    if (sortMode === 'newest') {
+      const ta = a.created || Infinity, tb = b.created || Infinity;
+      if (tb !== ta) return tb - ta;
+    }
+    if (sortMode === 'bonding') {
+      // Show bonding pools first (poolType 0), sorted by bonding progress desc
+      const aIsBonding = a.p.poolType === 0 ? 1 : 0;
+      const bIsBonding = b.p.poolType === 0 ? 1 : 0;
+      if (aIsBonding !== bIsBonding) return bIsBonding - aIsBonding;
+      if (aIsBonding && bIsBonding) {
+        const aProg = (a.p.bondingSold ?? 0);
+        const bProg = (b.p.bondingSold ?? 0);
+        return bProg - aProg; // most progress first
+      }
+    }
     // default: marketcap
     if (a.mcap !== b.mcap) return b.mcap - a.mcap;
 
@@ -2166,7 +2727,7 @@ const start       = (pageClamped - 1) * PER_PAGE;
 // what the UI actually renders
 const visiblePools = sortedPools.slice(start, start + PER_PAGE);
 
-// NEW: a “window” you can use for background work (hydrate/prefetch, polling, etc.)
+// NEW: a "window" you can use for background work (hydrate/prefetch, polling, etc.)
 const windowPools  = sortedPools.slice(start, start + PER_PAGE * 2);
 
 
@@ -2189,7 +2750,153 @@ const windowKeys = React.useMemo<LitePoolKey[]>(() => {
 
 
 
-// Batch 24h OHLC fetch — only if we don't already have bars for these mints
+// ── SWL-444: Creator reputation computed from loaded pools ─────────────
+// Groups all pools by creator, computes a lightweight reputation score,
+// and maps it per memeMint so each card can display it.
+
+// Per-pool perf data (keyed by mint)
+const poolPerfByMint = React.useMemo<Record<string, PoolPerfBadge>>(() => {
+  const result: Record<string, PoolPerfBadge> = {};
+
+  for (const p of pools) {
+    if (HIDDEN_MINTS.has(p.memeMint.toBase58())) continue;
+    // For graduated pools whose vaults are empty, use lastMemePrice as currentPrice
+    let currentPrice = p.price ?? 0;
+    if ((p.poolType === 2 || p.poolType === 3) && currentPrice <= 0) {
+      const lmp = (p.lastMemePrice ?? 0);
+      if (lmp > 0) currentPrice = lmp / 1e9;
+    }
+    if (currentPrice <= 0) continue;
+
+    // Bonding status detection
+    let bondingStatus: PoolPerfBadge['bondingStatus'] = 'amm-launch';
+    if (p.poolType === 0) {
+      bondingStatus = 'bonding';
+    } else if ((p.bondingSold ?? 0) > 0) {
+      bondingStatus = 'bonded';
+    }
+
+    // Base price: flat reference for multiplier calculation.
+    // V2 graduated pools: lastMemePrice/1e9 (starts at 1x at graduation).
+    // SOL pools: 44 SOL target. WOODENG bonding: 0.1 WOODENG.
+    let basePrice: number;
+    if ((p.poolType === 2 || p.poolType === 3) && !quoteIsSol(p)) {
+      const gradPrice = (p.lastMemePrice ?? 0) / 1e9;
+      basePrice = gradPrice > 0 ? gradPrice : 0.1;
+    } else {
+      basePrice = quoteIsSol(p) ? Number(PRICE_TARGET_SOL_LAMPORTS) / 1e9 : 0.1;
+    }
+
+    const currentMultiplier = currentPrice / basePrice;
+
+    // ATH approximation from lastMemePrice
+    const lastPrice = (p.lastMemePrice ?? 0) / 1e9;
+    const bestKnown = Math.max(currentPrice, lastPrice);
+    const athMultiplier = bestKnown / basePrice;
+
+    result[p.memeMint.toBase58()] = {
+      launchPrice: basePrice,
+      currentPrice,
+      currentMultiplier,
+      athMultiplier,
+      bondingStatus,
+    };
+  }
+  return result;
+}, [pools]);
+
+// Creator-level stats (aggregate across all their pools)
+const creatorRepByMint = React.useMemo<Record<string, CreatorRepBadge>>(() => {
+  const byCreator: Record<string, PoolType[]> = {};
+  for (const p of pools) {
+    if (HIDDEN_MINTS.has(p.memeMint.toBase58())) continue;
+    const c = p.creator?.toBase58();
+    if (!c) continue;
+    if (!byCreator[c]) byCreator[c] = [];
+    byCreator[c].push(p);
+  }
+
+  const result: Record<string, CreatorRepBadge> = {};
+
+  for (const [, creatorPools] of Object.entries(byCreator)) {
+    const launches = creatorPools.length;
+    // Graduated = finished bonding. v1: poolType>=1 with bondingSold>0. v2: poolType>=2.
+    const graduated = creatorPools.filter(p =>
+      p.poolType >= 2 || (p.poolType >= 1 && (p.bondingSold ?? 0) > 0)
+    ).length;
+
+    // Collect multipliers from per-pool perf
+    let totalMult = 0;
+    let bestMult = 0;
+    let countWithPerf = 0;
+    for (const p of creatorPools) {
+      const perf = poolPerfByMint[p.memeMint.toBase58()];
+      if (!perf) continue;
+      totalMult += perf.currentMultiplier;
+      bestMult = Math.max(bestMult, perf.currentMultiplier);
+      countWithPerf++;
+    }
+    const avgMultiplier = countWithPerf > 0 ? totalMult / countWithPerf : 0;
+
+    // Score not displayed directly — we show avgMultiplier instead
+    // But keep score for internal ranking/sorting
+    const launchScore = Math.min(30, launches * 10);
+    const perfScore = avgMultiplier > 1 ? Math.min(40, Math.log10(avgMultiplier) * 20) : 0;
+    const gradScore = Math.min(30, graduated * 15);
+    const score = Math.min(100, Math.round(launchScore + perfScore + gradScore));
+
+    const badge: CreatorRepBadge = { score, launches, graduated, avgMultiplier, bestMultiplier: bestMult };
+    for (const p of creatorPools) {
+      result[p.memeMint.toBase58()] = badge;
+    }
+  }
+  return result;
+}, [pools, poolPerfByMint]);
+
+// ── Top 3 creators by avg multiplier (for leaderboard) ──
+const topCreators = React.useMemo(() => {
+  const seen = new Map<string, { addr: string; avgMult: number; launches: number; bestPool?: PoolType }>();
+  for (const p of pools) {
+    const addr = p.creator?.toBase58();
+    if (!addr) continue;
+    const rep = creatorRepByMint[p.memeMint.toBase58()];
+    if (!rep || seen.has(addr)) continue;
+    // find this creator's best performing pool
+    const creatorPools = pools.filter(pp => pp.creator?.toBase58() === addr);
+    let bestPool: PoolType | undefined;
+    let bestMult = 0;
+    for (const cp of creatorPools) {
+      const perf = poolPerfByMint[cp.memeMint.toBase58()];
+      if (perf && perf.currentMultiplier > bestMult) {
+        bestMult = perf.currentMultiplier;
+        bestPool = cp;
+      }
+    }
+    seen.set(addr, { addr, avgMult: rep.avgMultiplier, launches: rep.launches, bestPool });
+  }
+  return [...seen.values()].sort((a, b) => b.avgMult - a.avgMult).slice(0, 3);
+}, [pools, creatorRepByMint, poolPerfByMint]);
+
+// ── Hot pools: bonding pools with most progress + top 24h gainers ──
+const hotPools = React.useMemo(() => {
+  const withScore = pools
+    .filter(p => (p.price ?? 0) > 0)
+    .map(p => {
+      const mint = p.memeMint.toBase58();
+      const chg = change24hFor(mint);
+      const perf = poolPerfByMint[mint];
+      const bondingProg = p.poolType === 0 && p.vtokens ? (p.bondingSold ?? 0) / Number(CURVE_THRESHOLD_RAW_COMMON) : 0;
+      // Hot score: bonding progress (60% weight when bonding) + 24h change
+      const score = (p.poolType === 0 ? bondingProg * 60 : 0) + Math.max(0, chg) + (perf?.currentMultiplier ?? 0) * 2;
+      return { pool: p, score, chg, bondingProg };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6);
+  return withScore;
+}, [pools, change24hFor, poolPerfByMint]);
+
+
+
 useEffect(() => {
   if (!afterPaint || !poolsLoaded || !visiblePools.length) return;
   let stop = false;
@@ -2227,7 +2934,39 @@ useEffect(() => {
   return () => { stop = true; clearInterval(id); };
 }, [afterPaint, poolsLoaded, visiblePools.map(p => p.memeMint.toBase58()).join(','), serverCandles]);
 
+// Poll live prices for graduated pools every 30s (mirrors detail page logic)
+useEffect(() => {
+  const graduatedPools = pools.filter(p => p.poolType === 2 || p.poolType === 3);
+  if (!graduatedPools.length) return;
 
+  const fetchLivePrices = async () => {
+    const updates: Record<string, number> = {};
+    for (const p of graduatedPools) {
+      try {
+        const memeMint = p.memeMint instanceof PublicKey ? p.memeMint.toBase58() : String(p.memeMint);
+        let livePrice = 0;
+        if (p.meteoraPool) {
+          livePrice = await fetchMeteoraPoolPrice(connection, p.meteoraPool, memeMint, p.decimals ?? 0, 9);
+        }
+        if (livePrice <= 0) livePrice = await fetchBirdeyePrice(memeMint);
+        if (livePrice <= 0) livePrice = await fetchJupiterPrice(memeMint);
+        if (livePrice <= 0) livePrice = await fetchDexScreenerPrice(memeMint);
+        if (livePrice > 0) updates[memeMint] = livePrice;
+      } catch {}
+    }
+    if (!Object.keys(updates).length) return;
+    // Immutable update: create new pool objects so React detects the change
+    setPools(prev => prev.map(p => {
+      const mint = p.memeMint instanceof PublicKey ? p.memeMint.toBase58() : String(p.memeMint);
+      const lp = updates[mint];
+      return lp ? { ...p, price: lp, marketCap: lp * (p.totalSupply ?? 0) } : p;
+    }));
+  };
+
+  fetchLivePrices();
+  const id = setInterval(fetchLivePrices, 30_000);
+  return () => clearInterval(id);
+}, [pools.length]);
 
 
 
@@ -2261,12 +3000,111 @@ useEffect(() => {
 setPools(prev => {
   if (!prev?.length) return prev;
   const map = new Map(prev.map(p => [p.pubkey.toBase58(), p]));
-  for (const p of filled) map.set(p.pubkey.toBase58(), p);
+  for (const p of filled) {
+    const existing = map.get(p.pubkey.toBase58());
+    // For graduated pools, preserve the live Meteora/Jupiter price if already fetched
+    if (existing && (existing.poolType === 2 || existing.poolType === 3) && existing.price && existing.price > 0) {
+      map.set(p.pubkey.toBase58(), { ...p, price: existing.price, marketCap: existing.price * (p.totalSupply ?? existing.totalSupply ?? 0) });
+    } else {
+      map.set(p.pubkey.toBase58(), p);
+    }
+  }
   return Array.from(map.values());
 });
 
   })();
 }, [poolsLoaded, windowKeys.map(k=>k.pubkey).join(','), headersByKey]);
+
+
+// ── Living Meme: locker URI overrides effect ─────────────────────────────
+
+useEffect(() => {
+  if (!poolsLoaded || !pools.length) return;
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const disc = BorshAccountsCoder.accountDiscriminator('LockerState');
+      const allLockers = await connection.getProgramAccounts(LOCKER_PROGRAM_ID, {
+        filters: [{ memcmp: { offset: 0, bytes: bs58.encode(disc) } }],
+      });
+      if (cancelled || !allLockers.length) return;
+
+      const dummyProvider = new AnchorProvider(connection, { publicKey: PublicKey.default } as any, {});
+      const coder = new Program(lockerIdl, LOCKER_PROGRAM_ID, dummyProvider).coder.accounts;
+
+      // SWL-444: Build memeMint → list of lockers, then pick creator-owned highest lockId
+      const lockersByMint: Record<string, { uri: string; owner: string; lockId: number }[]> = {};
+      for (const { account } of allLockers) {
+        try {
+          const s = coder.decode('LockerState', account.data) as any;
+          const mint = new PublicKey(s.memeMint).toBase58();
+          const uri = String(s.memeUri ?? '').replace(/\0/g, '').trim();
+          const owner = new PublicKey(s.lockerOwner).toBase58();
+          const lockId = Number(s.lockId ?? 0);
+          if (uri) {
+            if (!lockersByMint[mint]) lockersByMint[mint] = [];
+            lockersByMint[mint].push({ uri, owner, lockId });
+          }
+        } catch {}
+      }
+
+      // Find pools where the best locker URI differs from current metaUri
+      const toFetch: { mintStr: string; lockerUri: string }[] = [];
+      for (const p of pools) {
+        const mintStr = p.memeMint.toBase58();
+        const candidates = lockersByMint[mintStr];
+        if (!candidates?.length) continue;
+
+        const creatorStr = p.creator?.toBase58();
+        const creatorLockers = creatorStr
+          ? candidates.filter(c => c.owner === creatorStr)
+          : [];
+        const pool_ = creatorLockers.length ? creatorLockers : candidates;
+        const best = pool_.reduce((a, b) => (b.lockId > a.lockId ? b : a));
+
+        if (best.uri && best.uri !== p.metaUri) {
+          toFetch.push({ mintStr, lockerUri: best.uri });
+        }
+      }
+      if (cancelled || !toFetch.length) return;
+
+      // Fetch updated metadata JSONs
+      const results = await Promise.all(
+        toFetch.map(async ({ lockerUri }) => {
+          try {
+            const url = toHttp(lockerUri);
+            if (!url) return null;
+            const r = await fetch(url, { cache: 'no-store' });
+            return r.ok ? await r.json() : null;
+          } catch { return null; }
+        })
+      );
+      if (cancelled) return;
+
+      const overrides: typeof lockerMetaOverrides = {};
+      for (let i = 0; i < toFetch.length; i++) {
+        const j = results[i];
+        if (!j) continue;
+        overrides[toFetch[i].mintStr] = {
+          imageUrl: toHttp(j.image || '') || '',
+          audioUrl: toHttp(j.animation_url || '') || '',
+          description: j.description || '',
+          metaUri: toFetch[i].lockerUri,
+        };
+      }
+
+      if (Object.keys(overrides).length && !cancelled) {
+        console.log('[Living Meme] Override ready for', Object.keys(overrides).length, 'pool(s)');
+        setLockerMetaOverrides(overrides);
+      }
+    } catch (e) {
+      console.debug('[Living Meme] locker override fetch failed:', e);
+    }
+  })();
+
+  return () => { cancelled = true; };
+}, [poolsLoaded, pools.length]);
 
 
 
@@ -2276,14 +3114,15 @@ useEffect(() => { setPage(1); }, [sortMode, pools.length, query]);
 
 
 async function migratePool(pool: PoolType) {
-  if (!wallet.publicKey) throw new Error('Connect wallet first!');
-  const provider = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: 'confirmed' });
-  const prog     = new Program(poolIdl, POOL_PROGRAM_ID, provider);
-  const [cfgPda] = await getConfigPda(pool.memeMint);
+  if (!effectivePublicKey) throw new Error('Connect wallet first!');
+  const anchorWalletEff = { publicKey: effectivePublicKey!, signTransaction: (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction, signAllTransactions: (wallet.connected && wallet.signAllTransactions) ? wallet.signAllTransactions : ((txs: any[]) => Promise.all(txs.map((tx: any) => ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction)(tx)))) };
+  const provider = new AnchorProvider(connection, anchorWalletEff as any, { preflightCommitment: 'confirmed' });
+  const prog     = new Program(poolIdl, poolProgramIdFor(pool), provider);
+  const [cfgPda] = await getConfigPda(pool.memeMint, poolProgramIdFor(pool));
   const [memeVault]   = await PublicKey.findProgramAddress(
-    [Buffer.from('pool_meme_vault'),   pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
+    [Buffer.from('pool_meme_vault'),   pool.memeMint.toBuffer()], poolProgramIdFor(pool));
   const [woodengVault]= await PublicKey.findProgramAddress(
-    [Buffer.from('pool_woodeng_vault'),pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
+    [Buffer.from('pool_woodeng_vault'),pool.memeMint.toBuffer()], poolProgramIdFor(pool));
 
   const sig = await prog.methods.migrateToAmm().accounts({
     config: cfgPda,
@@ -2311,6 +3150,52 @@ async function migratePool(pool: PoolType) {
   setPools(upd);
   setStatus(`Migrated! Tx ${sig.slice(0,8)}…`);
 }
+
+
+async function graduatePool(pool: PoolType) {
+  if (!effectivePublicKey) throw new Error('Connect wallet first!');
+  const anchorWalletEff2 = { publicKey: effectivePublicKey!, signTransaction: (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction, signAllTransactions: (wallet.connected && wallet.signAllTransactions) ? wallet.signAllTransactions : ((txs: any[]) => Promise.all(txs.map((tx: any) => ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction)(tx)))) };
+  const provider = new AnchorProvider(connection, anchorWalletEff2 as any, { preflightCommitment: 'confirmed' });
+  const prog     = new Program(poolIdl, poolProgramIdFor(pool), provider);
+  const [cfgPda] = await getConfigPda(pool.memeMint, poolProgramIdFor(pool));
+
+  const [memeVault]    = await PublicKey.findProgramAddress(
+    [Buffer.from('pool_meme_vault'),    pool.memeMint.toBuffer()], poolProgramIdFor(pool));
+  const [woodengVault] = await PublicKey.findProgramAddress(
+    [Buffer.from('pool_woodeng_vault'), pool.memeMint.toBuffer()], poolProgramIdFor(pool));
+
+  const [graduationInfo] = await PublicKey.findProgramAddress(
+    [Buffer.from('graduation'), cfgPda.toBuffer()], poolProgramIdFor(pool));
+
+  setTxStep({ step: 1, total: 1, message: 'Graduating to Meteora…' });
+
+  const sig = await prog.methods.graduateToMeteora().accounts({
+    config:           cfgPda,
+    payer:            effectivePublicKey!,
+    poolMemeVault:    memeVault,
+    poolWoodengVault: woodengVault,
+    graduationInfo,
+    systemProgram:    SystemProgram.programId,
+  }).rpc();
+
+  setTxStep(null);
+
+  // Bridge price point
+  try {
+    const mintStr = pool.memeMint.toBase58();
+    const bridge = Number(pool.lastMemePrice ?? 0) > 0
+      ? Number(pool.lastMemePrice)
+      : Math.round(Number(pool.price ?? 0) * 1e9);
+    if (bridge > 0) { pushPricePoint(mintStr, bridge); flushNow(false); }
+  } catch {}
+
+  await refreshBalances();
+  await refreshUserNfts();
+  const upd = await fetchSoundMemePoolsWithMetadata(prog);
+  setPools(upd);
+  setStatus(`Graduated! Now create the Meteora pool. Tx ${sig.slice(0, 8)}…`);
+}
+
 
 
 
@@ -2391,7 +3276,14 @@ async function getUserProtocolNfts(
 
         // 2. loop 0 … count-1 and fetch each locker directly
     for (let i = 0; i < Number(counter.count); i++) {
-      const [lockerPda] = await getLockerPda(memeMint, owner, BigInt(i));
+      // Inline PDA derivation — must match Rust seeds:
+      // seeds = [b"locker", meme_mint.key(), user.key(), &lock_id.to_le_bytes()]
+      const lockIdLE = new Uint8Array(8);
+      new DataView(lockIdLE.buffer).setBigUint64(0, BigInt(i), true);
+      const [lockerPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('locker'), memeMint.toBuffer(), owner.toBuffer(), Buffer.from(lockIdLE)],
+        LOCKER_PROGRAM_ID
+      );
       try {
         const l = await lockerProgram.account.lockerState.fetch(lockerPda);
         (byPool[memeMint.toBase58()] ??= {})[Number(i)] = { mint: l.nftMint };
@@ -2414,8 +3306,8 @@ async function getAta(owner: PublicKey, mint: PublicKey, isPdaOwner = false) {
   );
 }
 
-async function getConfigPda(memeMint: PublicKey) {
-  return await PublicKey.findProgramAddress([Buffer.from('config'), memeMint.toBuffer()], POOL_PROGRAM_ID);
+async function getConfigPda(memeMint: PublicKey, programId: PublicKey = POOL_PROGRAM_ID) {
+  return await PublicKey.findProgramAddress([Buffer.from('config'), memeMint.toBuffer()], programId);
 }
 
 
@@ -2540,7 +3432,7 @@ async function ensureLockerInitialized(
 
   assertWallet(walletCtx);
 
-  const provider      = new AnchorProvider(connection, getAnchorWallet(walletCtx), { preflightCommitment: "confirmed" });
+  const provider      = new AnchorProvider(connection, getAnchorWallet(walletCtx)!, { preflightCommitment: "confirmed" });
   const lockerProgram = new Program(lockerIdl, LOCKER_PROGRAM_ID, provider);
 
   // 1) Counter PDA
@@ -2563,7 +3455,12 @@ async function ensureLockerInitialized(
   // 3) Locker PDA using current counter value
   const counter = await lockerProgram.account.lockCounter.fetch(counterPda);
   const lockId  = Number(counter.count);
-  const [lockerPda] = await getLockerPda(memeMint, walletCtx.publicKey!, BigInt(lockId));
+  const lockIdLE2 = new Uint8Array(8);
+  new DataView(lockIdLE2.buffer).setBigUint64(0, BigInt(lockId), true);
+  const [lockerPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from('locker'), memeMint.toBuffer(), walletCtx.publicKey!.toBuffer(), Buffer.from(lockIdLE2)],
+    LOCKER_PROGRAM_ID
+  );
 
   // 4) If locker already exists, done
   try {
@@ -2574,7 +3471,7 @@ async function ensureLockerInitialized(
   // 5) Ensure locker’s meme ATA exists (owned by the PDA) — send once
   const { ata: lockerMemeAccount, ix: lockerMemeAtaIx } =
     await ensureAtaIx(lockerPda, memeMint, walletCtx.publicKey!, true);
-  await sendIxsOnce(connection, getAnchorWallet(walletCtx), [lockerMemeAtaIx]);
+  await sendIxsOnce(connection, getAnchorWallet(walletCtx)!, [lockerMemeAtaIx]);
 
   // 6) Initialize the locker
   await lockerProgram.methods.initializeLocker(
@@ -2626,7 +3523,7 @@ async function lockTokens(
     if (!walletCtx.publicKey || !walletCtx.signTransaction || !walletCtx.signAllTransactions) {
       throw new Error("Connect wallet first");
     }
-    const wallet = getAnchorWallet(walletCtx);
+    const wallet = getAnchorWallet(walletCtx)!;
     const provider = new AnchorProvider(connection, wallet, { preflightCommitment: 'confirmed' });
     const lockerProgram = new Program(lockerIdl, LOCKER_PROGRAM_ID, provider);
 
@@ -2692,7 +3589,14 @@ const { name: nameSan, symbol: symbolSan, uri: metaUriSan } =
       lockId = 0; // first time
     }
 
-    const [lockerPda] = await getLockerPda(memeMint, wallet.publicKey, BigInt(lockId));
+    // Inline PDA derivation — must match Rust seeds:
+    // seeds = [b"locker", meme_mint.key(), user.key(), &counter.count.to_le_bytes()]
+    const lockIdLEInit = new Uint8Array(8);
+    new DataView(lockIdLEInit.buffer).setBigUint64(0, BigInt(lockId), true);
+    let [lockerPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('locker'), memeMint.toBuffer(), wallet.publicKey.toBuffer(), Buffer.from(lockIdLEInit)],
+      LOCKER_PROGRAM_ID
+    );
 
     // NFT mint: authority = locker PDA
     const mintBuild = await buildCreateMintIx(connection, wallet.publicKey, 0, lockerPda);
@@ -2762,56 +3666,99 @@ const { name: nameSan, symbol: symbolSan, uri: metaUriSan } =
 
 
 
-    // -------- 2) send TX A (state/mint/ATAs/init) --------------------------
-setStep(3, 4, "Initializing locker…"); // 4 steps now (IPFS, prep, init, mint)
+    // -------- 2) send TX A1 / A2 / A3 (state/mint/ATAs/init) --------------
+    // IMPORTANT: initializeCounter and initializeLocker MUST be in separate
+    // transactions. Anchor reads counter.count from the on-chain account to
+    // verify the locker PDA seeds — if both are in the same tx the counter
+    // account doesn't exist yet when initializeLocker executes, causing a
+    // ConstraintSeeds error.
+    setStep(3, 4, "Initializing locker…");
 
-const ixsA: TransactionInstruction[] = [
-  ComputeBudgetProgram.setComputeUnitLimit({ units: 350_000 }),
-  ...mintBuild.ixs,
-  userMemeAtaIx,
-  userNftAtaIx,
-  lockerMemeAtaIx,
-];
+    // TX A1: create mint + ATAs (needs mintBuild.signers for the new mint keypair)
+    const ixsA1: TransactionInstruction[] = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 350_000 }),
+      ...mintBuild.ixs,
+      userMemeAtaIx,
+      userNftAtaIx,
+      lockerMemeAtaIx,
+    ];
+    await sendIxsOnce(connection, wallet, ixsA1, mintBuild.signers);
 
-if (needInitCounter) {
-  ixsA.push(
-    await lockerProgram.methods.initializeCounter()
-      .accounts({
-        user: wallet.publicKey, counter: counterPda, memeMint,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction()
-  );
-}
+    // TX A2: initialize counter (only if it didn't exist yet)
+    if (needInitCounter) {
+      const ixsA2: TransactionInstruction[] = [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }),
+        await lockerProgram.methods.initializeCounter()
+          .accounts({
+            user: wallet.publicKey,
+            counter: counterPda,
+            memeMint,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction(),
+      ];
+      await sendIxsOnce(connection, wallet, ixsA2, []);
+    }
 
-if (needInitLocker) {
-  ixsA.push(
-    await lockerProgram.methods.initializeLocker(
-      new BN(thresholdRaw),
-      nameSan,
-      symbolSan,
-      metaUriSan
-    )
-    .accounts({
-      user: wallet.publicKey,
-      counter: counterPda,
-      locker: lockerPda,
-      memeMint,
-      nftMint,                 // just-created mint (authority = lockerPda)
-      lockerMemeAccount,
-      systemProgram: SystemProgram.programId,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      rent: SYSVAR_RENT_PUBKEY,
-    })
-    .instruction()
-  );
-}
+    // TX A3: initialize locker — counter is now confirmed on-chain so Anchor
+    // can read counter.count to verify the locker PDA seeds correctly.
+    if (needInitLocker) {
+      // Re-fetch counter to get the definitive lockId after A2 has landed
+      const freshCounter = await lockerProgram.account.lockCounter.fetch(counterPda);
+      const freshLockId  = Number(freshCounter.count);
 
-// If we had any init to do, send TX A; else skip it
-if (needInitCounter || needInitLocker) {
-  await sendIxsOnce(connection, wallet, ixsA, mintBuild.signers);
-}
+      // Inline PDA derivation — must match Rust seeds exactly:
+      // seeds = [b"locker", meme_mint.key(), user.key(), &counter.count.to_le_bytes()]
+      const lockIdLE = new Uint8Array(8);
+      new DataView(lockIdLE.buffer).setBigUint64(0, BigInt(freshLockId), true);
+      const [freshLockerPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('locker'), memeMint.toBuffer(), wallet.publicKey.toBuffer(), Buffer.from(lockIdLE)],
+        LOCKER_PROGRAM_ID
+      );
+
+      console.log('[lockTokens] TX A3 debug:');
+      console.log('  memeMint:', memeMint.toBase58());
+      console.log('  user:', wallet.publicKey.toBase58());
+      console.log('  freshLockId:', freshLockId);
+      console.log('  lockIdLE:', Array.from(lockIdLE).map(b => b.toString(16).padStart(2,'0')).join(' '));
+      console.log('  freshLockerPda:', freshLockerPda.toBase58());
+      console.log('  nftMint:', nftMint.toBase58());
+      console.log('  LOCKER_PROGRAM_ID:', LOCKER_PROGRAM_ID.toBase58());
+
+      // Re-check in case locker was already created by a concurrent call
+      let alreadyExists = false;
+      try { await lockerProgram.account.lockerState.fetch(freshLockerPda); alreadyExists = true; }
+      catch { /* doesn't exist yet — proceed */ }
+
+      if (!alreadyExists) {
+        const ixsA3: TransactionInstruction[] = [
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+          await lockerProgram.methods.initializeLocker(
+            new BN(thresholdRaw),
+            nameSan,
+            symbolSan,
+            metaUriSan
+          )
+          .accounts({
+            user: wallet.publicKey,
+            counter: counterPda,
+            locker: freshLockerPda,
+            memeMint,
+            nftMint,
+            lockerMemeAccount,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            rent: SYSVAR_RENT_PUBKEY,
+          })
+          .instruction(),
+        ];
+        await sendIxsOnce(connection, wallet, ixsA3, []);
+
+        // Update lockerPda for TX B (lockTokensAndMintNft) below
+        lockerPda = freshLockerPda;
+      }
+    }
 
 // -------- 3) send TX B (lock + mint + metadata + edition) --------------
 setStep(4, 4, "Locking tokens & minting your NFT…");
@@ -3036,11 +3983,15 @@ function userMemeTokens(pool: PoolType): number {
 
 
 
-function PoolTypeBadge({ poolType }: { poolType: 0 | 1 }) {
+function PoolTypeBadge({ poolType }: { poolType: 0 | 1 | 2 | 3 }) {
   const cfg =
     poolType === 0
       ? { text: "Bonding", bg: "bg-orange-600/80" }
-      : { text: "AMM",      bg: "bg-green-600/80" };
+      : poolType === 3
+        ? { text: "🎓 On Meteora", bg: "bg-purple-600/80" }
+        : poolType === 2
+          ? { text: "🎓 Graduating…", bg: "bg-yellow-600/80" }
+          : { text: "AMM", bg: "bg-green-600/80" };
 
   return (
     <span
@@ -3120,18 +4071,21 @@ function toHttp(url: string | undefined): string | undefined {
     const rest = url.slice(7).replace(/^ipfs\//, '');
     return `/ipfs/${rest}`;
   }
+  // handle bare /ipfs/ paths
+  if (url.startsWith('/ipfs/')) return url;
   return url;
 }
 
 
 async function getMultiple(
   keys: PublicKey[],
-  chunk = 100
+  chunk = 100,
+  conn: Connection = connection
 ): Promise<(import("@solana/web3.js").AccountInfo<Buffer> | null)[]> {
   const out: (import("@solana/web3.js").AccountInfo<Buffer> | null)[] = [];
   for (let i = 0; i < keys.length; i += chunk) {
     const part = keys.slice(i, i + chunk);
-    const infos = await connection.getMultipleAccountsInfo(part, "confirmed");
+    const infos = await conn.getMultipleAccountsInfo(part, "confirmed");
     out.push(...infos);
   }
   return out;
@@ -3154,44 +4108,61 @@ async function mapLimit<T, R>(
 }
 
 // ------ BATCHED & SCALABLE FETCH ---------------------------------------
-async function fetchPoolHeadersOnly(poolProgram: Program) {
+
+// Helper: fetch pools from a single program ID + config version, tag with programVersion
+async function fetchPoolsFromProgram(
+  programId: PublicKey,
+  configVersion: number,
+  poolProgram: Program,
+  programVersion: 'v1' | 'v2',
+  dataSize: number,
+  conn: Connection = connection, // default to mainnet
+): Promise<PoolType[]> {
   const disc = BorshAccountsCoder.accountDiscriminator("SoundMemeConfig");
 
-  const rawConfigs = await connection.getProgramAccounts(POOL_PROGRAM_ID, {
+  const tag = `[${programVersion.toUpperCase()} fetch]`;
+  console.log(tag, 'programId:', programId.toString(), 'dataSize:', dataSize, 'configVersion:', configVersion);
+
+  const rawConfigs = await conn.getProgramAccounts(programId, {
     filters: [
+      { dataSize },
       { memcmp: { offset: 0, bytes: bs58.encode(disc) } },
-      { memcmp: { offset: 8, bytes: bs58.encode(Buffer.from([CONFIG_VERSION])) } },
     ],
   });
+
+  console.log(tag, 'raw accounts from getProgramAccounts:', rawConfigs.length);
+  console.log(tag, 'first account data length:', rawConfigs[0]?.account.data.length);
 
   const configs: Array<{ publicKey: PublicKey; account: any }> = [];
   for (const { pubkey, account } of rawConfigs) {
     const data = account.data;
     if (!data || data.length < 9) continue;
-    if (data[8] !== CONFIG_VERSION) continue;
     try {
       const acc = poolProgram.coder.accounts.decode("SoundMemeConfig", data);
-      if ((acc as any).version === CONFIG_VERSION) {
+      if (acc != null) {
         configs.push({ publicKey: pubkey, account: acc });
       }
-    } catch {}
+    } catch (e) {
+      console.warn(tag, 'decode error for', pubkey.toString(), e);
+    }
   }
+  console.log(tag, 'after decode:', configs.length);
   if (!configs.length) return [];
 
   const memeMints  = configs.map((c) => new PublicKey((c.account as any).memeMint));
   const quoteMints = configs.map((c) => new PublicKey((c.account as any).woodengMint));
 
-  // derive PDAs
+  // derive PDAs — must use the CORRECT program ID for this version
   const memeVaults = await Promise.all(
     memeMints.map(async (m) => (await PublicKey.findProgramAddress(
       [Buffer.from("pool_meme_vault"), m.toBuffer()],
-      POOL_PROGRAM_ID
+      programId
     ))[0])
   );
   const woodVaults = await Promise.all(
     memeMints.map(async (m) => (await PublicKey.findProgramAddress(
       [Buffer.from("pool_woodeng_vault"), m.toBuffer()],
-      POOL_PROGRAM_ID
+      programId
     ))[0])
   );
   const metadataPDAs = await Promise.all(
@@ -3202,18 +4173,20 @@ async function fetchPoolHeadersOnly(poolProgram: Program) {
   );
 
   // batch fetch
-  const mintInfos      = await getMultiple(memeMints);
-  const memeVaultInfos = await getMultiple(memeVaults);
-  const woodVaultInfos = await getMultiple(woodVaults);
-  const metadataInfos  = await getMultiple(metadataPDAs);
+  const mintInfos      = await getMultiple(memeMints, 100, conn);
+  const memeVaultInfos = await getMultiple(memeVaults, 100, conn);
+  const woodVaultInfos = await getMultiple(woodVaults, 100, conn);
+  const metadataInfos  = await getMultiple(metadataPDAs, 100, conn);
 
   // decode per index
-  return configs.map((c, i) => {
+  const headerPools = configs.map((c, i) => {
     const cfg = c.account as any;
 
-    // normalize poolType
+    // normalize poolType (0=bonding, 1=amm, 2=graduated, 3=migrated)
     const raw = cfg.poolType as number | { bonding?: {}; amm?: {} };
-    const poolType: 0 | 1 = (typeof raw === "number" ? raw : ("amm" in raw ? 1 : 0)) as 0 | 1;
+    const poolType: 0 | 1 | 2 | 3 = (typeof raw === "number"
+      ? (raw === 3 ? 3 : raw === 2 ? 2 : raw === 1 ? 1 : 0)
+      : ("amm" in raw ? 1 : 0)) as 0 | 1 | 2 | 3;
 
     // mint account
     const mi = mintInfos[i]?.data;
@@ -3254,20 +4227,26 @@ async function fetchPoolHeadersOnly(poolProgram: Program) {
       } catch {}
     }
 
-    // price
+    // price — needs programVersion for targetsFor()
+    const tmpPool: PoolType = {
+      ...({} as any),
+      vtokens: asNumber(cfg.vtokens),
+      vwoodeng: asNumber(cfg.vwoodeng),
+      bondingSold: asNumber(cfg.bondingSold),
+      quoteMint: quoteMints[i],
+      poolType,
+      programVersion,
+    } as PoolType;
+
     let price = 1;
     if (poolType === 0) {
-  const tmpPool: PoolType = {
-    ...({} as any),
-    vtokens: asNumber(cfg.vtokens),
-    vwoodeng: asNumber(cfg.vwoodeng),
-    bondingSold: asNumber(cfg.bondingSold),
-    quoteMint: quoteMints[i],
-    poolType: 0,
-  } as PoolType;
-  price = bondingSpotPriceForPool(tmpPool);
-}
- else if (memeReserveRaw > 0 && woodReserveLamports > 0) {
+      price = bondingSpotPriceForPool(tmpPool);
+    } else if (poolType === 2 || poolType === 3) {
+      // lastMemePrice is the bonding price at graduation — not perfect but better than 0.
+      // The async Meteora/Jupiter fetch will overwrite with live price if available.
+      const lmp = asNumber(cfg.lastMemePrice);
+      if (lmp > 0) price = lmp / 1e9;
+    } else if (memeReserveRaw > 0 && woodReserveLamports > 0) {
       price =
         (woodReserveLamports / 10 ** QUOTE_DECIMALS) /
         (memeReserveRaw / 10 ** decimals);
@@ -3275,13 +4254,10 @@ async function fetchPoolHeadersOnly(poolProgram: Program) {
 
     const marketCap = price * (supplyUi ?? 0);
 
-    // NEW: pull creator (project_wallet) from config
-const creator = (() => {
-  try { return new PublicKey((cfg as any).projectWallet ?? (cfg as any).project_wallet); } catch { return undefined; }
-})();
-// No explicit fee bps on-chain for display; keep your UI default or omit
-const creatorFeeBps = undefined as unknown as number | undefined;
-
+    const creator = (() => {
+      try { return new PublicKey((cfg as any).projectWallet ?? (cfg as any).project_wallet); } catch { return undefined; }
+    })();
+    const creatorFeeBps = undefined as unknown as number | undefined;
 
     return {
       pubkey: c.publicKey,
@@ -3297,14 +4273,10 @@ const creatorFeeBps = undefined as unknown as number | undefined;
       decimals,
       totalSupply: supplyUi,
       marketCap,
-
-      // NEW: surface on the pool object
       creator,
       creatorFeeBps,
-
       name: metaName || "",
       symbol: metaSymbol || "",
-      // keep URI for later hydration
       metaUri,
       description: "",
       imageUrl: undefined,
@@ -3313,28 +4285,160 @@ const creatorFeeBps = undefined as unknown as number | undefined;
       category: "",
       socials: undefined,
       hydrated: false,
+      programVersion,
+      minAvgHoldDays: Number((cfg as any).minAvgHoldDays ?? 0),
     } as PoolType;
   });
+
+  // ── GRADUATION: fetch GraduationInfo PDA for pool_type 2 or 3 ──
+  {
+    const graduatedPools = headerPools.filter(p => p.poolType === 2 || p.poolType === 3);
+    if (graduatedPools.length > 0) {
+      const gradPdas = await Promise.all(
+        graduatedPools.map(async (p) => {
+          const [pda] = await PublicKey.findProgramAddress(
+            [Buffer.from("graduation"), p.pubkey.toBuffer()],
+            programId
+          );
+          return pda;
+        })
+      );
+      const gradInfos = await getMultiple(gradPdas);
+
+      for (let i = 0; i < graduatedPools.length; i++) {
+        const data = gradInfos[i]?.data;
+        if (!data || data.length < 8 + 106) continue;
+        try {
+          const offset = 8;
+          const gradTimestamp = Number(data.readBigInt64LE(offset + 32));
+          const meteoraPool = new PublicKey(data.subarray(offset + 40, offset + 72)).toBase58();
+          const meteoraPositionNft = new PublicKey(data.subarray(offset + 72, offset + 104)).toBase58();
+          const confirmed = data[offset + 104] === 1;
+
+          graduatedPools[i].graduationTimestamp = gradTimestamp;
+          graduatedPools[i].meteoraPool = meteoraPool === "11111111111111111111111111111111" ? undefined : meteoraPool;
+          graduatedPools[i].meteoraPositionNft = meteoraPositionNft;
+          graduatedPools[i].graduationConfirmed = confirmed;
+        } catch (e) {
+          console.warn("Failed to parse GraduationInfo for", graduatedPools[i].pubkey.toBase58(), e);
+        }
+      }
+    }
+  }
+
+  return headerPools;
+}
+
+// Fetch from v1 (and v2 when deployed) programs and merge
+async function fetchPoolHeadersOnly(_poolProgram: Program) {
+  // Create version-specific programs so each fetch uses the correct IDL coder
+  const dummyProvider = new AnchorProvider(connection, { publicKey: PublicKey.default } as any, {});
+  const v1Program = new Program(poolIdl, V1_POOL_PROGRAM_ID, dummyProvider);
+  const v2Program = new Program(poolV2Idl, V2_POOL_PROGRAM_ID, dummyProvider);
+
+  const fetches: Promise<PoolType[]>[] = [
+    // V1 mainnet — always fetch using V1 IDL
+    fetchPoolsFromProgram(V1_POOL_PROGRAM_ID, V1_CONFIG_VERSION, v1Program, 'v1', V1_ACCOUNT_SIZE)
+      .catch(e => { console.warn('[fetchPoolHeaders] V1 fetch failed:', e); return [] as PoolType[]; }),
+  ];
+
+  // V2 — only fetch if deployed on mainnet, using V2 IDL
+  if (V2_DEPLOYED_ON_MAINNET) {
+    fetches.push(
+      fetchPoolsFromProgram(V2_POOL_PROGRAM_ID, V2_CONFIG_VERSION, v2Program, 'v2', V2_ACCOUNT_SIZE)
+        .catch(e => { console.warn('[fetchPoolHeaders] V2 fetch failed:', e); return [] as PoolType[]; })
+    );
+  }
+
+  const results = await Promise.all(fetches);
+  const v1Count = results[0].length;
+  const v2Count = V2_DEPLOYED_ON_MAINNET ? (results[1]?.length ?? 0) : 0;
+  console.log('[Pools] V1 count:', v1Count, 'V2 count:', v2Count);
+  const all = results.flat().sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  return all;
 }
 
 
 // Fetch JSON for a **subset** of pools and merge into each
-async function hydratePoolsDetails(poolsSubset: PoolType[]): Promise<PoolType[]> {
-  const urls = poolsSubset.map(p => toHttp(p.metaUri)).map(u => u || "");
+async function hydratePoolsDetails(poolsSubset: PoolType[], conn: Connection = connection): Promise<PoolType[]> {
+  // ── Step 0: Resolve locker URIs for "living meme" overrides ─────────────
+  // If a creator called update_locker_uri, the locker's meme_uri will differ
+  // from the token's original metaUri. We use the locker version.
+  const effectiveUris = poolsSubset.map(p => p.metaUri || '');
+  try {
+    const disc = BorshAccountsCoder.accountDiscriminator('LockerState');
+    const allLockers = await conn.getProgramAccounts(LOCKER_PROGRAM_ID, {
+      filters: [{ memcmp: { offset: 0, bytes: bs58.encode(disc) } }],
+    });
+    if (allLockers.length) {
+      const dummyProvider = new AnchorProvider(conn, { publicKey: PublicKey.default } as any, {});
+      const coder = new Program(lockerIdl, LOCKER_PROGRAM_ID, dummyProvider).coder.accounts;
+
+      // SWL-444: Collect ALL lockers per mint, pick the creator-owned one with highest lockId
+      const lockersByMint: Record<string, { uri: string; owner: string; lockId: number }[]> = {};
+      for (const { account } of allLockers) {
+        try {
+          const s = coder.decode('LockerState', account.data) as any;
+          const mint = new PublicKey(s.memeMint).toBase58();
+          const uri = String(s.memeUri ?? '').replace(/\0/g, '').trim();
+          const owner = new PublicKey(s.lockerOwner).toBase58();
+          const lockId = Number(s.lockId ?? 0);
+          if (uri) {
+            if (!lockersByMint[mint]) lockersByMint[mint] = [];
+            lockersByMint[mint].push({ uri, owner, lockId });
+          }
+        } catch {}
+      }
+
+      // For each pool, find the locker owned by pool.creator with the highest lockId
+      for (let i = 0; i < poolsSubset.length; i++) {
+        const mintStr = poolsSubset[i].memeMint.toBase58();
+        const candidates = lockersByMint[mintStr];
+        if (!candidates?.length) continue;
+
+        const creatorStr = poolsSubset[i].creator?.toBase58();
+        // Prefer creator-owned lockers; fall back to all if none match
+        const creatorLockers = creatorStr
+          ? candidates.filter(c => c.owner === creatorStr)
+          : [];
+        const pool_ = creatorLockers.length ? creatorLockers : candidates;
+        // Pick the one with highest lockId (most recent)
+        const best = pool_.reduce((a, b) => (b.lockId > a.lockId ? b : a));
+
+        if (best.uri && best.uri !== effectiveUris[i]) {
+          console.log('[hydratePoolsDetails] Locker URI override:', mintStr.slice(0,8), effectiveUris[i]?.slice(0,20), '→', best.uri.slice(0,20));
+          effectiveUris[i] = best.uri;
+        }
+      }
+    }
+  } catch (e) {
+    console.debug('[hydratePoolsDetails] locker lookup failed (non-fatal):', e);
+  }
+
+  // ── Step 1: Fetch metadata JSONs ────────────────────────────────────────
+  const urls = effectiveUris.map(u => toHttp(u) || "");
+  console.log('[hydratePoolsDetails] Fetching', poolsSubset.length, 'pools. URLs sample:', urls.slice(0, 3));
   const jsons = await mapLimit(urls, 10, async (uri) => {
     if (!uri) return null;
     try {
       const r = await fetch(uri, { cache: "no-store" });
-      if (!r.ok) return null;
+      if (!r.ok) { console.warn('[hydratePoolsDetails] FETCH FAIL:', uri, r.status); return null; }
       return await r.json();
-    } catch { return null; }
+    } catch (e) { console.warn('[hydratePoolsDetails] FETCH ERR:', uri, e); return null; }
+  });
+
+  // Log result for GPKLDuj pool if present
+  poolsSubset.forEach((p, i) => {
+    if (p.memeMint.toBase58().startsWith('GPKLDuj')) {
+      const j = jsons[i];
+      console.log('[hydratePoolsDetails] GPKLDuj fetched URL:', urls[i], '| json image:', j?.image, '| json audio:', j?.animation_url);
+    }
   });
 
   return poolsSubset.map((p, i) => {
     const j = jsons[i] || {};
     const attr = Array.isArray(j.attributes) ? j.attributes : [];
 
-    // socials + threshold extraction (same logic you had)
     const norm = (u?: string) => {
       if (!u) return undefined;
       const s = String(u).trim();
@@ -3367,6 +4471,7 @@ async function hydratePoolsDetails(poolsSubset: PoolType[]): Promise<PoolType[]>
 
     return {
       ...p,
+      metaUri: effectiveUris[i] || p.metaUri,
       description: j.description || "",
       imageUrl: toHttp(j.image || ""),
       audioUrl: toHttp(j.animation_url || ""),
@@ -3383,16 +4488,16 @@ async function hydratePoolsDetails(poolsSubset: PoolType[]): Promise<PoolType[]>
 
 
 async function sellSoundMeme({
-  pool, memeAmountIn, minWoodengOut, wallet
-}: { pool: PoolType, memeAmountIn: number, minWoodengOut: number, wallet: any }) {
+  pool, memeAmountIn, minWoodengOut, wallet, onStep
+}: { pool: PoolType, memeAmountIn: number, minWoodengOut: number, wallet: any, onStep?: (step: number, total: number, msg: string) => void }) {
   if (!wallet.publicKey) throw new Error('Connect wallet first!');
 
-  const [configPda] = await getConfigPda(pool.memeMint);
-  const provider    = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: 'confirmed' });
-  const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+  const [configPda] = await getConfigPda(pool.memeMint, poolProgramIdFor(pool));
+  const provider    = new AnchorProvider(connection, getAnchorWallet(wallet)!, { preflightCommitment: 'confirmed' });
+  const poolProgram = new Program(poolIdl, poolProgramIdFor(pool), provider);
 
-  const [poolMemeVault]    = await PublicKey.findProgramAddress([Buffer.from('pool_meme_vault'),    pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
-  const [poolWoodengVault] = await PublicKey.findProgramAddress([Buffer.from('pool_woodeng_vault'), pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
+  const [poolMemeVault]    = await PublicKey.findProgramAddress([Buffer.from('pool_meme_vault'),    pool.memeMint.toBuffer()], poolProgramIdFor(pool));
+  const [poolWoodengVault] = await PublicKey.findProgramAddress([Buffer.from('pool_woodeng_vault'), pool.memeMint.toBuffer()], poolProgramIdFor(pool));
 
   const { ata: buyerMemeAta,  ix: buyerMemeAtaIx  } = await ensureAtaIx(wallet.publicKey, pool.memeMint,  wallet.publicKey);
   const { ata: buyerQuoteAta, ix: buyerQuoteAtaIx } = await ensureAtaIx(wallet.publicKey, pool.quoteMint, wallet.publicKey);
@@ -3430,29 +4535,46 @@ const stakingRewardsVault = quoteIsSol(pool) ? rewardsVaultWsol : rewardsVault;
   .instruction();
 
 
-  const ixs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
-    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
+  // ── TX A: ensure all ATAs exist (only if needed) ──────────────────
+  const setupIxs = [
     buyerMemeAtaIx,
     buyerQuoteAtaIx,
-    creatorWalletAtaIx,                         // 👈 was projectWalletAtaIx
-    coreIx,
+    creatorWalletAtaIx,
   ].filter(Boolean) as TransactionInstruction[];
 
+  const ataChecks = await connection.getMultipleAccountsInfo([
+    buyerMemeAta,
+    buyerQuoteAta,
+    creatorWalletAta,
+  ]);
+  const needsSetup = ataChecks.some(info => info === null);
+
+  if (needsSetup) {
+    onStep?.(1, 2, "Setting up token accounts…");
+    await sendIxsOnce(connection, getAnchorWallet(wallet)!, [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }),
+      ...setupIxs,
+    ], [], { skipPreflight: false });
+  }
+
+  // ── TX B: the actual sell (small tx) ─────────────────────────────
+  onStep?.(needsSetup ? 2 : 1, needsSetup ? 2 : 1, "Confirming your sell…");
+  const coreIxs: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
+    coreIx,
+  ];
   if (quoteIsSol(pool)) {
-  ixs.push(
-    createCloseAccountInstruction(
-      buyerQuoteAta,       // WSOL ATA receiving the proceeds
-      wallet.publicKey,    // unwrap back to native SOL
-      wallet.publicKey
-    )
-  );
-}
+    coreIxs.push(
+      createCloseAccountInstruction(
+        buyerQuoteAta,
+        wallet.publicKey,
+        wallet.publicKey
+      )
+    );
+  }
 
-
-  
-
-  return await sendIxsOnce(connection, getAnchorWallet(wallet), ixs, [], { skipPreflight: true });
+  return await sendIxsOnce(connection, getAnchorWallet(wallet)!, coreIxs, [], { skipPreflight: false });
 }
 
 
@@ -3564,7 +4686,7 @@ const fmtUSD = (v: number | null | undefined) =>
 
 
 const refreshBalances = useCallback(async () => {
-  if (!wallet.publicKey) {
+  if (!effectivePublicKey) {
     setBalancesByMint({});
     setQuoteBalancesRaw({});
     return;
@@ -3572,7 +4694,7 @@ const refreshBalances = useCallback(async () => {
 
   // 1) Pull ALL SPL token accounts for the wallet in one RPC
   const encoded = await connection.getTokenAccountsByOwner(
-  wallet.publicKey,
+  effectivePublicKey,
   { programId: TOKEN_PROGRAM_ID },
   'processed'
 );
@@ -3599,13 +4721,13 @@ for (const { account } of encoded.value) {
   for (const q of quoteSet) {
     if (q === WSOL_MINT.toBase58()) {
       // show **native SOL** only (wSOL is ephemeral)
-      qMap[q] = await connection.getBalance(wallet.publicKey, 'confirmed');
+      qMap[q] = await getCachedBalance(connection, effectivePublicKey, 'confirmed');
     } else {
       qMap[q] = rawByMint[q] ?? 0;
     }
   }
   setQuoteBalancesRaw(qMap);
-}, [wallet.publicKey, pools]);
+}, [effectivePublicKey?.toBase58(), pools]);
 
 
 
@@ -3632,7 +4754,7 @@ const [burnFilled, setBurnFilled] = useState({
 
 // 2️⃣ leave the callback clean
 const refreshUserNfts = useCallback(async () => {
-  if (!wallet.publicKey) {
+  if (!effectivePublicKey) {
     setUserPoolNfts({});
     setOwnedCounts({});
     setNftsLoaded(true);
@@ -3642,7 +4764,7 @@ const refreshUserNfts = useCallback(async () => {
   try {
     // build the mint list from whatever pools are already in state
     const mints = pools.map(p => p.memeMint);
-    const nfts  = await getUserProtocolNfts(wallet.publicKey, mints);
+    const nfts  = await getUserProtocolNfts(effectivePublicKey, mints);
     setUserPoolNfts(nfts);
 
      /* ─── NEW: count only the NFTs that still exist ─── */
@@ -3651,19 +4773,19 @@ const refreshUserNfts = useCallback(async () => {
       Object.entries(nfts).map(async ([mintStr, lockers]) => {
         const alive = await Promise.all(
           Object.values(lockers).map(async ({ mint }) =>
-            (await stillOwnsNft(mint, wallet.publicKey!)) ? 1 : 0
+            (await stillOwnsNft(mint, effectivePublicKey!)) ? 1 : 0
           )
         );
         counts[mintStr] = alive.reduce<number>((sum, v) => sum + v, 0);
       })
     );
-    setOwnedCounts(counts);          // <-- this drives “You own X”
+    setOwnedCounts(counts);          // <-- this drives "You own X"
 
   } finally {
     // even if getUserProtocolNfts throws we stop the loading state
     setNftsLoaded(true);
   }
-}, [wallet.publicKey, pools]);
+}, [effectivePublicKey?.toBase58(), pools]);
 
 
 
@@ -3673,8 +4795,12 @@ const refreshUserNfts = useCallback(async () => {
 
 
   const handleOpenSellModal = (pool: PoolType) => {
-  if (!wallet.publicKey) {
+  if (!effectivePublicKey) {
     setStatus("connect your wallet");
+    return;
+  }
+  if (isGraduated(pool)) {
+    setStatus("This pool has graduated to Meteora — trade there instead.");
     return;
   }
   // Bonding sells are allowed; we'll warn about the tax in the modal.
@@ -3691,6 +4817,44 @@ const refreshUserNfts = useCallback(async () => {
   const [slippage, setSlippage] = useState(1); // default 1%
   const [status, setStatus] = useState<string | null>(null);
   const [txStep, setTxStep] = useState<{ step: number, total: number, message: string } | null>(null);
+
+  // Slot machine multiplier for feature card
+  const [multVal, setMultVal] = useState('?.?x');
+  const [multDone, setMultDone] = useState(false);
+  const multTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const SLOT_VALS = ['1.0x','1.4x','2.1x','105x','3.2x','98x','1.5x','45x','23x','7x','444x','890x'];
+  const startMultSlot = () => {
+    setMultDone(false); setMultVal(SLOT_VALS[0]);
+    let i = 0;
+    const step = () => {
+      i++;
+      if (i >= 14) {
+        const final = (Math.random() * 2 + 1.5).toFixed(1) + 'x';
+        setMultVal(final); setMultDone(true);
+      } else {
+        setMultVal(SLOT_VALS[i % SLOT_VALS.length]);
+        multTimerRef.current = setTimeout(step, 60 + i * 8);
+      }
+    };
+    multTimerRef.current = setTimeout(step, 60);
+  };
+  const stopMultSlot = () => {
+    if (multTimerRef.current) clearTimeout(multTimerRef.current);
+    setMultVal('?.?x'); setMultDone(false);
+  };
+
+  // Auto-animate slot machine on mount + every 8s
+  useEffect(() => {
+    const kick = () => { startMultSlot(); };
+    const t = setTimeout(kick, 800);
+    const iv = setInterval(kick, 8000);
+    return () => { clearTimeout(t); clearInterval(iv); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mobile feature card carousel dot index
+  const [featCarouselIdx, setFeatCarouselIdx] = useState(0);
+  const featCarouselRef = useRef<HTMLDivElement>(null);
 
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -3746,7 +4910,7 @@ useEffect(() => {
   }, 20_000);
 
   return () => { stop = true; clearInterval(id); };
-}, [afterPaint, poolsLoaded, wallet.publicKey, pools.map(p=>p.memeMint.toBase58()).join(',')]);
+}, [afterPaint, poolsLoaded, effectivePublicKey?.toBase58(), pools.map(p=>p.memeMint.toBase58()).join(',')]);
 
 
 
@@ -3778,7 +4942,8 @@ const handleMintNft = (pool: PoolType) => {
   // prevent a second click while the modal is open
   if (txStep) return;
 
-  lockTokens(pool, setStatus, wallet, refreshUserNfts, minted => {
+  const effectiveWalletForLock = { ...wallet, publicKey: effectivePublicKey, connected: effectiveConnected, signTransaction: (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction, signAllTransactions: (wallet.connected && wallet.signAllTransactions) ? wallet.signAllTransactions : ((txs: any[]) => Promise.all(txs.map((tx: any) => ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction)(tx)))) };
+  lockTokens(pool, setStatus, effectiveWalletForLock as any, refreshUserNfts, minted => {
     setUserPoolNfts(prev => {
       setMintFilled({
         open:  true,
@@ -3818,31 +4983,69 @@ const handleMintNft = (pool: PoolType) => {
 
 // 3e) Program events — subscribe only after the first paint
 useEffect(() => {
-  if (!afterPaint || !wallet.connected) return;
+  if (!afterPaint || !effectiveConnected) return;
 
-  const provider = new AnchorProvider(connection, getAnchorWallet(wallet), {
+  const anchorWallet = getAnchorWallet(wallet) ?? (unifiedPublicKey && unifiedSignTransaction ? {
+    publicKey: unifiedPublicKey,
+    signTransaction: unifiedSignTransaction,
+    signAllTransactions: async (txs: Transaction[]) => {
+      const signed = [];
+      for (const tx of txs) {
+        signed.push(await unifiedSignTransaction(tx));
+      }
+      return signed;
+    },
+  } : null);
+  if (!anchorWallet) return;
+  const provider = new AnchorProvider(connection, anchorWallet, {
     preflightCommitment: "confirmed",
   });
-  const prog = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+  // Subscribe to PriceUpdate events from v1 (and v2 when deployed)
+  const progV1 = new Program(poolIdl, V1_POOL_PROGRAM_ID, provider);
+  // Same instance used for registration must be reused for removal — a
+  // freshly constructed Program has its own empty listener registry, so
+  // calling removeEventListener on a new instance always throws
+  // "Event listener N doesn't exist!".
+  let progV2: Program | null = null;
 
-  let subId: number | null = null;
+  let subIdV1: number | null = null;
+  let subIdV2: number | null = null;
+
+  const handler = (ev: any) => {
+    const mintStr = new PublicKey(ev.memeMint).toBase58();
+    const lamports = Number(ev.priceLamports);
+    if (lamports > 0) pushPricePoint(mintStr, lamports);
+  };
 
   (async () => {
     try {
-      subId = await prog.addEventListener("PriceUpdate", (ev: any) => {
-        const mintStr = new PublicKey(ev.memeMint).toBase58();
-        const lamports = Number(ev.priceLamports);
-        if (lamports > 0) pushPricePoint(mintStr, lamports);
-      });
+      subIdV1 = await progV1.addEventListener("PriceUpdate", handler);
     } catch (e) {
-      console.warn("Event subscription failed; will rely on polling.", e);
+      console.warn("V1 event subscription failed:", e);
+    }
+    if (V2_DEPLOYED_ON_MAINNET) {
+      try {
+        progV2 = new Program(poolV2Idl, V2_POOL_PROGRAM_ID, provider);
+        subIdV2 = await progV2.addEventListener("PriceUpdate", handler);
+      } catch (e) {
+        console.warn("V2 event subscription failed:", e);
+      }
     }
   })();
 
   return () => {
-    if (subId != null) prog.removeEventListener(subId);
+    if (subIdV1 != null && subIdV1 >= 0) {
+      try { progV1.removeEventListener(subIdV1); } catch {
+        // listener already removed or never registered
+      }
+    }
+    if (subIdV2 != null && subIdV2 >= 0 && progV2) {
+      try { progV2.removeEventListener(subIdV2); } catch {
+        // listener already removed or never registered
+      }
+    }
   };
-}, [afterPaint, wallet.connected, pushPricePoint]);
+}, [afterPaint, effectiveConnected, pushPricePoint]);
 
 
 
@@ -3863,7 +5066,7 @@ useEffect(() => {
           const mintStr = p.memeMint.toBase58();
           
 
-          // in the “Load existing history for charts” effect:
+          // in the "Load existing history for charts" effect:
 const res = await fetch(`/api/pricepoints/${mintStr}?limit=600`, { cache: 'force-cache' });
 
 
@@ -4011,14 +5214,23 @@ useEffect(() => {
   const startTimer = setTimeout(() => {
     if (stop) return;
 
+    const anchorWallet = getAnchorWallet(wallet) ?? (unifiedPublicKey && unifiedSignTransaction ? {
+      publicKey: unifiedPublicKey,
+      signTransaction: unifiedSignTransaction,
+      signAllTransactions: async (txs: Transaction[]) => {
+        const signed = [];
+        for (const tx of txs) {
+          signed.push(await unifiedSignTransaction(tx));
+        }
+        return signed;
+      },
+    } : null);
     const provider = new AnchorProvider(
       connection,
-      wallet.publicKey
-        ? getAnchorWallet(wallet)
-        : ({ publicKey: new PublicKey('11111111111111111111111111111111') } as any),
+      anchorWallet ?? ({ publicKey: new PublicKey('11111111111111111111111111111111') } as any),
       { commitment: 'confirmed' }
     );
-    const prog = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+    const prog = new Program(poolIdl, V2_POOL_PROGRAM_ID, provider);
 
     interval = window.setInterval(async () => {
       if (stop) return;
@@ -4144,43 +5356,10 @@ useEffect(() => {
 
 
 
-// 3f) Auto-migrate watcher — run only after first paint & once pools are loaded
-useEffect(() => {
-  if (!afterPaint || !poolsLoaded || !wallet.publicKey || visiblePools.length === 0) return;
-
-
-  let cancelled = false;
-
-  runIdle(async () => {
-    if (cancelled) return;
-
-    for (const p of visiblePools) {
-      // only bonding pools
-      if (p.poolType !== 0) continue;
-
-      const v   = Math.max(0, p.ammReserves?.woodeng ?? 0);
-const thr = Number(targetsFor(p).priceTargetLamports);
-const cap = Number(targetsFor(p).migrateUpperLamports);
-
-if (v < thr || v >= cap) continue;
-
-
-      const k = p.memeMint.toBase58();
-      if (autoMigratingRef.current.has(k)) continue; // avoid double-fire
-
-      try {
-        autoMigratingRef.current.add(k);
-        await migratePool(p); // will prompt the wallet once
-      } catch (e) {
-        console.warn("Auto-migrate watcher failed for", k, e);
-      } finally {
-        autoMigratingRef.current.delete(k);
-      }
-    }
-  });
-
-  return () => { cancelled = true; };
-}, [afterPaint, poolsLoaded, wallet.publicKey, visiblePools]);
+// 3f) Auto-migrate watcher — DISABLED: graduation now goes directly to Meteora DAMM v2
+// The bonding → AMM migration step is no longer needed. Pools graduate directly.
+// Keeping the ref to avoid breaking other code that references it.
+/* useEffect(() => { ... }, [...]); */
 
 
 
@@ -4239,16 +5418,16 @@ useEffect(() => {
   // --- Buy Logic for Modal ---
 // --- Buy Logic for Modal ---
 async function buySoundMeme({
-  pool, amountWoodengIn, minMemeOut, wallet
-}: { pool: PoolType, amountWoodengIn: number, minMemeOut: number, wallet: any }) {
+  pool, amountWoodengIn, minMemeOut, wallet, onStep
+}: { pool: PoolType, amountWoodengIn: number, minMemeOut: number, wallet: any, onStep?: (step: number, total: number, msg: string) => void }) {
   if (!wallet.publicKey) throw new Error('Connect wallet first!');
 
-  const [configPda] = await getConfigPda(pool.memeMint);
-  const provider    = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: 'confirmed' });
-  const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+  const [configPda] = await getConfigPda(pool.memeMint, poolProgramIdFor(pool));
+  const provider    = new AnchorProvider(connection, getAnchorWallet(wallet)!, { preflightCommitment: 'confirmed' });
+  const poolProgram = new Program(poolIdl, poolProgramIdFor(pool), provider);
 
-  const [poolMemeVault]    = await PublicKey.findProgramAddress([Buffer.from('pool_meme_vault'),    pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
-  const [poolWoodengVault] = await PublicKey.findProgramAddress([Buffer.from('pool_woodeng_vault'), pool.memeMint.toBuffer()], POOL_PROGRAM_ID);
+  const [poolMemeVault]    = await PublicKey.findProgramAddress([Buffer.from('pool_meme_vault'),    pool.memeMint.toBuffer()], poolProgramIdFor(pool));
+  const [poolWoodengVault] = await PublicKey.findProgramAddress([Buffer.from('pool_woodeng_vault'), pool.memeMint.toBuffer()], poolProgramIdFor(pool));
 
   const { ata: buyerMemeAta, ix: buyerMemeAtaIx } = await ensureAtaIx(wallet.publicKey, pool.memeMint, wallet.publicKey);
 
@@ -4303,33 +5482,48 @@ const stakingRewardsVault = quoteIsSol(pool) ? rewardsVaultWsol : rewardsVault;
 }).instruction();
 
 
-  const ixs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
-    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
+  // ── TX A: ensure all ATAs exist (only if needed) ──────────────────
+  const setupIxs = [
     buyerMemeAtaIx,
-    buyerQuoteAtaIx,          // may be null when wrapping SOL
-    creatorWalletAtaIx,       // 👈 was projectWalletAtaIx
-    ...wrapIxs,
-    coreIx,
+    buyerQuoteAtaIx,
+    creatorWalletAtaIx,
   ].filter(Boolean) as TransactionInstruction[];
 
+  const ataChecks = await connection.getMultipleAccountsInfo([
+    buyerMemeAta,
+    buyerQuoteAta,
+    creatorWalletAta,
+  ]);
+  const needsSetup = ataChecks.some(info => info === null);
 
-if (quoteIsSol(pool)) {
-  ixs.push(
-    createCloseAccountInstruction(
-      buyerQuoteAta,       // the WSOL ATA you used as buyerWoodengAta
-      wallet.publicKey,    // send SOL back to the user
-      wallet.publicKey
-    )
-  );
-}
+  if (needsSetup) {
+    onStep?.(1, 2, "Setting up token accounts…");
+    await sendIxsOnce(connection, getAnchorWallet(wallet)!, [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }),
+      ...setupIxs,
+    ], [], { skipPreflight: false });
+  }
 
+  // ── TX B: the actual buy (small tx) ──────────────────────────────
+  onStep?.(needsSetup ? 2 : 1, needsSetup ? 2 : 1, "Confirming your buy…");
+  const coreIxs: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
+    ...wrapIxs,   // wrap SOL → wSOL (empty array for non-SOL pairs)
+    coreIx,
+  ];
 
+  if (quoteIsSol(pool)) {
+    coreIxs.push(
+      createCloseAccountInstruction(
+        buyerQuoteAta,
+        wallet.publicKey,
+        wallet.publicKey
+      )
+    );
+  }
 
-
- 
-
-  return await sendIxsOnce(connection, getAnchorWallet(wallet), ixs, [], { skipPreflight: true });
+  return await sendIxsOnce(connection, getAnchorWallet(wallet)!, coreIxs, [], { skipPreflight: false });
 }
 
 
@@ -4338,6 +5532,10 @@ if (quoteIsSol(pool)) {
 const handleOpenBuyModal = async (poolFromGrid: PoolType) => {
   if (!wallet.publicKey) {
     setStatus("connect your wallet");
+    return;
+  }
+  if (isGraduated(poolFromGrid)) {
+    setStatus("This pool has graduated to Meteora — trade there instead.");
     return;
   }
 
@@ -4351,8 +5549,20 @@ const handleOpenBuyModal = async (poolFromGrid: PoolType) => {
   // 2) Refresh in the background and swap in the fresh pool if found
   (async () => {
     try {
-      const provider    = new AnchorProvider(connection, getAnchorWallet(wallet), {});
-      const poolProgram = new Program(poolIdl, POOL_PROGRAM_ID, provider);
+      const anchorWallet = getAnchorWallet(wallet) ?? (unifiedPublicKey && unifiedSignTransaction ? {
+        publicKey: unifiedPublicKey,
+        signTransaction: unifiedSignTransaction,
+        signAllTransactions: async (txs: Transaction[]) => {
+          const signed = [];
+          for (const tx of txs) {
+            signed.push(await unifiedSignTransaction(tx));
+          }
+          return signed;
+        },
+      } : null);
+      if (!anchorWallet) return;
+      const provider    = new AnchorProvider(connection, anchorWallet, {});
+      const poolProgram = new Program(poolIdl, poolProgramIdFor(poolFromGrid), provider);
       const freshPools  = await fetchSoundMemePoolsWithMetadata(poolProgram);
       const freshPool   = freshPools.find(p => p.memeMint.equals(poolFromGrid.memeMint));
       if (freshPool) setSelectedPool(freshPool); // swaps silently, no blocking
@@ -4403,20 +5613,67 @@ const minMemeOut = Math.max(1, Math.floor(memeRawOut * Math.max(0, 1 - s / 100))
       return;
     }
 
+    // --- Balance check BEFORE sending wallet popup ---
+const quoteMintStr = pool.quoteMint.toBase58();
+const quoteBalRaw  = quoteBalancesRaw[quoteMintStr] ?? 0;
+
+// rough fee buffer (tx fee + priority fee + a bit extra)
+const CU_LIMIT = 200_000;
+const MICRO_LAMPORTS = 10_000;
+const priorityFeeLamports = Math.ceil((CU_LIMIT * MICRO_LAMPORTS) / 1_000_000); // ≈ 2_500 lamports
+const feeBufferLamports = 20_000 + priorityFeeLamports; // safety
+
+if (quoteIsSol(pool)) {
+  // need enough SOL to wrap + fees
+  const solBal = quoteBalRaw; // you set SOL balance into quoteBalancesRaw for WSOL mint key
+  const needed = woodengRawIn + feeBufferLamports;
+  if (solBal < needed) {
+    setTransactionStatus('error');
+    setTransactionMessage(
+      `Insufficient SOL. Need ${(needed/1e9).toFixed(6)} SOL, have ${(solBal/1e9).toFixed(6)} SOL.`
+    );
+    return;
+  }
+} else {
+  // WOODENG quote
+  if (quoteBalRaw < woodengRawIn) {
+    setTransactionStatus('error');
+    setTransactionMessage(
+      `Insufficient ${quoteLabelOf(pool)}. Need ${(woodengRawIn/1e9).toFixed(6)}, have ${(quoteBalRaw/1e9).toFixed(6)}.`
+    );
+    return;
+  }
+
+  // still need SOL for fees
+  const solBal = await getCachedBalance(connection, wallet.publicKey!, 'confirmed');
+  if (solBal < feeBufferLamports) {
+    setTransactionStatus('error');
+    setTransactionMessage(
+      `Insufficient SOL for network fees. Need ~${(feeBufferLamports/1e9).toFixed(6)} SOL.`
+    );
+    return;
+  }
+}
+
+
     setTransactionStatus('processing');
     setTransactionMessage('Processing transaction...');
 
     // …your existing try { await buySoundMeme(...); patches; toasts; etc. } catch { … }
     try {
-      if (!wallet.publicKey) throw new Error('Please connect your wallet!');
+      if (!effectivePublicKey) throw new Error('Please connect your wallet!');
+      const effectiveWalletForTx = { ...wallet, publicKey: effectivePublicKey, connected: effectiveConnected, signTransaction: (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction, signAllTransactions: (wallet.connected && wallet.signAllTransactions) ? wallet.signAllTransactions : ((txs: any[]) => Promise.all(txs.map((tx: any) => ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction)(tx)))) };
       const tx = await buySoundMeme({
         pool,
         amountWoodengIn: woodengRawIn,
         minMemeOut,
-        wallet,
+        wallet: effectiveWalletForTx,
+        onStep: (s, t, m) => setTxStep({ step: s, total: t, message: m }),
       });
 
       const mintStr = pool.memeMint.toBase58();
+
+      setTxStep(null);
 
       adjustMemeBalanceRaw(mintStr, +memeRawOut);
       adjustQuoteBalanceRaw(pool.quoteMint, -woodengRawIn);
@@ -4435,8 +5692,20 @@ const minMemeOut = Math.max(1, Math.floor(memeRawOut * Math.max(0, 1 - s / 100))
       setShowBuyModal(false);
 
       try {
-        const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
-        const progNow = new Program(poolIdl, POOL_PROGRAM_ID, providerNow);
+        const anchorWalletNow = getAnchorWallet(wallet) ?? (unifiedPublicKey && unifiedSignTransaction ? {
+          publicKey: unifiedPublicKey,
+          signTransaction: unifiedSignTransaction,
+          signAllTransactions: async (txs: Transaction[]) => {
+            const signed = [];
+            for (const tx of txs) {
+              signed.push(await unifiedSignTransaction(tx));
+            }
+            return signed;
+          },
+        } : null);
+        if (!anchorWalletNow) throw new Error('no wallet');
+        const providerNow = new AnchorProvider(connection, anchorWalletNow, {});
+        const progNow = new Program(poolIdl, poolProgramIdFor(pool), providerNow);
         const cfgNow = await progNow.account.soundMemeConfig.fetch(pool.pubkey);
         const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
         if (lamportsNow > 0) pushPricePoint(mintStr, lamportsNow);
@@ -4450,6 +5719,7 @@ const minMemeOut = Math.max(1, Math.floor(memeRawOut * Math.max(0, 1 - s / 100))
         quoteLabel: quoteLabelOf(pool),
       });
     } catch (e: any) {
+      setTxStep(null);
       setTransactionStatus('error');
       setTransactionMessage('Error: ' + (e.message || 'Unknown error'));
     }
@@ -4460,6 +5730,119 @@ const minMemeOut = Math.max(1, Math.floor(memeRawOut * Math.max(0, 1 - s / 100))
 
 
 
+
+const handleQuickBuyDirect = async (pool: PoolType, quoteRawIn: number) => {
+  if (!effectivePublicKey) { setStatus('Connect your wallet first.'); return; }
+  if (buyingRef.current) return;
+  buyingRef.current = true;
+  try {
+    const DEC = pool.decimals ?? MEME_DECIMALS;
+
+    // Step 1: estimate meme tokens receivable for the given WOODENG budget
+    const memeUiOut = memeOutForWoodengIn(pool, quoteRawIn);
+    if (memeUiOut <= 0) { setStatus('Cannot compute output for this pool.'); return; }
+
+    // Step 2: recompute woodengRawIn via getQuoteForMemeBuy — IDENTICAL path to
+    // handleConfirmBuy so the on-chain (amountWoodengIn, minMemeOut) pair is consistent
+    const memeRawOut   = Math.floor(memeUiOut * 10 ** DEC);
+    const woodengRawIn = getQuoteForMemeBuy(pool, memeUiOut);
+    if (!Number.isFinite(woodengRawIn) || woodengRawIn <= 0) {
+      setStatus('Quote unavailable for this amount.');
+      return;
+    }
+
+    const s            = Math.max(0, Number(slippage) || 1);
+    const minMemeOut   = Math.max(1, Math.floor(memeRawOut * Math.max(0, 1 - s / 100)));
+
+    // Step 3: balance check (same constants as handleConfirmBuy)
+    const quoteMintStr = pool.quoteMint.toBase58();
+    const quoteBalRaw  = quoteBalancesRaw[quoteMintStr] ?? 0;
+    const CU_LIMIT     = 200_000;
+    const MICRO_LAMPORTS = 10_000;
+    const priorityFeeLamports = Math.ceil((CU_LIMIT * MICRO_LAMPORTS) / 1_000_000);
+    const feeBufferLamports   = 20_000 + priorityFeeLamports;
+
+    if (quoteIsSol(pool)) {
+      const needed = woodengRawIn + feeBufferLamports;
+      if (quoteBalRaw < needed) {
+        setStatus(`Insufficient SOL. Need ${(needed / 1e9).toFixed(6)} SOL, have ${(quoteBalRaw / 1e9).toFixed(6)} SOL.`);
+        return;
+      }
+    } else {
+      if (quoteBalRaw < woodengRawIn) {
+        setStatus(`Insufficient ${quoteLabelOf(pool)}. Need ${(woodengRawIn / 1e9).toFixed(2)}, have ${(quoteBalRaw / 1e9).toFixed(2)}.`);
+        return;
+      }
+      const solBal = await getCachedBalance(connection, wallet.publicKey!, 'confirmed');
+      if (solBal < feeBufferLamports) {
+        setStatus('Insufficient SOL for network fees.');
+        return;
+      }
+    }
+
+    // Step 4: execute — same buySoundMeme call and post-buy logic as handleConfirmBuy
+    setTxStep({ step: 1, total: 3, message: 'Signing transaction…' });
+    const effectiveWalletForTx2 = { ...wallet, publicKey: effectivePublicKey, connected: effectiveConnected, signTransaction: (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction, signAllTransactions: (wallet.connected && wallet.signAllTransactions) ? wallet.signAllTransactions : ((txs: any[]) => Promise.all(txs.map((tx: any) => ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction)(tx)))) };
+    const tx = await buySoundMeme({
+      pool,
+      amountWoodengIn: woodengRawIn,
+      minMemeOut,
+      wallet: effectiveWalletForTx2,
+      onStep: (step, total, message) => setTxStep({ step, total, message }),
+    });
+
+    const mintStr = pool.memeMint.toBase58();
+    setTxStep(null);
+
+    adjustMemeBalanceRaw(mintStr, +memeRawOut);
+    adjustQuoteBalanceRaw(pool.quoteMint, -woodengRawIn);
+    patchPoolAfterBuy(pool, memeRawOut, woodengRawIn);
+
+    try {
+      const pLamports = nextPriceLamportsAfterTrade(pool, -memeRawOut, +woodengRawIn);
+      pushPricePoint(mintStr, pLamports);
+      flushNow(false);
+    } catch {}
+
+    // Re-fetch on-chain price same as handleConfirmBuy
+    try {
+      const anchorWalletNow = getAnchorWallet(wallet) ?? (unifiedPublicKey && unifiedSignTransaction ? {
+        publicKey: unifiedPublicKey,
+        signTransaction: unifiedSignTransaction,
+        signAllTransactions: async (txs: Transaction[]) => {
+          const signed = [];
+          for (const tx of txs) {
+            signed.push(await unifiedSignTransaction(tx));
+          }
+          return signed;
+        },
+      } : null);
+      if (!anchorWalletNow) throw new Error('no wallet');
+      const providerNow = new AnchorProvider(connection, anchorWalletNow, {});
+      const progNow = new Program(poolIdl, poolProgramIdFor(pool), providerNow);
+      const cfgNow  = await progNow.account.soundMemeConfig.fetch(pool.pubkey);
+      const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
+      if (lamportsNow > 0) pushPricePoint(mintStr, lamportsNow);
+    } catch {}
+
+    setBuyFilled({
+      open: true,
+      symbol:       pool.symbol ?? '',
+      amountMeme:   memeUiOut,
+      priceWoodeng: woodengRawIn / 1e9,
+      quoteLabel:   quoteLabelOf(pool),
+    });
+
+    await refreshUserNfts();
+    await refreshBalances();
+
+  } catch (e: any) {
+    setTxStep(null);
+    setStatus('Buy failed: ' + (e.message || 'Unknown error'));
+  } finally {
+    buyingRef.current = false;
+  }
+};
 
 const handleConfirmSell = async () => {
   if (sellingRef.current) return;     // lock
@@ -4477,7 +5860,7 @@ const walletRawBal = balancesByMint[mintStr] ?? undefined;
 
 let memeRawIn = Math.floor(amtUi * 10 ** DEC);
 
-// If user effectively clicked “max”, snap to the exact raw balance
+// If user effectively clicked "max", snap to the exact raw balance
 if (
   walletRawBal != null &&
   walletRawBal > 0 &&
@@ -4496,7 +5879,7 @@ if (!Number.isFinite(memeRawIn) || memeRawIn <= 0) {
     const woodengRawOut = getQuoteForMemeSell(pool, memeRawIn);
     const woodengUiOut  = woodengRawOut / 1e9;
 
-    // We enforce user slippage via minWoodengOut; do not block by “price impact”,
+    // We enforce user slippage via minWoodengOut; do not block by "price impact",
 // which is naturally large on bonding curves for big trades.
 const s = Math.max(0, Number(slippage) || 0);
 const slipOut = Math.floor(woodengRawOut * Math.max(0, 1 - s / 100));
@@ -4505,21 +5888,52 @@ const minWoodengOut = Math.max(1, slipOut - 5);
 
 
 
+
+
+
     setTransactionStatus('processing');
     setTransactionMessage('Processing transaction...');
 
     try {
-      if (!wallet.publicKey) throw new Error('Please connect your wallet!');
+      if (!effectivePublicKey) throw new Error('Please connect your wallet!');
       if (!modalTokensToSell) throw new Error('Select amount to sell');
 
+      // --- Balance check BEFORE sending wallet popup ---
+const mintStr = pool.memeMint.toBase58();
+const userMemeRaw = balancesByMint[mintStr] ?? 0;
+
+if (userMemeRaw < memeRawIn) {
+  setTransactionStatus('error');
+  setTransactionMessage(`Insufficient token balance to sell that amount.`);
+  return;
+}
+
+// fees buffer
+const CU_LIMIT = 250_000;
+const MICRO_LAMPORTS = 10_000;
+const priorityFeeLamports = Math.ceil((CU_LIMIT * MICRO_LAMPORTS) / 1_000_000);
+const feeBufferLamports = 20_000 + priorityFeeLamports;
+
+const solBal = await getCachedBalance(connection, wallet.publicKey!, 'confirmed');
+if (solBal < feeBufferLamports) {
+  setTransactionStatus('error');
+  setTransactionMessage(
+    `Insufficient SOL for network fees. Need ~${(feeBufferLamports/1e9).toFixed(6)} SOL.`
+  );
+  return;
+}
+
+
+      const effectiveWalletForSell = { ...wallet, publicKey: effectivePublicKey, connected: effectiveConnected, signTransaction: (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction, signAllTransactions: (wallet.connected && wallet.signAllTransactions) ? wallet.signAllTransactions : ((txs: any[]) => Promise.all(txs.map((tx: any) => ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction)(tx)))) };
       const tx = await sellSoundMeme({
         pool,
         memeAmountIn: memeRawIn,
         minWoodengOut,
-        wallet,
+        wallet: effectiveWalletForSell,
+        onStep: (s, t, m) => setTxStep({ step: s, total: t, message: m }),
       });
 
-      const mintStr = pool.memeMint.toBase58();
+      setTxStep(null);
 
       adjustMemeBalanceRaw(mintStr, -memeRawIn);
       adjustQuoteBalanceRaw(pool.quoteMint, +woodengRawOut);
@@ -4538,8 +5952,20 @@ const minWoodengOut = Math.max(1, slipOut - 5);
       setShowSellModal(false);
 
       try {
-        const providerNow = new AnchorProvider(connection, getAnchorWallet(wallet), {});
-        const progNow = new Program(poolIdl, POOL_PROGRAM_ID, providerNow);
+        const anchorWalletNow = getAnchorWallet(wallet) ?? (unifiedPublicKey && unifiedSignTransaction ? {
+          publicKey: unifiedPublicKey,
+          signTransaction: unifiedSignTransaction,
+          signAllTransactions: async (txs: Transaction[]) => {
+            const signed = [];
+            for (const tx of txs) {
+              signed.push(await unifiedSignTransaction(tx));
+            }
+            return signed;
+          },
+        } : null);
+        if (!anchorWalletNow) throw new Error('no wallet');
+        const providerNow = new AnchorProvider(connection, anchorWalletNow, {});
+        const progNow = new Program(poolIdl, poolProgramIdFor(pool), providerNow);
         const cfgNow = await progNow.account.soundMemeConfig.fetch(pool.pubkey);
         const lamportsNow = Number((cfgNow as any).lastMemePrice ?? 0);
         if (lamportsNow > 0) pushPricePoint(mintStr, lamportsNow);
@@ -4553,6 +5979,7 @@ const minWoodengOut = Math.max(1, slipOut - 5);
         quoteLabel: quoteLabelOf(pool),
       });
     } catch (e: any) {
+  setTxStep(null);
   const msg = await renderError(e, connection);
   setTransactionStatus('error');
   setTransactionMessage('Error: ' + msg);
@@ -4581,29 +6008,36 @@ async function unlockTokens(
   setTxStep({ step: 1, total: 1, message: "Burning NFT & unlocking tokens…" });
 
   try {
-    if (!wallet.publicKey) throw new Error("Connect wallet first");
+    if (!effectivePublicKey) throw new Error("Connect wallet first");
     if (!nftMint) throw new Error("No NFT mint provided");
+    const pk = effectivePublicKey!;
+    const anchorWalletUnlock = { publicKey: pk, signTransaction: (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction, signAllTransactions: (wallet.connected && wallet.signAllTransactions) ? wallet.signAllTransactions : ((txs: any[]) => Promise.all(txs.map((tx: any) => ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction)(tx)))) };
 
     // Guard: ensure the NFT account still exists & has balance
-    const userNftAccount = await getAta(wallet.publicKey, nftMint);
+    const userNftAccount = await getAta(pk, nftMint);
     const accInfo = await connection.getAccountInfo(userNftAccount);
     if (!accInfo) throw new Error("NFT account not found – did you mint from this wallet?");
     const bal = (await connection.getTokenAccountBalance(userNftAccount)).value.uiAmount;
     if (!bal) throw new Error("This NFT is already burned (balance = 0).");
 
-    // PDAs
-    const [lockerPda]       = await getLockerPda(pool.memeMint, wallet.publicKey, BigInt(lockId));
-    const userMemeAta       = await getAta(wallet.publicKey, pool.memeMint);
+    // PDAs — inline derivation matching Rust seeds
+    const lockIdLEUnlock = new Uint8Array(8);
+    new DataView(lockIdLEUnlock.buffer).setBigUint64(0, BigInt(lockId), true);
+    const [lockerPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('locker'), pool.memeMint.toBuffer(), pk.toBuffer(), Buffer.from(lockIdLEUnlock)],
+      LOCKER_PROGRAM_ID
+    );
+    const userMemeAta       = await getAta(pk, pool.memeMint);
     const lockerMemeAccount = await getAta(lockerPda,      pool.memeMint, true);
 
     // Anchor call
-    const provider      = new AnchorProvider(connection, getAnchorWallet(wallet), { preflightCommitment: "confirmed" });
+    const provider      = new AnchorProvider(connection, anchorWalletUnlock as any, { preflightCommitment: "confirmed" });
     const lockerProgram = new Program(lockerIdl, LOCKER_PROGRAM_ID, provider);
 
     await lockerProgram.methods
       .burnNftAndUnlockTokens()
       .accounts({
-        user: wallet.publicKey,
+        user: pk,
         userMemeAccount: userMemeAta,
         locker: lockerPda,
         lockerMemeAccount,
@@ -4712,98 +6146,743 @@ const pct = Math.min(1, woodLamports / Math.max(1, thrLamports));
 
 
 
-  {/* Header */}
-  <h1 className="text-2xl sm:text-3xl font-bold mb-4 sm:mb-8">Sound Meme Pools</h1>
+  {/* ═══════════════════════════════════════════════════════════════════════
+      SWL-444 LAUNCHPAD — HERO + LEADERBOARD + HOT + FILTERS
+  ═══════════════════════════════════════════════════════════════════════ */}
 
- {wallet.publicKey &&
- wallet.publicKey.toBase58() === ADMIN_INIT_PUBKEY.toBase58() && (
-  <div className="mb-4">
-    <button
-      type="button"
-      onClick={() => ensureWsolRewardsVault(setStatus, wallet)}
-      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg
-                 bg-[#37ad71] hover:bg-[#49c283] text-white text-sm font-semibold
-                 border border-white/10"
-      title="One-time setup to enable SOL-quoted pool buys/sells"
-    >
-      Ensure SOL (WSOL) Rewards Vault
-    </button>
-    <p className="text-xs text-white/70 mt-1">
-      Runs once. Needed so SOL (WSOL) pairs can buy/sell.
-    </p>
+  {/* ══ GLOBAL STYLES ══ */}
+  <style>{`
+    @keyframes hero-pulse {
+      0%, 100% { opacity: 0.85; }
+      50%       { opacity: 1; }
+    }
+    @keyframes live-glow {
+      0%, 100% { box-shadow: 0 0 6px 2px rgba(239,68,68,0.5); }
+      50%       { box-shadow: 0 0 14px 5px rgba(239,68,68,0.8); }
+    }
+    @keyframes grid-pulse {
+      0%, 100% { opacity: 0.22; }
+      50%       { opacity: 0.38; }
+    }
+    @keyframes chart-draw-loop {
+      0%   { stroke-dashoffset: 1800; opacity: 0; }
+      5%   { opacity: 1; }
+      65%  { stroke-dashoffset: 0;    opacity: 1; }
+      80%  { stroke-dashoffset: 0;    opacity: 0; }
+      81%  { stroke-dashoffset: 1800; opacity: 0; }
+      100% { stroke-dashoffset: 1800; opacity: 0; }
+    }
+    @keyframes chart-fill-loop {
+      0%   { opacity: 0; }
+      5%   { opacity: 0; }
+      65%  { opacity: 0.45; }
+      80%  { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes chart-glow-pulse {
+      0%, 100% { filter: drop-shadow(0 0 4px rgba(168,85,247,0.5)); }
+      50%       { filter: drop-shadow(0 0 10px rgba(168,85,247,0.9)); }
+    }
+    @keyframes diamond-float {
+      0%, 100% { transform: translateY(0px) rotate(45deg); opacity: 0.55; }
+      50%       { transform: translateY(-8px) rotate(45deg); opacity: 0.9; }
+    }
+    @keyframes neon-glow-pulse {
+      0%, 100% { opacity: 0.3; }
+      50%       { opacity: 0.7; }
+    }
+    @keyframes shimmer-card {
+      0%   { background-position: -200% center; }
+      100% { background-position: 200% center; }
+    }
+    @keyframes bar-fill { from { width: 0%; } to { width: var(--bar-w); } }
+    @keyframes gate-open-left  { to { transform: translateX(-110%); } }
+    @keyframes gate-open-right { to { transform: translateX(110%);  } }
+    @keyframes crystal-shimmer {
+      0%   { background-position: -200% center; }
+      100% { background-position: 200% center; }
+    }
+
+    .hero-text-animated {
+      background: linear-gradient(135deg, #ffffff 0%, #a855f7 50%, #ffffff 100%);
+      background-size: 200% 200%;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: hero-pulse 3s ease-in-out infinite;
+    }
+    .live-badge-glow { animation: live-glow 2s ease-in-out infinite; }
+    .card-shimmer:hover::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.04) 50%, transparent 70%);
+      background-size: 200% 100%;
+      animation: shimmer-card 0.7s ease forwards;
+      pointer-events: none;
+      border-radius: inherit;
+    }
+    .feature-card-gate:hover .gate-left  { animation: gate-open-left  0.5s cubic-bezier(.4,0,.2,1) forwards; }
+    .feature-card-gate:hover .gate-right { animation: gate-open-right 0.5s cubic-bezier(.4,0,.2,1) forwards; }
+    .feature-card-gate:hover .gate-inner { opacity: 1; transition: opacity 0.3s 0.3s; }
+    .feature-card-rep:hover .rep-bar-1 { animation: bar-fill 0.6s 0s ease forwards; }
+    .feature-card-rep:hover .rep-bar-2 { animation: bar-fill 0.6s 0.1s ease forwards; }
+    .feature-card-rep:hover .rep-bar-3 { animation: bar-fill 0.6s 0.2s ease forwards; }
+    .feature-card-rep:hover .rep-bar-4 { animation: bar-fill 0.6s 0.3s ease forwards; }
+    .feature-card-rep:hover .rep-bar-5 { animation: bar-fill 0.6s 0.4s ease forwards; }
+    .feature-card-cycle:hover .cycle-icon { animation: cycle-rotate 1s linear infinite; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0c0d12; }
+    ::-webkit-scrollbar-thumb { background: #5b21b6; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #7c3aed; }
+    button:hover, a:hover { --glow-active: 1; }
+  `}</style>
+
+  {/* ══ HERO BANNER ══ */}
+  <div className="mb-6 rounded-2xl overflow-hidden relative"
+       style={{
+         background: 'linear-gradient(135deg, #0d0d12 0%, #1a0a2e 50%, #0d0d12 100%)',
+         border: '1px solid rgba(124,58,237,0.3)',
+         backdropFilter: 'blur(12px)',
+       }}>
+
+    {/* Animated grid background */}
+    <div className="absolute inset-0 pointer-events-none overflow-hidden"
+         style={{ animation: 'grid-pulse 4s ease-in-out infinite' }}>
+      <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg" style={{ position:'absolute', inset:0 }}>
+        <defs>
+          <pattern id="hero-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(124,58,237,0.18)" strokeWidth="0.5"/>
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#hero-grid)" />
+      </svg>
+    </div>
+
+    {/* Scanline overlay */}
+    <div className="absolute inset-0 pointer-events-none overflow-hidden opacity-[0.02]"
+         style={{ backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.15) 2px, rgba(255,255,255,0.15) 4px)' }} />
+
+    {/* Animated chart — realistic bullish line spanning full hero width */}
+    <div className="absolute left-0 right-0 top-0 bottom-0 pointer-events-none overflow-hidden">
+      <svg width="100%" height="100%" viewBox="0 0 1000 300" preserveAspectRatio="none"
+           style={{ position:'absolute', inset:0, animation:'chart-glow-pulse 3s ease-in-out infinite' }}>
+        <defs>
+          <linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(168,85,247,0.22)"/>
+            <stop offset="100%" stopColor="rgba(168,85,247,0)"/>
+          </linearGradient>
+        </defs>
+        {/* Area fill under the line */}
+        <path
+          d="M 0,300 L 0,280 C 80,260 120,290 180,240 S 280,200 340,180 S 440,210 500,160 S 600,130 660,100 S 760,80 820,60 S 900,40 960,20 L 1000,15 L 1000,300 Z"
+          fill="url(#chart-fill)"
+          style={{ animation:'chart-fill-loop 12s ease-out infinite' }}
+        />
+        {/* Main chart line — draws itself over 8s then fades and restarts */}
+        <path
+          d="M 0,280 C 80,260 120,290 180,240 S 280,200 340,180 S 440,210 500,160 S 600,130 660,100 S 760,80 820,60 S 900,40 960,20"
+          fill="none" stroke="#a855f7" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+          strokeDasharray="1800" strokeDashoffset="1800"
+          style={{ animation:'chart-draw-loop 12s ease-out infinite' }}
+        />
+        {/* Diamond markers at peaks — float gently */}
+        {([{x:340,y:180},{x:500,y:160},{x:660,y:100},{x:820,y:60}] as {x:number;y:number}[]).map((pt,i) => (
+          <g key={i} style={{ animation:`diamond-float ${2.8+i*0.5}s ease-in-out infinite ${i*0.7}s` }}>
+            <rect x={pt.x-6} y={pt.y-6} width="12" height="12" fill="#a855f7" opacity="0.85"
+                  transform={`rotate(45 ${pt.x} ${pt.y})`}/>
+            <rect x={pt.x-3.5} y={pt.y-3.5} width="7" height="7" fill="#e9d5ff" opacity="0.65"
+                  transform={`rotate(45 ${pt.x} ${pt.y})`}/>
+          </g>
+        ))}
+      </svg>
+    </div>
+
+    {/* Purple neon glow lines only */}
+    <div className="absolute inset-0 pointer-events-none">
+      <div className="absolute top-0 left-0 right-0 h-px" style={{ background:'linear-gradient(90deg, transparent, rgba(168,85,247,0.55), transparent)', animation:'neon-glow-pulse 3s ease-in-out infinite' }} />
+      <div className="absolute bottom-0 left-0 right-0 h-px" style={{ background:'linear-gradient(90deg, transparent, rgba(168,85,247,0.35), transparent)', animation:'neon-glow-pulse 3s ease-in-out infinite 1.5s' }} />
+    </div>
+
+    <div className="px-5 py-6 sm:py-8 relative">
+      {/* LIVE pill + active count */}
+      <div className="flex items-center gap-2 mb-3">
+        <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold text-red-400 live-badge-glow"
+              style={{ background:'rgba(239,68,68,0.15)', border:'1px solid rgba(239,68,68,0.4)' }}>
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse inline-block" />
+          LIVE
+        </span>
+        <span className="text-xs text-[#6b7084]">{sortedPools.length} memes active</span>
+      </div>
+
+      {/* Animated gradient headline */}
+      <h1 className="hero-text-animated text-2xl sm:text-3xl md:text-4xl font-black leading-tight mb-2">
+        BUILD CULTURE.<br className="sm:hidden" /> Block Jeets. Create SWL-444 tokens
+      </h1>
+      <p className="text-sm sm:text-base text-[#9aa1af] max-w-xl">
+        These tokens evolve. Their metadata can be updated and minted into an NFT. They save the trenches from short-term thinking.
+        Launch. Gate. Ascend.
+      </p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <a href="/meme-locker" className="hero-create-btn px-4 py-2 rounded-xl font-bold text-sm text-black"
+           style={{ background:'linear-gradient(90deg, #ffc371, #ff6b6b)', display:'inline-block', position:'relative', overflow:'hidden' }}>
+          <span style={{ position:'relative', zIndex:1 }}>+ Create Your Token</span>
+        </a>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-[#9aa1af]"
+             style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}>
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" style={{ boxShadow:'0 0 6px rgba(52,211,153,0.8)' }} />
+          {hotPools.length > 0 ? `${hotPools.length} trending now` : 'Markets live'}
+        </div>
+      </div>
+    </div>
   </div>
-)}
 
+  {/* ══ FEATURE CARDS ══ */}
+  <style>{`
+    @keyframes hero-btn-pulse { 0%{transform:scale(1)} 50%{transform:scale(1.07)} 100%{transform:scale(1)} }
+    .hero-create-btn::before {
+      content:''; position:absolute; bottom:0; left:0; right:0; height:100%;
+      background:linear-gradient(to top, #f97316 0%, #fbbf24 100%);
+      transform:translateY(100%);
+      transition:transform 0.6s cubic-bezier(0.22,1,0.36,1);
+      border-radius:inherit; z-index:0;
+    }
+    .hero-create-btn:hover::before { transform:translateY(0); }
+    .hero-create-btn:hover { animation:hero-btn-pulse 0.3s ease 0.62s 1 both; }
+    .hero-create-btn:active { transform:scale(0.95); transition:transform 0.08s ease; }
+    .fc2 {
+      border-radius: 16px;
+      background: #0d0e16;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+    .fc2:hover { transform: translateY(-3px); }
 
+    .fc2-gate { border: 1px solid rgba(96,165,250,0.28); overflow: hidden; }
+    .fc2-gate:hover { box-shadow: 0 0 30px rgba(96,165,250,0.18), 0 0 60px rgba(167,139,250,0.1), 0 8px 24px rgba(0,0,0,0.5); }
+    .fc2-rep  { border: 1px solid rgba(52,211,153,0.22); }
+    .fc2-rep:hover  { box-shadow: 0 0 28px rgba(52,211,153,0.12), 0 8px 24px rgba(0,0,0,0.5); }
+    .fc2-evo  { border: 1px solid rgba(167,139,250,0.22); }
+    .fc2-evo:hover  { box-shadow: 0 0 28px rgba(167,139,250,0.12), 0 8px 24px rgba(0,0,0,0.5); }
 
-  {/* Wallet notice */}
-  {!wallet.publicKey && (
-    <div
-      className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 text-yellow-300 px-3 py-2 text-sm"
-      role="status"
-    >connect your wallet</div>
+    /* Gate scene */
+    .fc2-gate-scene {
+      height: 118px;
+      background: #06070f;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    /* Blue/purple glow behind the gate — revealed on hover */
+    .fc2-gate-glow {
+      position: absolute; bottom: 0; left: 50%;
+      transform: translateX(-50%);
+      width: 180px; height: 110px;
+      background: radial-gradient(ellipse at 50% 100%, rgba(167,139,250,0.55) 0%, rgba(96,165,250,0.2) 40%, transparent 72%);
+      opacity: 0;
+      transition: opacity 0.45s 0.15s ease;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .fc2-gate:hover .fc2-gate-glow { opacity: 1; }
+
+    /* Narrow vertical pillars on sides */
+    .fc2-pillar {
+      position: absolute; bottom: 0; top: 6px; width: 12px;
+      background: linear-gradient(180deg, #3b82f6 0%, #1e40af 50%, #0f172a 100%);
+      border-radius: 3px 3px 0 0;
+      box-shadow: inset -2px 0 5px rgba(0,0,0,0.5), 0 0 8px rgba(59,130,246,0.25);
+      z-index: 2;
+    }
+    .fc2-pillar-l { left: 8px; }
+    .fc2-pillar-r { right: 8px; }
+
+    /* Door halves — CSS-styled, slide apart on hover */
+    .fc2-door-l {
+      transition: transform 0.6s cubic-bezier(0.4,0,0.2,1);
+      margin-right: 1px;
+      position: relative; z-index: 1;
+      display: flex; flex-direction: column; align-items: stretch;
+    }
+    .fc2-door-r {
+      transition: transform 0.6s cubic-bezier(0.4,0,0.2,1);
+      margin-left: 1px;
+      position: relative; z-index: 1;
+      display: flex; flex-direction: column; align-items: stretch;
+    }
+    .fc2-gate:hover .fc2-door-l { transform: translateX(-68%); }
+    .fc2-gate:hover .fc2-door-r { transform: translateX(68%); }
+
+    /* Pointed arch on top of each door */
+    .fc2-door-arch {
+      width: 62px; height: 18px;
+      background: linear-gradient(135deg, #60a5fa 0%, #6366f1 55%, #4c1d95 100%);
+      clip-path: polygon(0% 100%, 50% 0%, 100% 100%);
+      filter: drop-shadow(0 -2px 6px rgba(96,165,250,0.5));
+    }
+    /* Door body with vertical bar texture and metallic sheen */
+    .fc2-door-body {
+      width: 62px; height: 88px;
+      background:
+        repeating-linear-gradient(90deg, transparent, transparent 9px, rgba(96,165,250,0.13) 9px, rgba(96,165,250,0.13) 10px),
+        linear-gradient(180deg, #1e40af 0%, #3730a3 45%, #1e1b4b 100%);
+      box-shadow: inset 3px 0 6px rgba(0,0,0,0.45), inset -3px 0 6px rgba(0,0,0,0.45), inset 0 -4px 8px rgba(0,0,0,0.35);
+      display: flex; align-items: center; justify-content: center;
+      position: relative; overflow: hidden;
+    }
+    /* Metallic sheen overlay */
+    .fc2-door-body::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(120deg, rgba(255,255,255,0.10) 0%, transparent 38%, rgba(255,255,255,0.04) 100%);
+      pointer-events: none;
+    }
+    /* Diamond medallion in center of each door */
+    .fc2-door-medallion {
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      background: rgba(96,165,250,0.14);
+      border: 1.5px solid rgba(96,165,250,0.65);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; color: #93c5fd;
+      box-shadow: 0 0 10px rgba(96,165,250,0.35);
+      position: relative; z-index: 1;
+    }
+
+    /* Mobile carousel */
+    .feat-carousel {
+      display: flex;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      gap: 12px;
+      padding-bottom: 4px;
+    }
+    .feat-carousel::-webkit-scrollbar { display: none; }
+    .feat-carousel-item {
+      scroll-snap-align: start;
+      flex: 0 0 85vw;
+      max-width: 320px;
+    }
+  `}</style>
+
+  {/* ── Mobile carousel (hidden on sm+) / desktop grid (hidden on mobile) ── */}
+
+  {/* MOBILE: horizontal swipe carousel */}
+  <div className="sm:hidden mb-5">
+    <div ref={featCarouselRef} className="feat-carousel"
+      onScroll={() => {
+        const el = featCarouselRef.current;
+        if (!el) return;
+        const idx = Math.round(el.scrollLeft / (el.scrollWidth / 3));
+        setFeatCarouselIdx(Math.min(2, Math.max(0, idx)));
+      }}>
+      {[0,1,2].map(i => (
+        <div key={i} className="feat-carousel-item fc2" style={{
+          border: i === 0 ? '1px solid rgba(96,165,250,0.28)' : i === 1 ? '1px solid rgba(52,211,153,0.22)' : '1px solid rgba(167,139,250,0.22)',
+          overflow: i === 0 ? 'hidden' : undefined,
+        }}>
+          {i === 0 && (
+            <>
+              <div className="fc2-gate-scene" style={{ height:100 }}>
+                <div className="fc2-gate-glow"/>
+                <div className="fc2-pillar fc2-pillar-l"/>
+                <div className="fc2-pillar fc2-pillar-r"/>
+                <div className="fc2-door-l"><div className="fc2-door-arch"/><div className="fc2-door-body"><div className="fc2-door-medallion">◆</div></div></div>
+                <div className="fc2-door-r"><div className="fc2-door-arch"/><div className="fc2-door-body"><div className="fc2-door-medallion">◆</div></div></div>
+              </div>
+              <div className="p-4"><div className="text-sm font-black text-white mb-1.5">💎 Diamond Gate</div><div className="text-[11px] leading-relaxed" style={{color:'#6b7084'}}>Set a minimum avg hold time. Bundlers and flippers blocked at the door.</div></div>
+            </>
+          )}
+          {i === 1 && (
+            <>
+              <div style={{height:100,display:'flex',alignItems:'center',justifyContent:'center',background:'#070810',position:'relative',overflow:'hidden'}}>
+                <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at 50% 50%, rgba(52,211,153,0.07) 0%, transparent 68%)'}}/>
+                <div style={{textAlign:'center'}}>
+                  <div className="text-4xl font-black tabular-nums" style={{color:'#34d399',textShadow:'0 0 20px rgba(52,211,153,0.6)'}}>?.?x</div>
+                  <div className="text-[9px] font-bold mt-1" style={{color:'#6b7084',letterSpacing:'0.1em'}}>AVG MULTIPLIER</div>
+                </div>
+              </div>
+              <div className="p-4"><div className="text-sm font-black text-white mb-1.5">📊 Dev Avg Multiplier</div><div className="text-[11px] leading-relaxed" style={{color:'#6b7084'}}>Every creator has a verifiable on-chain avg multiplier. Higher = longer holds. No more anon rugs.</div></div>
+            </>
+          )}
+          {i === 2 && (
+            <>
+              <div style={{height:100,display:'flex',alignItems:'center',justifyContent:'center',background:'#070810',position:'relative',overflow:'hidden',gap:8}}>
+                <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at 50% 50%, rgba(167,139,250,0.07) 0%, transparent 68%)'}}/>
+                {(['🪙','🔒','🎨'] as string[]).map((ic,ii)=>(<React.Fragment key={ii}>{ii>0&&<div style={{color:'rgba(167,139,250,0.4)',fontSize:12,marginBottom:12}}>→</div>}<div style={{textAlign:'center'}}><div style={{width:36,height:36,borderRadius:'50%',background:'rgba(167,139,250,0.1)',border:'1px solid rgba(167,139,250,0.4)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>{ic}</div></div></React.Fragment>))}
+              </div>
+              <div className="p-4"><div className="text-sm font-black text-white mb-1.5">🔄 Evolving Tokens</div><div className="text-[11px] leading-relaxed" style={{color:'#6b7084'}}>Lock tokens → mint a living NFT. Creator updates image & audio on-chain anytime.</div></div>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+    {/* Dot indicator */}
+    <div className="flex justify-center gap-1.5 mt-2">
+      {[0,1,2].map(i => (
+        <div key={i} style={{ width: i === featCarouselIdx ? 16 : 6, height:6, borderRadius:3,
+          background: i === featCarouselIdx ? '#a855f7' : 'rgba(167,139,250,0.25)',
+          transition:'all 0.25s ease' }}/>
+      ))}
+    </div>
+  </div>
+
+  {/* DESKTOP: 3-column grid */}
+  <div className="hidden sm:grid sm:grid-cols-3 gap-4 mb-5">
+
+    {/* ── Card 1: Diamond Gate ── */}
+    <div className="fc2 fc2-gate">
+      <div className="fc2-gate-scene">
+        <div className="fc2-gate-glow" />
+        <div className="fc2-pillar fc2-pillar-l" />
+        <div className="fc2-pillar fc2-pillar-r" />
+
+        {/* Left door — CSS-based, slides left on hover */}
+        <div className="fc2-door-l">
+          <div className="fc2-door-arch" />
+          <div className="fc2-door-body">
+            <div className="fc2-door-medallion">◆</div>
+          </div>
+        </div>
+
+        {/* Right door — slides right on hover */}
+        <div className="fc2-door-r">
+          <div className="fc2-door-arch" />
+          <div className="fc2-door-body">
+            <div className="fc2-door-medallion">◆</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-5 flex-1">
+        <div className="text-sm font-black text-white mb-2">💎 Diamond Gate</div>
+        <div className="text-[11px] leading-relaxed" style={{ color:'#6b7084' }}>
+          Set a minimum average hold time that traders must if they want to enter the bonding phase . Jeets and bundlers blocked before they ruin the launch. Only diamond hands allowed.
+        </div>
+      </div>
+    </div>
+
+    {/* ── Card 2: Creator Reputation (slot machine) ── */}
+    <div className="fc2 fc2-rep"
+         onMouseEnter={startMultSlot}
+         onMouseLeave={stopMultSlot}>
+      <div style={{ height:118, display:'flex', alignItems:'center', justifyContent:'center', background:'#06070f', position:'relative', overflow:'hidden' }}>
+        <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at 50% 50%, rgba(52,211,153,0.08) 0%, transparent 68%)' }}/>
+        {/* Slot machine display */}
+        <div style={{ textAlign:'center' }}>
+          <div className="text-5xl font-black tabular-nums leading-none" style={{
+            color: multDone ? (parseFloat(multVal) >= 2 ? '#34d399' : parseFloat(multVal) >= 1.5 ? '#fbbf24' : '#f87171') : '#34d399',
+            textShadow: `0 0 24px ${multDone ? (parseFloat(multVal) >= 2 ? 'rgba(52,211,153,0.7)' : 'rgba(251,191,36,0.7)') : 'rgba(52,211,153,0.4)'}`,
+            transition: 'color 0.3s, text-shadow 0.3s',
+          }}>
+            {multVal}
+          </div>
+          <div className="text-[9px] font-bold mt-2 tracking-widest" style={{ color:'#4a5568' }}>AVG MULTIPLIER</div>
+          {multDone && (
+            <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black"
+                 style={{ background:'rgba(52,211,153,0.15)', color:'#34d399', border:'1px solid rgba(52,211,153,0.3)' }}>
+              ✓ VERIFIED ON-CHAIN
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="p-5 flex-1">
+        <div className="text-sm font-black text-white mb-2">📊 Dev Avg Multiplier</div>
+        <div className="text-[11px] leading-relaxed" style={{ color:'#6b7084' }}>
+          Every creator has an on-chain average multiplier of all their launches combined. Build your rep to reap. No more anon rugs.
+        </div>
+      </div>
+    </div>
+
+    {/* ── Card 3: Evolving Tokens ── */}
+    <div className="fc2 fc2-evo">
+      <div style={{ height:118, display:'flex', alignItems:'center', justifyContent:'center', background:'#06070f', position:'relative', overflow:'hidden', gap:10 }}>
+        <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at 50% 50%, rgba(167,139,250,0.07) 0%, transparent 68%)' }}/>
+        {([
+          { icon:'🪙', label:'TOKEN',   col:'rgba(167,139,250,0.4)' },
+          { icon:'🔒', label:'LOCK',    col:'rgba(167,139,250,0.55)' },
+          { icon:'🎨', label:'NFT',     col:'#a78bfa' },
+        ] as { icon: string; label: string; col: string }[]).map((s, i) => (
+          <React.Fragment key={s.label}>
+            {i > 0 && <div style={{ color:'rgba(167,139,250,0.35)', fontSize:13, flexShrink:0, marginBottom:14 }}>→</div>}
+            <div style={{ textAlign:'center', flexShrink:0 }}>
+              <div style={{ width:42, height:42, borderRadius:'50%', background:'rgba(167,139,250,0.08)', border:`1px solid ${s.col}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>{s.icon}</div>
+              <div style={{ fontSize:8, color: s.col, marginTop:5, fontWeight:800, letterSpacing:'0.06em' }}>{s.label}</div>
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+      <div className="p-5 flex-1">
+        <div className="text-sm font-black text-white mb-2">🔄 Evolving Tokens</div>
+        <div className="text-[11px] leading-relaxed" style={{ color:'#6b7084' }}>
+          Lock tokens → mint a living NFT. Creator updates image & audio on-chain anytime. Your NFT evolves with the meme — not a dead JPEG.
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  {/* ══ SCROLLING ACTIVITY TICKER ══ */}
+  {sortedPools.length > 0 && (
+    <div className="mb-5 overflow-hidden rounded-xl bg-[#1a1b25] border border-[#2a2b3a] py-2">
+      <div className="flex items-center gap-0 whitespace-nowrap"
+           style={{ animation: 'ticker-scroll 30s linear infinite' }}>
+        {[...sortedPools.slice(0, 8), ...sortedPools.slice(0, 8)].map((p, i) => {
+          const chg = change24hFor(p.memeMint.toBase58());
+          const up = chg >= 0;
+          return (
+            <span key={`${p.pubkey.toBase58()}-${i}`}
+                  className="inline-flex items-center gap-1.5 px-4 text-xs cursor-pointer shrink-0"
+                  onClick={() => router.push(`/sound-memes/${p.memeMint.toBase58()}`)}>
+              {p.poolType === 0 && <span className="text-blue-400">⏳</span>}
+              {p.poolType >= 2 && <span className="text-purple-400">🎓</span>}
+              <span className="font-bold text-white">{p.symbol || 'MEME'}</span>
+              <span className={up ? 'text-emerald-400' : 'text-red-400'}>
+                {up ? '▲' : '▼'}{Math.abs(chg).toFixed(1)}%
+              </span>
+              <span className="text-[#3a3b4a]">•</span>
+            </span>
+          );
+        })}
+      </div>
+      <style>{`
+        @keyframes ticker-scroll {
+          0% { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
+        }
+      `}</style>
+    </div>
   )}
 
+  {/* ── Admin button (hidden unless admin wallet) ── */}
+  {wallet.publicKey &&
+   wallet.publicKey.toBase58() === ADMIN_INIT_PUBKEY.toBase58() && (
+    <div className="mb-3">
+      <button type="button" onClick={() => ensureWsolRewardsVault(setStatus, wallet)}
+        className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-600/30 transition">
+        Ensure WSOL Rewards Vault
+      </button>
+    </div>
+  )}
 
-    {/* Status Banner */}
-    {status && (
-      <div className="mb-4 flex items-center gap-2 text-yellow-400">
-        {status.includes('Processing') && <Loader2 className="animate-spin w-5 h-5" />}
-        {status.includes('successful') && <CheckCircle2 className="w-5 h-5" />}
-        {status.includes('failed') && <AlertCircle className="w-5 h-5" />}
-        <span>{status}</span>
+  {/* ── Status Banner ── */}
+  {status && (
+    <div className="mb-3 flex items-center gap-2 text-sm px-3 py-2 rounded-xl bg-yellow-500/10 border border-yellow-500/20 text-yellow-300">
+      {status.includes('Processing') && <Loader2 className="animate-spin w-4 h-4" />}
+      {status.includes('successful') && <CheckCircle2 className="w-4 h-4" />}
+      {status.includes('failed') && <AlertCircle className="w-4 h-4" />}
+      <span>{status}</span>
+    </div>
+  )}
+
+  {/* ══ TOP LEADERBOARD RIBBON ══ */}
+  <div className="mb-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+
+      {/* ── Top 3 Devs ── */}
+      <div className="rounded-2xl bg-gradient-to-br from-[#1a1b25] to-[#14151c] border border-[#2a2b3a] p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-lg">👑</span>
+          <span className="text-sm font-bold text-white/90 uppercase tracking-wider">Top Creators</span>
+        </div>
+        <div className="space-y-2">
+          {topCreators.length === 0 ? (
+            <div className="text-xs text-[#6b7084]">Loading...</div>
+          ) : topCreators.map((dev, i) => {
+            const fmtMult = (m: number) => m >= 1000 ? `${(m/1000).toFixed(1)}K` : m >= 10 ? m.toFixed(0) : m.toFixed(1);
+            const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉';
+            return (
+              <div key={dev.addr}
+                className="flex items-center gap-2.5 group cursor-pointer rounded-lg px-1.5 py-1 -mx-1.5 hover:bg-white/[0.04] transition"
+                onClick={() => { if (dev.bestPool) router.push(`/sound-memes/${dev.bestPool.memeMint.toBase58()}`); }}
+              >
+                <span className="text-base shrink-0">{medal}</span>
+                {dev.bestPool?.imageUrl ? (
+                  <img src={dev.bestPool.imageUrl} alt="" className="w-8 h-8 rounded-lg object-cover shrink-0 ring-1 ring-white/10 group-hover:ring-[#ffc371]/30 transition" />
+                ) : (
+                  <div className="w-8 h-8 rounded-lg bg-[#2a2b3a] shrink-0" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-mono text-[#8a8fa3] truncate group-hover:text-[#ffc371] transition">{shortAddr(dev.addr, 4)}</div>
+                  <div className="text-[10px] text-[#6b7084]">{dev.launches} launch{dev.launches !== 1 ? 'es' : ''}</div>
+                </div>
+                <span className={`text-sm font-black tabular-nums ${
+                  dev.avgMult >= 10 ? 'text-emerald-400' : dev.avgMult >= 2 ? 'text-yellow-300' : 'text-[#8a8fa3]'
+                }`}>
+                  {fmtMult(dev.avgMult)}x
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Top Diamond Hands ── */}
+      <div className="rounded-2xl bg-gradient-to-br from-[#1a1b25] to-[#14151c] border border-[#2a2b3a] p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-lg">💎</span>
+          <span className="text-sm font-bold text-white/90 uppercase tracking-wider">Diamond Hands</span>
+        </div>
+        {topHoldersLoading ? (
+          <div className="space-y-2">
+            {[1,2,3].map(i => (
+              <div key={i} className="flex items-center gap-2.5 animate-pulse">
+                <div className="w-5 h-3 bg-[#2a2b3a] rounded shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="h-2.5 w-20 bg-[#2a2b3a] rounded" />
+                </div>
+                <div className="h-3 w-10 bg-[#2a2b3a] rounded" />
+              </div>
+            ))}
+          </div>
+        ) : topHolders.length === 0 ? (
+          <div className="text-[11px] text-[#6b7084] text-center py-3">No holders yet</div>
+        ) : (
+          <div className="space-y-1.5">
+            {topHolders.map((entry, i) => {
+              const avgDays = entry.avgDays;
+              const tierEmoji = avgDays >= 90 ? '👑' : avgDays >= 30 ? '🔥' : avgDays >= 7 ? '💎💎' : avgDays >= 1 ? '💎' : '🧻';
+              const tierColor = avgDays >= 90 ? '#fbbf24' : avgDays >= 30 ? '#fb923c' : avgDays >= 7 ? '#a78bfa' : avgDays >= 1 ? '#60a5fa' : '#8a8fa3';
+              const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`;
+              return (
+                <div key={entry.pda}
+                     className="flex items-center gap-2 rounded-lg px-1.5 py-1 -mx-1.5 transition"
+                     style={{ background: entry.isMe ? 'rgba(167,139,250,0.08)' : undefined }}>
+                  <span className="text-[11px] shrink-0 w-5 text-center">{medal}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[10px] font-mono truncate" style={{ color: entry.isMe ? '#a78bfa' : '#8a8fa3' }}>
+                      {shortAddr(entry.pda, 4)}
+                      {entry.isMe && <span className="ml-1 text-[8px] font-bold" style={{ color: '#a78bfa' }}>YOU</span>}
+                    </div>
+                  </div>
+                  <span className="text-[10px] shrink-0">{tierEmoji}</span>
+                  <span className="text-[11px] font-black tabular-nums shrink-0" style={{ color: tierColor }}>
+                    {fmtHoldTime(avgDays)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+
+  {/* ══ 🔥 HOT RIGHT NOW ══ */}
+  {hotPools.length > 0 && (
+    <div className="mb-6">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-lg">🔥</span>
+        <span className="text-sm font-bold text-white/90 uppercase tracking-wider">Hot Right Now</span>
+        <div className="flex-1 h-px bg-gradient-to-r from-[#ff6b35]/30 to-transparent" />
+      </div>
+      <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar snap-x snap-mandatory">
+        {hotPools.map(({ pool: hp, chg, bondingProg }) => {
+          const perf = poolPerfByMint[hp.memeMint.toBase58()];
+          const fmtMult = (m: number) => m >= 1000 ? `${(m/1000).toFixed(1)}K` : m >= 10 ? m.toFixed(0) : m.toFixed(1);
+          return (
+            <div
+              key={hp.pubkey.toBase58()}
+              className="snap-start shrink-0 w-[160px] sm:w-[180px] rounded-xl bg-[#1a1b25] border border-[#2a2b3a]
+                         hover:border-[#ffc371]/30 hover:shadow-lg hover:shadow-[#ffc371]/5 transition-all cursor-pointer
+                         overflow-hidden group"
+              onClick={() => router.push(`/sound-memes/${hp.memeMint.toBase58()}`)}
+            >
+              {/* Image */}
+              <div className="relative aspect-square w-full overflow-hidden">
+                {hp.imageUrl ? (
+                  <img src={hp.imageUrl} alt={hp.name || ''} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy" />
+                ) : (
+                  <div className="w-full h-full bg-[#22232a] animate-pulse" />
+                )}
+                {/* Status badge */}
+                {hp.poolType === 0 && (
+                  <div className="absolute top-2 left-2 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-blue-500/30 text-blue-300 backdrop-blur-sm">
+                    ⏳ {Math.round(bondingProg * 100)}%
+                  </div>
+                )}
+                {chg > 0 && (
+                  <div className="absolute top-2 right-2 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/30 text-emerald-300 backdrop-blur-sm">
+                    +{chg.toFixed(1)}%
+                  </div>
+                )}
+              </div>
+              {/* Info */}
+              <div className="p-2.5">
+                <div className="text-xs font-bold truncate">{hp.name || shortAddr(hp.memeMint.toBase58(), 4)}</div>
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-[10px] text-[#ffc371] font-mono">
+                    <TinyPrice value={hp.price ?? 0} />
+                  </span>
+                  {perf && perf.currentMultiplier > 0 && (
+                    <span className={`text-[10px] font-bold ${perf.currentMultiplier >= 1 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {fmtMult(perf.currentMultiplier)}x
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  )}
+
+  {/* ══ FILTER TABS + SEARCH + PAGINATION ══ */}
+  <div className="mb-4">
+    {/* Filter pills — desktop only; mobile has its own tabs inside MobileVerticalStacks */}
+    <div className="hidden md:flex items-center gap-2 overflow-x-auto no-scrollbar pb-2">
+      {([
+        { key: 'newest', label: '✨ New', icon: '' },
+        { key: 'bonding', label: '🚀 To Market', icon: '' },
+        { key: 'gainers', label: '📈 24h Gainers', icon: '' },
+        { key: 'marketcap', label: '💰 Top MCap', icon: '' },
+      ] as const).map(tab => (
+        <button
+          key={tab.key}
+          onClick={() => { setSortMode(tab.key); setPage(1); }}
+          className={`shrink-0 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+            sortMode === tab.key
+              ? 'bg-[#ffc371] text-black shadow-lg shadow-[#ffc371]/20'
+              : 'bg-[#1a1b25] text-[#8a8fa3] border border-[#2a2b3a] hover:text-white hover:border-[#3a3b4a]'
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Pagination (desktop) */}
+      <div className="hidden md:flex items-center gap-1.5 shrink-0">
+        <button
+          onClick={() => setPage(p => Math.max(1, p - 1))}
+          disabled={pageClamped === 1}
+          className="w-8 h-8 rounded-lg bg-[#1a1b25] border border-[#2a2b3a] text-[#8a8fa3] hover:text-white hover:border-[#3a3b4a] transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-sm"
+        >‹</button>
+        <span className="text-xs text-[#6b7084] tabular-nums px-2">{pageClamped}/{totalPages}</span>
+        <button
+          onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+          disabled={pageClamped === totalPages}
+          className="w-8 h-8 rounded-lg bg-[#1a1b25] border border-[#2a2b3a] text-[#8a8fa3] hover:text-white hover:border-[#3a3b4a] transition disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-sm"
+        >›</button>
+      </div>
+    </div>
+
+    {/* Wallet connect hint */}
+    {!wallet.publicKey && !authenticated && (
+      <div className="mt-2 rounded-xl border border-[#ffc371]/20 bg-[#ffc371]/5 text-[#ffc371] px-3 py-2 text-xs font-medium">
+        Connect your wallet to trade
       </div>
     )}
-
-
-
-    {/* Toolbar */}
-<div className="hidden md:flex mb-4 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-  <div className="inline-flex rounded-lg overflow-hidden border border-[#33334a] overflow-x-auto whitespace-nowrap">
-
-    <button
-      onClick={() => setSortMode('marketcap')}
-      className={`px-3 py-1 text-sm ${sortMode==='marketcap' ? 'bg-[#ffc371] text-black' : 'bg-[#262635] text-white'}`}
-    >
-      Top Market Cap
-    </button>
-    <button
-      onClick={() => setSortMode('gainers')}
-      className={`px-3 py-1 text-sm ${sortMode==='gainers' ? 'bg-[#ffc371] text-black' : 'bg-[#262635] text-white'}`}
-    >
-      Top Gainers 24h
-    </button>
-    <button
-      onClick={() => setSortMode('newest')}
-      className={`px-3 py-1 text-sm ${sortMode==='newest' ? 'bg-[#ffc371] text-black' : 'bg-[#262635] text-white'}`}
-    >
-      Newest
-    </button>
   </div>
-
-  {/* Pagination */}
-  <div className="flex items-center gap-2">
-    <button
-  className="px-3 py-2 text-sm bg-[#262635] rounded disabled:opacity-40"
-
-      onClick={() => setPage(p => Math.max(1, p - 1))}
-      disabled={pageClamped === 1}
-    >
-      Prev
-    </button>
-    <span className="text-xs text-[#c2c2c9]">{pageClamped} / {totalPages}</span>
-    <button
-  className="px-3 py-2 text-sm bg-[#262635] rounded disabled:opacity-40"
-
-      onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-      disabled={pageClamped === totalPages}
-    >
-      Next
-    </button>
-  </div>
-
-
-</div>
 
 
 
@@ -4812,9 +6891,10 @@ const pct = Math.min(1, woodLamports / Math.max(1, thrLamports));
 
     {/* MOBILE — vertical climb stacks with rocket progress */}
 <MobileVerticalStacks
-  pools={pools}
-  onOpen={(p) => { setDetailPool(p); setShowDetail(true); }}
+  pools={sortedPools}
+  onOpen={(p) => { router.push(`/sound-memes/${p.memeMint.toBase58()}`); }}
   onBuy={(p) => handleOpenBuyModal(p)}
+  onQuickBuy={(p, quoteRawIn) => handleQuickBuyDirect(p, quoteRawIn)}
   onSell={(p) => handleOpenSellModal(p)}
   onMint={(p) => handleMintNft(p)}                 // NEW
   onBurn={(p) => handleOpenBurn(p)}                // NEW
@@ -4829,17 +6909,15 @@ const pct = Math.min(1, woodLamports / Math.max(1, thrLamports));
   nftCountFor={(p) => ownedCounts[p.memeMint.toBase58()] ?? 0} // NEW
   change24hFor={change24hFor}
   createdAtFor={createdAtFor}
+  walletConnected={!!effectivePublicKey}
+  creatorRepFor={(mint) => creatorRepByMint[mint]}
+  poolPerfLookup={poolPerfByMint}
 />
-
-
-
-
     {/* DESKTOP/TABLET — existing grid */}
 <div className="hidden md:block">
   {/* Card Grid */}
   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
     {visiblePools.map((pool, i) => {
-
 
      // User NFT count for this pool
      const userNftCount = ownedCounts[pool.memeMint.toBase58()] ?? 0;
@@ -4857,13 +6935,13 @@ const chgUp = chg >= 0;
         return (
           <div
             key={pool.pubkey.toBase58()}
-            className="group bg-[#22232a] border border-[#33334a] rounded-2xl shadow-xl hover:scale-105 transition-all cursor-pointer flex flex-col overflow-hidden"
-            onClick={() => { setDetailPool(pool); setShowDetail(true); }}
+            className="card-shimmer group bg-[#1a1b25] border border-[#2a2b3a] rounded-3xl hover:border-[#ffc371]/30 hover:shadow-2xl hover:shadow-[#ffc371]/8 hover:scale-[1.015] transition-all duration-200 cursor-pointer flex flex-col overflow-hidden relative"
+            onClick={() => { router.push(`/sound-memes/${pool.memeMint.toBase58()}`); }}
           >
           
             {/* IMAGE + Overlay */}
 <div className="relative aspect-square w-full overflow-hidden rounded-t-2xl isolate">
-  {pool.hydrated && pool.imageUrl ? (
+  {(pool.hydrated || pool.imageUrl) && pool.imageUrl ? (
     <img
       src={pool.imageUrl}
       alt={pool.name || 'Sound meme'}
@@ -4933,6 +7011,9 @@ const chgUp = chg >= 0;
 
     {pool.name ?? "Untitled Meme"}
   </h3>
+  {pool.programVersion === 'v1' && (
+    <span className="shrink-0 ml-1.5 text-[9px] font-bold bg-[#2b323c] text-[#8a8fa3] px-1.5 py-0.5 rounded-full">V1</span>
+  )}
 </div>
 
 {/* Description */}
@@ -4941,13 +7022,55 @@ const chgUp = chg >= 0;
   {pool.description || "No description"}
 </div>
 
+              {/* Bonding status + gate badge + creator avg multiplier (desktop) */}
+              {(() => {
+                const perf = poolPerfByMint[pool.memeMint.toBase58()];
+                const rep = creatorRepByMint[pool.memeMint.toBase58()];
+                const fmtMult = (m: number) => m >= 1000 ? `${(m/1000).toFixed(1)}K` : m >= 10 ? m.toFixed(0) : m.toFixed(1);
+                const gated = (pool.minAvgHoldDays ?? 0) > 0;
+                const gateTierEmoji = gated ? (() => {
+                  const d = pool.minAvgHoldDays ?? 0;
+                  if (d >= 360) return '⚡'; if (d >= 180) return '🌌'; if (d >= 90) return '👑';
+                  if (d >= 30) return '🚀'; if (d >= 14) return '💎'; if (d >= 7) return '🌀';
+                  if (d >= 3) return '💩'; if (d >= 1) return '🐀'; return '🧻';
+                })() : null;
+                return (
+                  <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                    {perf && (
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                        perf.bondingStatus === 'bonding' ? 'bg-blue-500/20 text-blue-300' :
+                        perf.bondingStatus === 'bonded' ? 'bg-emerald-500/20 text-emerald-300' :
+                        'bg-purple-500/20 text-purple-300'
+                      }`}>
+                        {perf.bondingStatus === 'bonding' ? '⏳ Bonding' :
+                         perf.bondingStatus === 'bonded' ? '✓ Bonded' : '🚀 AMM'}
+                      </span>
+                    )}
+                    {gated && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/20">
+                        🔒 {gateTierEmoji} {pool.minAvgHoldDays}d
+                      </span>
+                    )}
+                    {rep && rep.avgMultiplier > 0 && (
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-1 ${
+                        rep.avgMultiplier >= 10 ? 'bg-emerald-500/20 text-emerald-300' :
+                        rep.avgMultiplier >= 2 ? 'bg-yellow-500/20 text-yellow-300' :
+                        rep.avgMultiplier >= 1 ? 'bg-[#2b323c] text-[#8a8fa3]' : 'bg-red-500/20 text-red-300'
+                      }`}>
+                        🔥 Avg {fmtMult(rep.avgMultiplier)}x
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+
               <SocialLinksBar socials={pool.socials} className="mt-2" />
                <div className="mt-3 flex items-center gap-3 min-w-0">
   {/* left side can shrink & truncate */}
   <div className="flex items-baseline gap-2 min-w-0 overflow-hidden flex-1">
     <span className="truncate max-w-[140px] sm:max-w-[180px]">
       <TinyPrice
-        value={latestPriceOf(pool.memeMint.toBase58())}
+        value={(pool.poolType === 2 || pool.poolType === 3) ? (pool.price ?? 0) : latestPriceOf(pool.memeMint.toBase58())}
         className="text-[#ffc371] font-bold text-lg"
       />
     </span>
@@ -4979,31 +7102,11 @@ const chgUp = chg >= 0;
 
 
 
-              {/* Liquidity row — SHOW ONLY ON AMM */}
-{isAmm(pool) && (
-  <div className="flex items-center gap-2 mt-2">
-    <span className="text-xs">Liquidity:</span>
-    <span className="text-xs text-[#d3d3d3]">
-  {(pool.ammReserves?.woodeng / 10 ** QUOTE_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 6 })} {quoteLabelOf(pool)}
-  {" / "}
-  {(pool.ammReserves?.meme / 10 ** (pool.decimals ?? MEME_DECIMALS)).toLocaleString(undefined, { maximumFractionDigits: 6 })} {pool.symbol || "MEME"}
-</span>
-
-  </div>
-)}
-
-{/* Supply + Market Cap — SHOW ONLY ON AMM */}
-{isAmm(pool) && (
+{/* Market Cap only — compact */}
+{isAmm(pool) && Number(pool.marketCap ?? 0) > 0 && (
   <div className="mt-1 text-xs text-[#adadff]">
-    <div>
-      Supply: {(pool.totalSupply ?? 0).toLocaleString()} {pool.symbol ?? ""}
-    </div>
-    <div className="whitespace-nowrap">
-      Market Cap: {Number(pool.marketCap ?? 0).toFixed(2)} {quoteLabelOf(pool)}
-      <span className="text-[#9ea1ff]">
-        {" "} (≈ {fmtUSD(Number(pool.marketCap ?? 0) * WOODENG_USD)})
-      </span>
-    </div>
+    MCap: {Number(pool.marketCap ?? 0).toFixed(2)} {quoteLabelOf(pool)}
+    <span className="text-[#9ea1ff]"> (≈ {fmtUSD(Number(pool.marketCap ?? 0) * WOODENG_USD)})</span>
   </div>
 )}
 
@@ -5011,19 +7114,72 @@ const chgUp = chg >= 0;
               {/* Bonding progress (bonding pools only) */}
 {pool.poolType === 0 && <BondingProgressBar pool={pool} />}
 
-{/* ─────────── Action buttons ─────────── */}
+{/* ── GRADUATED POOL UI ────────────────────────────── */}
+{/* ── GRADUATED POOL UI ────────────────────────────── */}
+{isGraduated(pool) && (
+  <div className="mt-3 rounded-xl border border-purple-500/30 bg-purple-500/10 p-3">
+    <div className="flex items-center gap-2 mb-2">
+      <span className="text-lg">🎓</span>
+      <span className="text-sm font-bold text-purple-300">
+        {pool.poolType === 3 ? 'Trading on Meteora DAMM v2' : 'Graduated — Awaiting DAMM v2 Pool'}
+      </span>
+    </div>
+    {pool.poolType === 3 ? (
+      <a
+        href={`/sound-memes/${pool.memeMint.toBase58()}`}
+        className="h-10 w-full inline-flex items-center justify-center gap-2 rounded font-semibold text-sm bg-purple-600/80 text-white hover:bg-purple-500 transition"
+        onClick={e => e.stopPropagation()}
+      >
+        <Rocket className="w-4 h-4" /> Trade ${pool.symbol || 'Token'}
+      </a>
+    ) : pool.poolType === 2 ? (
+      <a
+        href={`/sound-memes/${pool.memeMint.toBase58()}`}
+        className="h-10 w-full inline-flex items-center justify-center gap-2 rounded font-semibold text-sm bg-[#ffc371]/40 text-black/60 hover:bg-[#ffc371]/60 transition"
+        onClick={e => e.stopPropagation()}
+      >
+        <Rocket className="w-4 h-4" /> Open to Create Pool
+      </a>
+    ) : null}
+  </div>
+)}
+
+{/* ─────────── Burn & Claim badge only (actions on detail page) ─────────── */}
+{nftsLoaded && userNftCount > 0 && !isGraduated(pool) && (
+  <div className="mt-2">
+    <button
+      className="w-full h-9 inline-flex items-center justify-center gap-2 rounded-lg font-bold text-sm bg-gradient-to-r from-[#ff5656] to-[#ff9a3c] text-white hover:opacity-90 transition"
+      onClick={async (e) => {
+        e.stopPropagation();
+        const lockDict = userPoolNfts[pool.memeMint.toBase58()] ?? {};
+        const maybeNfts = Object.entries(lockDict).map(([lockId, data]) => ({
+          lockId: Number(lockId),
+          mint: new PublicKey(data.mint),
+        }));
+        const ownedNfts = (
+          await Promise.all(
+            maybeNfts.map(async (n) =>
+              (await stillOwnsNft(n.mint, effectivePublicKey!)) ? n : null
+            )
+          )
+        ).filter(Boolean) as { lockId: number; mint: PublicKey }[];
+        if (ownedNfts.length === 0) { setStatus("Already burned."); return; }
+        setBurnModal({ pool, nfts: ownedNfts, open: true });
+      }}
+    >
+      🔥 Burn &amp; Claim
+      <span className="bg-white/20 rounded px-1.5 py-0.5 text-xs font-black">{userNftCount}</span>
+    </button>
+  </div>
+)}
+{false && !isGraduated(pool) && (
 <div className="grid grid-cols-2 xl:grid-cols-3 gap-2 mt-2 text-sm font-semibold place-items-stretch">
-
-
-
-  {/* ► BUY ------------------------------------------------------- */}
-
   {canShowBuy(pool) && (
   <button
         className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#907aff] text-white hover:bg-[#37ad71] transition disabled:opacity-40"
     disabled={walletMissing}
     title={walletMissing ? "connect your wallet" : undefined}
-    
+
     onClick={e => { e.stopPropagation(); handleOpenBuyModal(pool); }}
   >
     Buy
@@ -5047,27 +7203,24 @@ const chgUp = chg >= 0;
 
 
 
-{/* ► MIGRATE  */}
-{!isAmm(pool) && (() => {
-  const { 
-  priceTargetLamports: targetLamports, 
-  migrateUpperLamports: upperCapLamports 
-} = targetsFor(pool);
+{/* ► MIGRATE (bonding → AMM) — REMOVED: pools now graduate directly to Meteora DAMM v2 */}
 
-  const mcap = poolMcap(pool);
-
-  if (mcap >= Number(targetLamports) && mcap < Number(upperCapLamports)) {
-    return (
-      <button
-        className="h-9 md:h-10 w-full inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-[#37ad71] text-white hover:bg-[#4cd488] transition"
-        onClick={(e) => { e.stopPropagation(); migratePool(pool); }}
-      >
-        Migrate&nbsp;to&nbsp;AMM
-      </button>
-    );
-  }
-  return null;
-})()}
+{/* ► GRADUATE (AMM → Meteora DLMM) — only for v2 pools */}
+{isAmm(pool) && pool.programVersion === 'v2' && wallet.publicKey && (
+  <button
+    className="h-9 md:h-10 w-full col-span-2 inline-flex items-center justify-center gap-1 px-3 rounded font-semibold leading-none whitespace-nowrap text-[13px] md:text-sm bg-purple-600 text-white hover:bg-purple-500 transition"
+    onClick={async (e) => {
+      e.stopPropagation();
+      try { await graduatePool(pool); }
+      catch (err: any) {
+        setTxStep(null);
+        if (!isUserRejectError(err)) setStatus(`Graduate failed: ${err?.message || err}`);
+      }
+    }}
+  >
+    🎓 Graduate&nbsp;to&nbsp;Meteora
+  </button>
+)}
 
 
 
@@ -5116,7 +7269,7 @@ const chgUp = chg >= 0;
     const ownedNfts = (
       await Promise.all(
         maybeNfts.map(async (n) =>
-          (await stillOwnsNft(n.mint, wallet.publicKey!)) ? n : null
+          (await stillOwnsNft(n.mint, effectivePublicKey!)) ? n : null
         )
       )
     ).filter(Boolean) as { lockId: number; mint: PublicKey }[];
@@ -5147,6 +7300,18 @@ const chgUp = chg >= 0;
 
 
 </div>
+)}
+              {/* Mint NFT button — only when user has enough tokens */}
+              {!walletMissing && !isGraduated(pool) && Number.isFinite(userMemeTokens(pool)) && userMemeTokens(pool) >= getMintThreshold(pool) && (
+                <div className="mt-2">
+                  <button
+                    className="w-full h-9 inline-flex items-center justify-center gap-2 rounded-lg font-bold text-sm bg-gradient-to-r from-[#907aff] to-[#6c47e2] text-white hover:opacity-90 transition"
+                    onClick={e => { e.stopPropagation(); handleMintNft(pool); }}
+                  >
+                    🎨 Mint NFT
+                  </button>
+                </div>
+              )}
               </div>
               {/* wallet hint just under actions on each card */}
               {walletMissing && (
@@ -5766,7 +7931,7 @@ if (ticks.length) {
     }
   }
 
-  // volume as “number of ticks per bucket”
+  // volume as "number of ticks per bucket"
   const volMap = new Map<number, number>();
   for (const pt of ticks) {
     const b = bucketStart(pt.time, selectedTimeRange);

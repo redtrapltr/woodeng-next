@@ -57,7 +57,7 @@ export default function FundWalletGuide() {
           <li>Open your wallet app on mobile (e.g., Phantom).</li>
           <li>Tap <strong>Buy</strong> or <strong>Add funds</strong>, choose a provider, and purchase <strong>SOL</strong>.</li>
           <li>Wait for the SOL to appear in your wallet (usually under a minute).</li>
-          <li>Head to <strong>Woodeng → Sound Memes</strong> or the swap and use SOL to acquire <strong>WOODENG</strong>.</li>
+          <li>Head to <strong>Woodeng → SWL-444 Tokens</strong> or the swap and use SOL to acquire <strong>WOODENG</strong>.</li>
         </ol>
       </section>
 
@@ -77,7 +77,7 @@ export default function FundWalletGuide() {
             How to buy WOODENG
           </Link>
           <Link href="/sound-memes" style={btnStyle('#a088fa', '#fff')}>
-            Go to Sound Memes
+            Go to SWL-444 tokens
           </Link>
         </div>
       </div>

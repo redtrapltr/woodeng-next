@@ -1,10 +1,9 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { Footer } from '@/contexts/components/Footer';
 
 const Privacy = dynamic(() => import('@/contexts/components/Privacy'), {
-  ssr: false,          // the component is large; skip SSR for quicker TTFB
+  ssr: false,
 });
 
 export default function PrivacyPage() {
@@ -13,7 +12,6 @@ export default function PrivacyPage() {
       <main className="flex-1">
         <Privacy />
       </main>
-      <Footer />
     </div>
   );
 }

@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   FileText,
   BarChart3,
-  Music2,
   Users,
   User,
   Target,
@@ -65,8 +64,8 @@ export default function Whitepaper() {
             "Project Overview",
             "Technical Specifications",
             "The SWL-444 Token Standard",
-            "SWL-444 Sound Memes",
-            "Music NFTs",
+            "SWL-444 Token Lifecycle",
+            "Diamond-Hand Holder Gate",
             "Market Analysis",
             "Woodeng Native Token",
             "Economic Model",
@@ -99,11 +98,11 @@ export default function Whitepaper() {
             </p>
 
             <p className="text-muted-foreground">
-              Built on Solana's high-performance blockchain, our platform empowers creators, artists, investors,
-              and fans through transparent, fair, and innovative infrastructure. While our initial focus is on
-              audio content — demonstrating the standard through Sound Memes and Music NFTs — the SWL-444
-              architecture is designed to support any type of metadata-rich digital asset, from video and AI models
-              to gaming items and interactive experiences.
+              Built on Solana's high-performance blockchain, our platform empowers creators, investors, and communities
+              through transparent, fair, and innovative infrastructure. Our implementation demonstrates the standard
+              through SWL-444 tokens with built-in bonding curves, automated graduation to Meteora DAMM v2,
+              diamond-hand holder verification, and Living Meme updatable metadata. The SWL-444 architecture is
+              designed to support any type of metadata-rich digital asset.
             </p>
           </div>
 
@@ -160,11 +159,11 @@ export default function Whitepaper() {
                 <ul className="space-y-1 ml-7 text-sm text-muted-foreground">
                   <li className="flex items-start gap-2">
                     <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                    <span>Sound Memes with tokenized ownership</span>
+                    <span>SWL-444 tokens with bonding curves and Meteora graduation</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                    <span>Music NFTs with royalty systems</span>
+                    <span>Diamond-hand holder gate for premium launches</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
@@ -250,7 +249,7 @@ export default function Whitepaper() {
               </div>
               <p className="text-muted-foreground">
                 Build a sustainable, transparent ecosystem powered by the SWL-444 standard,
-                demonstrating its capabilities through audio-first applications while laying
+                demonstrating its capabilities through community-driven token launches while laying
                 groundwork for future content types.
               </p>
               <ul className="space-y-2">
@@ -278,43 +277,19 @@ export default function Whitepaper() {
               <div className="bg-muted/50 p-6 rounded-lg border border-border">
                 <div className="flex items-center gap-3 mb-4">
                   <Sparkles className="w-6 h-6 text-primary" />
-                  <h4 className="font-semibold">Sound Memes (SWL-444)</h4>
+                  <h4 className="font-semibold">SWL-444 Tokens</h4>
                 </div>
                 <p className="text-muted-foreground mb-4">
-                  The flagship implementation of SWL-444: viral audio content with tokenized ownership,
-                  built-in liquidity pools, and fractional ownership mechanics.
+                  The flagship implementation of SWL-444: community-driven tokens with exponential bonding curves,
+                  automated graduation to Meteora DAMM v2 DEX, and permanently locked liquidity.
                 </p>
                 <ul className="space-y-2">
                   {[
-                    "Tokenized fractional ownership",
-                    "Automated liquidity pools",
-                    "Viral distribution mechanisms",
-                    "Low barrier to entry",
-                    "On-chain metadata storage"
-                  ].map((item, index) => (
-                    <li key={index} className="flex items-center gap-2 text-sm">
-                      <ChevronRight className="w-4 h-4 text-primary" />
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="bg-muted/50 p-6 rounded-lg border border-border">
-                <div className="flex items-center gap-3 mb-4">
-                  <Music2 className="w-6 h-6 text-primary" />
-                  <h4 className="font-semibold">Music NFTs</h4>
-                </div>
-                <p className="text-muted-foreground mb-4">
-                  Traditional NFT approach for full tracks with comprehensive royalty systems,
-                  demonstrating interoperability with existing standards.
-                </p>
-                <ul className="space-y-2">
-                  {[
-                    "Single tracks and album bundles",
-                    "Customizable royalty settings",
-                    "Secondary market support",
-                    "Exclusive content options"
+                    "Exponential bonding curve pricing",
+                    "Automated Meteora DAMM v2 graduation",
+                    "Permanently locked liquidity (anti-rug)",
+                    "Diamond-hand holder gate",
+                    "On-chain metadata with Living Meme updates"
                   ].map((item, index) => (
                     <li key={index} className="flex items-center gap-2 text-sm">
                       <ChevronRight className="w-4 h-4 text-primary" />
@@ -331,7 +306,7 @@ export default function Whitepaper() {
                 <div className="space-y-2">
                   <h4 className="font-semibold">Extensible by Design</h4>
                   <p className="text-sm text-muted-foreground">
-                    While audio content showcases our initial capabilities, the SWL-444 standard architecture
+                    While SWL-444 tokens showcase our initial capabilities, the SWL-444 standard architecture
                     supports any media type or data structure. Future implementations could include video content,
                     AI models, gaming assets, interactive experiences, and more — all leveraging the same proven
                     infrastructure for metadata-rich, tradable tokens.
@@ -434,9 +409,9 @@ export default function Whitepaper() {
                       <h5 className="font-medium mb-3 text-sm">Current Applications</h5>
                       <ul className="space-y-2">
                         {[
-                          "Sound Memes: Viral audio content",
-                          "Music tracks: Full songs with metadata",
-                          "Audio snippets: Short-form content",
+                          "SWL-444 Tokens: Community-driven tokens with bonding curves",
+                          "Meteora DAMM v2: Graduated DEX liquidity",
+                          "Diamond-hand gate: Holder verification",
                           "Future: Video, AI models, gaming assets"
                         ].map((item, index) => (
                           <li key={index} className="flex items-start gap-2 text-sm">
@@ -449,33 +424,6 @@ export default function Whitepaper() {
                   </div>
                 </div>
 
-                <div className="bg-muted/50 p-6 rounded-lg border border-border">
-                  <div className="flex items-start gap-4 mb-4">
-                    <div className="p-2 bg-primary/10 rounded-lg">
-                      <Music2 className="w-5 h-5 text-primary" />
-                    </div>
-                    <div>
-                      <h4 className="font-medium mb-2">Traditional NFT Standard</h4>
-                      <p className="text-sm text-muted-foreground">
-                        Standard Metaplex NFTs for full music tracks, providing compatibility with existing
-                        ecosystem tools and secondary marketplaces.
-                      </p>
-                    </div>
-                  </div>
-                  <ul className="space-y-2 ml-11">
-                    {[
-                      "Extended metadata for music-specific attributes",
-                      "Multi-tier royalty distribution mechanisms",
-                      "Bundle support for albums and collections",
-                      "Full compatibility with Metaplex standard"
-                    ].map((item, index) => (
-                      <li key={index} className="flex items-start gap-2 text-sm">
-                        <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                        <span>{item}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
               </div>
             </div>
             
@@ -543,7 +491,7 @@ export default function Whitepaper() {
                       Our architecture separates content processing from token mechanics, allowing new media types
                       to be integrated without modifying core smart contracts. The SWL-444 standard's flexible
                       metadata structure means future implementations (video, AI models, etc.) can leverage
-                      existing infrastructure with minimal changes.
+                      existing infrastructure with minimal changes. SWL-444 tokens are our first major implementation.
                     </p>
                   </div>
                 </div>
@@ -641,11 +589,11 @@ export default function Whitepaper() {
                   <ul className="space-y-2 ml-7">
                     <li className="flex items-start gap-2 text-sm text-muted-foreground">
                       <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                      <span>Sound Memes: Audio content with tokenized ownership</span>
+                      <span>SWL-444 Tokens: Community tokens with bonding curves and Meteora graduation</span>
                     </li>
                     <li className="flex items-start gap-2 text-sm text-muted-foreground">
                       <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                      <span>Music NFTs: Full tracks with royalty mechanisms</span>
+                      <span>Living Memes: Tokens with updatable on-chain metadata</span>
                     </li>
                   </ul>
                 </div>
@@ -683,7 +631,7 @@ export default function Whitepaper() {
                 <div className="space-y-2">
                   <h4 className="font-semibold">Open-Ended Innovation</h4>
                   <p className="text-sm text-muted-foreground">
-                    The SWL-444 standard is designed to evolve with the ecosystem. While sound memes are our first major
+                    The SWL-444 standard is designed to evolve with the ecosystem. While SWL-444 tokens are our first major
                     implementation, the standard's architecture supports any type of metadata-rich, fungible asset.
                     We're building the infrastructure for tomorrow's digital assets, not just today's use cases.
                   </p>
@@ -694,156 +642,124 @@ export default function Whitepaper() {
         </div>
       </section>
 
-      {/* SWL-444 Sound Memes */}
+      {/* SWL-444 Token Lifecycle */}
       <section id="section-5" className="space-y-6">
-        <h2 className="text-3xl font-bold">5. SWL-444 Sound Memes</h2>
+        <h2 className="text-3xl font-bold">5. SWL-444 Token Lifecycle</h2>
         <div className="bg-card border border-border rounded-lg p-6">
           <div className="space-y-8">
-            <div className="space-y-4">
-              <h3 className="text-xl font-semibold">SWL-444 Token Standard</h3>
-              <p className="text-muted-foreground">
-                SWL-444 is our innovative token standard built on Solana, specifically designed for sound memes. 
-                It enables tokenized ownership of NFTs, allowing multiple users to own portions of the same 
-                digital asset through tokens.
-              </p>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-                <div className="bg-muted/50 p-6 rounded-lg">
-                  <h4 className="font-medium mb-4">Key Features</h4>
-                  <ul className="space-y-3">
-                    {[
-                      "Tokenized ownership instead of single-owner NFTs",
-                      "Built-in liquidity pools for instant trading",
-                      "Lower entry barrier with partial ownership",
-                      "Viral distribution mechanisms",
-                      "Automated price discovery"
-                    ].map((feature, index) => (
-                      <li key={index} className="flex items-start gap-2 text-sm">
-                        <ChevronRight className="w-4 h-4 text-primary mt-0.5" />
-                        <span>{feature}</span>
-                      </li>
-                    ))}
-                  </ul>
+            <p className="text-muted-foreground">
+              SWL-444 tokens follow a four-phase lifecycle from creation to fully decentralized trading on Meteora.
+              Each phase has distinct mechanics, fee structures, and protections designed to ensure fair price
+              discovery and anti-rug security.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="bg-muted/50 p-6 rounded-lg border border-border">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-primary/10 rounded-lg">
+                    <Wallet className="w-5 h-5 text-primary" />
+                  </div>
+                  <h4 className="font-semibold">Phase 1 — Creation</h4>
                 </div>
-                
-                <div className="bg-muted/50 p-6 rounded-lg">
-                  <h4 className="font-medium mb-4">Technical Advantages</h4>
-                  <ul className="space-y-3">
-                    {[
-                      "Solana's high throughput enables low-cost token transfers",
-                      "Smart contract security with locked liquidity",
-                      "Metadata-rich token standard",
-                      "Composable with other Solana protocols",
-                      "Efficient on-chain token distribution"
-                    ].map((advantage, index) => (
-                      <li key={index} className="flex items-start gap-2 text-sm">
-                        <ChevronRight className="w-4 h-4 text-primary mt-0.5" />
-                        <span>{advantage}</span>
-                      </li>
-                    ))}
-                  </ul>
+                <ul className="space-y-2">
+                  {[
+                    "Creator uploads content and sets token parameters",
+                    "Fixed supply: 444,000,000 tokens per SWL-444",
+                    "Quote pair: WOODENG or SOL",
+                    "Optional: set diamond-hand gate (min_avg_hold_days)",
+                    "No deployment fee (only gas)"
+                  ].map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="bg-muted/50 p-6 rounded-lg border border-border">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-primary/10 rounded-lg">
+                    <BarChart3 className="w-5 h-5 text-primary" />
+                  </div>
+                  <h4 className="font-semibold">Phase 2 — Bonding Curve</h4>
+                </div>
+                <ul className="space-y-2">
+                  {[
+                    "Exponential bonding curve: price rises from p0 to target",
+                    "WOODENG pairs: target 0.1 WOODENG/token, ~1.4M WOODENG to graduate",
+                    "SOL pairs: target ~0.000003 SOL/token, ~40 SOL to graduate",
+                    "44M tokens sold through bonding (of 444M total)",
+                    "Buy fees: 1.5% (0.5% creator + 1% stakers)",
+                    "Early sell penalty: 10% (6% creator + 4% stakers)"
+                  ].map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="bg-muted/50 p-6 rounded-lg border border-border">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-primary/10 rounded-lg">
+                    <TrendingUp className="w-5 h-5 text-primary" />
+                  </div>
+                  <h4 className="font-semibold">Phase 3 — AMM Pool</h4>
+                </div>
+                <ul className="space-y-2">
+                  {[
+                    "Auto-flips to XYK AMM when bonding threshold reached",
+                    "Meme tokens minted proportionally to vault balance",
+                    "Trading fees: 0.3% (0.2% creator + 0.1% stakers)",
+                    "Pool ready for graduation"
+                  ].map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="bg-muted/50 p-6 rounded-lg border border-border">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-primary/10 rounded-lg">
+                    <Rocket className="w-5 h-5 text-primary" />
+                  </div>
+                  <h4 className="font-semibold">Phase 4 — Meteora Graduation</h4>
+                </div>
+                <ul className="space-y-2">
+                  {[
+                    "Liquidity migrates to Meteora DAMM v2",
+                    "Position permanently locked — nobody can withdraw (anti-rug)",
+                    "Token tradeable on Birdeye, Jupiter, and all Solana DEX aggregators",
+                    "Trading fees earned by Meteora liquidity providers"
+                  ].map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <div className="p-4 border border-primary/20 bg-primary/5 rounded-lg">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
+                <div>
+                  <h5 className="font-medium text-primary">Security: Permanently Locked Liquidity</h5>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    After graduation, liquidity is permanently locked on Meteora DAMM v2. This is enforced
+                    on-chain — no one, not even the token creator, can remove liquidity. This provides the same
+                    anti-rug protection as pump.fun's locked LP approach.
+                  </p>
                 </div>
               </div>
             </div>
-            
-            {/* SWL-444 Architecture Diagram */}
-            <div className="space-y-4">
-              <h3 className="text-xl font-semibold">SWL-444 Architecture</h3>
-              <p className="text-muted-foreground mb-6">
-                The SWL-444 standard implements a unique architecture that combines NFT ownership with tokenized distribution.
-                Below is a diagram explaining the flow from creation to trading:
-              </p>
-              
-              <div className="bg-muted/50 p-6 rounded-lg">
-                <div className="relative">
-                  {/* Step 1: Creation */}
-                  <div className="flex flex-col items-center mb-12">
-                    <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
-                      <Wallet className="w-8 h-8 text-primary" />
-                    </div>
-                    <div className="text-center mt-2">
-                      <h4 className="font-medium">1. Creation</h4>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Artist uploads sound meme and sets token parameters
-                      </p>
-                    </div>
-                  </div>
-                  
-                  {/* Arrow Down */}
-                  <div className="absolute left-1/2 transform -translate-x-1/2 -mt-8">
-                    <div className="h-8 w-0.5 bg-primary mx-auto"></div>
-                    <div className="w-3 h-3 border-r-2 border-b-2 border-primary transform rotate-45 mx-auto"></div>
-                  </div>
-                  
-                  {/* Step 2: Minting */}
-                  <div className="flex flex-col items-center mb-12">
-                    <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
-                      <Sparkles className="w-8 h-8 text-primary" />
-                    </div>
-                    <div className="text-center mt-2">
-                      <h4 className="font-medium">2. Minting</h4>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        SWL-444 NFT is minted with specified token supply
-                      </p>
-                    </div>
-                  </div>
-                  
-                  {/* Arrow Down */}
-                  <div className="absolute left-1/2 transform -translate-x-1/2 -mt-8">
-                    <div className="h-8 w-0.5 bg-primary mx-auto"></div>
-                    <div className="w-3 h-3 border-r-2 border-b-2 border-primary transform rotate-45 mx-auto"></div>
-                  </div>
-                  
-                  {/* Step 3: Smart Contract */}
-                  <div className="flex flex-col items-center mb-12">
-                    <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
-                      <Lock className="w-8 h-8 text-primary" />
-                    </div>
-                    <div className="text-center mt-2">
-                      <h4 className="font-medium">3. Smart Contract Locker</h4>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Tokens are locked in smart contract with initial liquidity
-                      </p>
-                    </div>
-                  </div>
-                  
-                  {/* Arrow Down */}
-                  <div className="absolute left-1/2 transform -translate-x-1/2 -mt-8">
-                    <div className="h-8 w-0.5 bg-primary mx-auto"></div>
-                    <div className="w-3 h-3 border-r-2 border-b-2 border-primary transform rotate-45 mx-auto"></div>
-                  </div>
-                  
-                  {/* Step 4: Deployment */}
-                  <div className="flex flex-col items-center">
-                    <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
-                      <Rocket className="w-8 h-8 text-primary" />
-                    </div>
-                    <div className="text-center mt-2">
-                      <h4 className="font-medium">4. Deployment</h4>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Tokens become available for trading with locked liquidity
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Important Note */}
-                <div className="mt-8 p-4 border border-primary/20 bg-primary/5 rounded-lg">
-                  <div className="flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 text-primary mt-0.5" />
-                    <div>
-                      <h5 className="font-medium text-primary">Important Security Feature</h5>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Liquidity cannot be removed from the pool after deployment. This prevents rug pulls and ensures 
-                        that all tokens remain tradeable, protecting both creators and collectors.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            {/* Token Economics */}
+
             <div className="space-y-4">
               <h3 className="text-xl font-semibold">Token Economics</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -851,9 +767,10 @@ export default function Whitepaper() {
                   <h4 className="font-medium mb-4">Creator Benefits</h4>
                   <ul className="space-y-3">
                     {[
+                      "Fee revenue during bonding and AMM phases",
                       "Price appreciation as demand increases",
-                      "No ongoing royalty management required",
-                      "Secure deployment"
+                      "No ongoing management required",
+                      "First purchase up to 1% of supply"
                     ].map((benefit, index) => (
                       <li key={index} className="flex items-start gap-2 text-sm">
                         <ChevronRight className="w-4 h-4 text-primary mt-0.5" />
@@ -862,14 +779,14 @@ export default function Whitepaper() {
                     ))}
                   </ul>
                 </div>
-                
+
                 <div className="bg-muted/50 p-6 rounded-lg">
                   <h4 className="font-medium mb-4">Collector Benefits</h4>
                   <ul className="space-y-3">
                     {[
                       "Low entry barrier (buy as few or as many tokens as desired)",
                       "Potential for value appreciation",
-                      "Partial ownership of viral content"
+                      "Partial ownership of community tokens"
                     ].map((benefit, index) => (
                       <li key={index} className="flex items-start gap-2 text-sm">
                         <ChevronRight className="w-4 h-4 text-primary mt-0.5" />
@@ -880,180 +797,97 @@ export default function Whitepaper() {
                 </div>
               </div>
             </div>
-            
-            {/* Use Cases */}
-            <div className="space-y-4">
-              <h3 className="text-xl font-semibold">SWL-444 Use Cases</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {[
-                  {
-                    title: "Viral Sound Clips",
-                    description: "Short, catchy audio clips that can spread virally across social media"
-                  },
-                  {
-                    title: "Meme Culture",
-                    description: "Audio memes that capture internet culture moments and trends"
-                  },
-                  {
-                    title: "Artist Snippets",
-                    description: "Short samples or teasers from established artists to promote full releases"
-                  }
-                ].map((useCase, index) => (
-                  <div key={index} className="bg-muted/50 p-4 rounded-lg">
-                    <h4 className="font-medium mb-2">{useCase.title}</h4>
-                    <p className="text-sm text-muted-foreground">{useCase.description}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
       </section>
 
-      {/* Music NFTs */}
+      {/* Diamond-Hand Holder Gate */}
       <section id="section-6" className="space-y-6 w-full">
-        <h2 className="text-3xl font-bold">6. Music NFTs</h2>
+        <h2 className="text-3xl font-bold">6. Diamond-Hand Holder Gate</h2>
         <div className="bg-card border border-border rounded-lg p-6 w-full">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            {[
-              {
-                icon: Music2,
-                title: "Unique Digital Assets",
-                description: "Blockchain-verified ownership of musical works",
-                features: [
-                  "High-quality audio formats",
-                  "Decentralized storage",
-                  "Verifiable authenticity"
-                ]
-              },
-              {
-                icon: Coins,
-                title: "Artist Empowerment",
-                description: "Direct monetization without intermediaries",
-                features: [
-                  "No platform deployment fees",
-                  "Transparent revenue",
-                  "Instant payouts"
-                ]
-              },
-              {
-                icon: Users,
-                title: "Fan Engagement",
-                description: "New ways for fans to support artists",
-                features: [
-                  "Direct artist support",
-                  "Exclusive content access",
-                  "Investment opportunities"
-                ]
-              }
-            ].map((card, index) => (
-              <div key={index} className="bg-muted/50 p-6 rounded-lg hover:bg-muted/70 transition-all duration-300">
+          <div className="space-y-8">
+            <p className="text-muted-foreground">
+              The Diamond-Hand Holder Gate is a unique feature that allows SWL-444 token creators to restrict
+              bonding curve participation to proven long-term holders. This rewards loyal community members and
+              prevents sniper bots from front-running launches.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-muted/50 p-6 rounded-lg border border-border">
                 <div className="flex items-center gap-3 mb-4">
-                  <div className="p-3 bg-primary/10 rounded-lg">
-                    <card.icon className="w-6 h-6 text-primary" />
+                  <div className="p-2 bg-primary/10 rounded-lg">
+                    <Shield className="w-5 h-5 text-primary" />
                   </div>
-                  <div>
-                    <h3 className="text-lg font-semibold">{card.title}</h3>
-                    <p className="text-sm text-muted-foreground">{card.description}</p>
-                  </div>
+                  <h4 className="font-semibold">HolderProfile Tracking</h4>
                 </div>
                 <ul className="space-y-2">
-                  {card.features.map((feature, i) => (
-                    <li key={i} className="flex items-center gap-2 text-sm">
-                      <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                      <span>{feature}</span>
+                  {[
+                    "One PDA per wallet tracks time-weighted holdings",
+                    "Tracks cumulative token-seconds across ALL SWL-444 tokens",
+                    "Records current balance, total sold, and first buy timestamp",
+                    "Permissionless sync via sync_holder_balance instruction"
+                  ].map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
                     </li>
                   ))}
                 </ul>
               </div>
-            ))}
-          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
-            <div className="bg-muted/50 p-6 rounded-lg hover:bg-muted/70 transition-all duration-300">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-3 bg-primary/10 rounded-lg">
-                  <Music2 className="w-6 h-6 text-primary" />
+              <div className="bg-muted/50 p-6 rounded-lg border border-border">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-primary/10 rounded-lg">
+                    <Lock className="w-5 h-5 text-primary" />
+                  </div>
+                  <h4 className="font-semibold">Gate Mechanics</h4>
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold">Royalty-Based NFTs</h3>
-                  <p className="text-sm text-muted-foreground">Traditional royalty model with secondary sales revenue</p>
-                </div>
-              </div>
-              <ul className="space-y-2">
-                <li className="flex items-center gap-2 text-sm">
-                  <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                  <span>Up to 15% royalties on resales</span>
-                </li>
-                <li className="flex items-center gap-2 text-sm">
-                  <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                  <span>80% to creator, 20% to token holders</span>
-                </li>
-                <li className="flex items-center gap-2 text-sm">
-                  <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                  <span>Fixed pricing model</span>
-                </li>
-                <li className="flex items-center gap-2 text-sm">
-                  <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                  <span>No initial liquidity required</span>
-                </li>
-              </ul>
-            </div>
-            
-            <div className="bg-muted/50 p-6 rounded-lg hover:bg-muted/70 transition-all duration-300">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-3 bg-primary/10 rounded-lg">
-                  <BarChart3 className="w-6 h-6 text-primary" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold">AMM Pool NFTs</h3>
-                  <p className="text-sm text-muted-foreground">Dynamic pricing with automated market maker</p>
-                </div>
-              </div>
-              <ul className="space-y-2">
-                <li className="flex items-center gap-2 text-sm">
-                  <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                  <span>Automated price discovery</span>
-                </li>
-                <li className="flex items-center gap-2 text-sm">
-                  <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                  <span>Benefit from price appreciation</span>
-                </li>
-                <li className="flex items-center gap-2 text-sm">
-                  <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                  <span>Initial liquidity required</span>
-                </li>
-                <li className="flex items-center gap-2 text-sm">
-                  <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                  <span>Supply and demand based pricing</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-          
-          <div className="mt-8 bg-primary/5 border border-primary/20 rounded-lg p-6">
-            <div className="flex items-start gap-3">
-              <Lightbulb className="w-6 h-6 text-primary flex-shrink-0 mt-1" />
-              <div>
-                <h3 className="text-lg font-semibold mb-2">Minting Process</h3>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <ul className="space-y-2">
                   {[
-                    { step: "Upload", desc: "Audio & artwork" },
-                    { step: "Configure", desc: "Set parameters" },
-                    { step: "Choose Model", desc: "Royalty or AMM" },
-                    { step: "Mint", desc: "Deploy to blockchain" }
-                  ].map((step, i) => (
-                    <div key={i} className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">
-                        {i+1}
-                      </div>
-                      <div className="text-sm">
-                        <p className="font-medium">{step.step}</p>
-                        <p className="text-muted-foreground">{step.desc}</p>
-                      </div>
-                    </div>
+                    "Creator sets min_avg_hold_days at token creation (0 = open to all)",
+                    "Buyer's average hold time must exceed threshold",
+                    "Formula: cumulative_token_seconds ÷ (current_balance + total_sold) ÷ 86400",
+                    "Users who never sold: score = days since first purchase"
+                  ].map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
+                    </li>
                   ))}
+                </ul>
+              </div>
+
+              <div className="bg-muted/50 p-6 rounded-lg border border-border">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-primary/10 rounded-lg">
+                    <Award className="w-5 h-5 text-primary" />
+                  </div>
+                  <h4 className="font-semibold">Benefits</h4>
                 </div>
+                <ul className="space-y-2">
+                  {[
+                    "Rewards loyal community members with exclusive access",
+                    "Prevents sniper bots and mercenary capital",
+                    "Builds trust: only proven holders can participate",
+                    "Creates demand for holding SWL-444 tokens long-term"
+                  ].map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-6">
+              <div className="flex items-start gap-3">
+                <Lightbulb className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-semibold text-foreground">The diamond-hand gate is optional.</span> Creators
+                  who set min_avg_hold_days to 0 allow anyone to participate in their bonding curve. The gate only
+                  applies during the bonding phase — after graduation to Meteora, anyone can trade freely.
+                </p>
               </div>
             </div>
           </div>
@@ -1604,10 +1438,10 @@ export default function Whitepaper() {
         </div>
       </section>
 
-      {/* Implementation Strategy */}
+      {/* Economic Model */}
       <section id="section-9" className="space-y-6 w-full">
         <h2 className="text-3xl font-bold">9. Economic Model</h2>
-        <div className="bg-card border border-border rounded-lg p-6">          
+        <div className="bg-card border border-border rounded-lg p-6">
           <div className="space-y-8">
             {/* Circularity of Fees */}
             <div className="space-y-4">
@@ -1617,14 +1451,13 @@ export default function Whitepaper() {
                 </div>
                 <h3 className="text-xl font-semibold">Circularity of Fees</h3>
               </div>
-              
+
               <p className="text-base text-muted-foreground">
                 Our economic model is built on a circular fee structure that ensures value flows between all participants in the ecosystem, creating a sustainable and balanced economy.
               </p>
-              
+
               {/* Key Stakeholders */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                {/* Creators */}
                 <div className="bg-muted/50 p-6 rounded-lg text-center">
                   <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-2">
                     <User className="w-8 h-8 text-primary" />
@@ -1632,17 +1465,15 @@ export default function Whitepaper() {
                   <p className="font-medium">Creators</p>
                   <p className="text-xs text-muted-foreground mt-1">Content producers</p>
                 </div>
-                
-                {/* Platform */}
+
                 <div className="bg-muted/50 p-6 rounded-lg text-center">
                   <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-2">
-                    <Music2 className="w-8 h-8 text-primary" />
+                    <Layers className="w-8 h-8 text-primary" />
                   </div>
                   <p className="font-medium">Platform</p>
                   <p className="text-xs text-muted-foreground mt-1">Woodeng Ecosystem</p>
                 </div>
-                
-                {/* Token Holders */}
+
                 <div className="bg-muted/50 p-6 rounded-lg text-center">
                   <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-2">
                     <Coins className="w-8 h-8 text-primary" />
@@ -1651,146 +1482,39 @@ export default function Whitepaper() {
                   <p className="text-xs text-muted-foreground mt-1">$WOODENG stakers</p>
                 </div>
               </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-                {/* Music NFTs Without AMM */}
-                <div className="bg-muted/50 p-5 rounded-lg">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="p-2 bg-primary/10 rounded-lg">
-                      <Music2 className="w-5 h-5 text-primary" />
-                    </div>
-                    <h4 className="text-base font-medium">Music NFTs (Without AMM)</h4>
-                  </div>
-                  <div className="space-y-3">
-                    <p className="text-sm text-muted-foreground">
-                      Traditional NFTs with royalties for secondary sales.
-                    </p>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>No deployment fee (only gas fees)</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>Primary sale: 80% to Creator, 20% to $WOODENG Holders</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>Secondary royalties (up to 15%): 80% to original Creator, 20% to $WOODENG Holders</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>WOODENG or SOL pairing options</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
 
-                {/* Music NFTs With AMM */}
-                <div className="bg-muted/50 p-5 rounded-lg">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="p-2 bg-primary/10 rounded-lg">
-                      <Music2 className="w-5 h-5 text-primary" />
-                    </div>
-                    <h4 className="text-base font-medium">Music NFTs (With AMM)</h4>
+              {/* SWL-444 Tokens with Bonding Curve — full width */}
+              <div className="bg-muted/50 p-5 rounded-lg">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-primary/10 rounded-lg">
+                    <BarChart3 className="w-5 h-5 text-primary" />
                   </div>
-                  <div className="space-y-3">
-                    <p className="text-sm text-muted-foreground">
-                      Music NFTs with integrated Automated Market Maker for dynamic pricing.
-                    </p>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>No deployment fee (only gas fees)</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>Sale split: 80% to original Creator, 20% to $WOODENG Holders</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>Creators benefit from price appreciation as NFTs are purchased</span>
-                      </div>
-                       <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>WOODENG or SOL pairing options</span>
-                      </div>
-                    </div>
-                  </div>
+                  <h4 className="text-base font-medium">SWL-444 Tokens with Bonding Curve</h4>
                 </div>
-
-                {/* Sound Memes with Liquidity */}
-                <div className="bg-muted/50 p-5 rounded-lg">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="p-2 bg-primary/10 rounded-lg">
-                      <Sparkles className="w-5 h-5 text-primary" />
-                    </div>
-                    <h4 className="text-base font-medium">Sound Memes with Liquidity</h4>
-                  </div>
-                  <div className="space-y-3">
-                    <p className="text-sm text-muted-foreground">
-                      SWL-444 tokenized NFTs with liquidity pools for immediate trading.
-                    </p>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-sm">
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    SWL-444 tokens with exponential bonding curve, Meteora DAMM v2 graduation, and permanently locked liquidity.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {[
+                      "No deployment fee (only gas fees)",
+                      "Bonding buy fees: 1.5% (0.5% to Creator, 1% to $WOODENG Stakers)",
+                      "Early sell penalty: 10% (6% to Creator, 4% to $WOODENG Stakers)",
+                      "AMM fees after flip: 0.3% (0.2% to Creator, 0.1% to $WOODENG Stakers)",
+                      "After Meteora graduation: trading fees go to Meteora LP, not to our program",
+                      "WOODENG or SOL pairing options",
+                      "Creator may make the first purchase up to 1% of total supply"
+                    ].map((item, i) => (
+                      <div key={i} className="flex items-center gap-2 text-sm">
                         <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>No deployment fee (only gas fees)</span>
+                        <span>{item}</span>
                       </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>0.3% transaction fee: 0.2% to Creator, 0.1% to $WOODENG Holders</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>WOODENG or SOL pairing options with permanently locked liquidity</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Sound Memes with Bonding Curve */}
-                <div className="bg-muted/50 p-5 rounded-lg">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="p-2 bg-primary/10 rounded-lg">
-                      <BarChart3 className="w-5 h-5 text-primary" />
-                    </div>
-                    <h4 className="text-base font-medium">Sound Memes with Bonding Curve</h4>
-                  </div>
-                  <div className="space-y-3">
-                    <p className="text-sm text-muted-foreground">
-                      SWL-444 tokenized NFTs with bonding curve for price discovery.
-                    </p>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>No deployment fee (only gas fees)</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>1.5% transaction fee: 0.5% to Creator, 1% to $WOODENG Holders</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>10 % fees for pre-migration early sellers (6% to Creator, 4% to $WOODENG Holders)</span>  
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>Fees change to 0.3% after $44K market cap (0.2% to Creator, 0.1% to $WOODENG Holders)</span>  
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>WOODENG or SOL pairing options with permanently locked liquidity</span>
-                      </div>
-                       <div className="flex items-center gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full flex-shrink-0 mt-1"></span>
-                        <span>The creator may make the first purchase up to a maximum of 1% of the total supply.</span>
-                      </div>
-                    </div>
+                    ))}
                   </div>
                 </div>
               </div>
             </div>
-            
+
             {/* Revenue Sources */}
             <div className="space-y-4">
               <div className="flex items-center gap-3 mb-2">
@@ -1799,51 +1523,30 @@ export default function Whitepaper() {
                 </div>
                 <h3 className="text-lg font-semibold">Revenue Sources</h3>
               </div>
-              
-              {/* Revenue Sections - Side by Side */}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Creator Revenue */}
                 <div className="bg-muted/50 p-4 rounded-lg">
                   <h4 className="font-medium mb-3">Creator Revenue</h4>
                   <div className="space-y-4">
                     <div>
-                      <h5 className="text-sm font-medium mb-2">Primary Revenue</h5>
-                      <div className="flex items-start gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                        <span>80% of initial Music NFT sales</span>
-                      </div>
-                    </div>
-                    
-                    <div>
-                      <h5 className="text-sm font-medium mb-2">Secondary Revenue</h5>
-                      <div className="flex items-start gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                        <span>80% of royalties on resales (capped at 15%)</span>
-                      </div>
-                    </div>
-                    
-                    <div>
                       <h5 className="text-sm font-medium mb-2">Liquidity Revenue</h5>
                       <div className="space-y-2">
                         <div className="flex items-start gap-2 text-sm">
                           <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                          <span>0.2% on Sound Meme transactions</span>
+                          <span>0.5% on bonding curve buys</span>
                         </div>
                         <div className="flex items-start gap-2 text-sm">
                           <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                          <span>0.5% on pre-migration transactions (bonding curve)</span>
-                        </div>
-                         <div className="flex items-start gap-2 text-sm">
-                          <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                          <span>6% on pre-migration early sellers (bonding curve)</span>
+                          <span>6% on bonding early sells</span>
                         </div>
                         <div className="flex items-start gap-2 text-sm">
                           <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                          <span>0.2% on post-migration transactions (bonding curve)</span>
+                          <span>0.2% on AMM swaps (pre-graduation)</span>
                         </div>
                       </div>
                     </div>
-                    
+
                     <div>
                       <h5 className="text-sm font-medium mb-2">Variable Revenue</h5>
                       <div className="flex items-start gap-2 text-sm">
@@ -1853,53 +1556,37 @@ export default function Whitepaper() {
                     </div>
                   </div>
                 </div>
-                
-                {/* Platform Revenue */}
+
+                {/* Woodeng Holders Revenue */}
                 <div className="bg-muted/50 p-4 rounded-lg">
                   <h4 className="font-medium mb-3">Woodeng Holders Revenue</h4>
                   <div className="space-y-4">
                     <div>
-                      <h5 className="text-sm font-medium mb-2">Music NFT Primary Sales</h5>
-                      <div className="flex items-start gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                        <span>20% of sale (100% to $WOODENG Holders)</span>
-                      </div>
-                    </div>
-                    
-                    <div>
-                      <h5 className="text-sm font-medium mb-2">Music NFT Secondary Royalties</h5>
-                      <div className="flex items-start gap-2 text-sm">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                        <span>20% of royalties up to 15% (100% to $WOODENG Holders)</span>
-                      </div>
-                    </div>
-                    
-                    <div>
-                      <h5 className="text-sm font-medium mb-2">Sound Meme Transactions</h5>
+                      <h5 className="text-sm font-medium mb-2">SWL-444 Token Transactions</h5>
                       <div className="space-y-2">
                         <div className="flex items-start gap-2 text-sm">
                           <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                          <span>0.1% on liquidity transactions (100% to $WOODENG Holders)</span>
+                          <span>1% on bonding curve buys (100% to $WOODENG Stakers)</span>
                         </div>
                         <div className="flex items-start gap-2 text-sm">
                           <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                          <span>1% on pre-migration bonding curve (100% to $WOODENG Holders)</span>
+                          <span>4% on bonding early sells (100% to $WOODENG Stakers)</span>
                         </div>
                         <div className="flex items-start gap-2 text-sm">
                           <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                          <span>4% on pre-migration early sellers (100% to $WOODENG Holders)</span>
-                        </div>
-                        <div className="flex items-start gap-2 text-sm">
-                          <span className="w-1.5 h-1.5 bg-primary rounded-full mt-1.5"></span>
-                          <span>0.1% on post-migration bonding curve (100% to $WOODENG Holders)</span>
+                          <span>0.1% on AMM swaps pre-graduation (100% to $WOODENG Stakers)</span>
                         </div>
                       </div>
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      After graduation to Meteora DAMM v2, trading fees are earned by Meteora liquidity providers.
+                      Staking rewards come only from pre-graduation activity.
+                    </p>
                   </div>
                 </div>
               </div>
             </div>
-            
+
             {/* Economic Viability */}
             <div className="space-y-4">
               <div className="flex items-center gap-3 mb-2">
@@ -1908,7 +1595,7 @@ export default function Whitepaper() {
                 </div>
                 <h3 className="text-lg font-semibold">Economic Viability</h3>
               </div>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6 w-full">
                 <div className="bg-muted/50 p-4 rounded-lg">
                   <h4 className="text-base font-medium mb-3">Sustainable Growth Model</h4>
@@ -1929,7 +1616,7 @@ export default function Whitepaper() {
                     ))}
                   </ul>
                 </div>
-                
+
                 <div className="bg-muted/50 p-4 rounded-lg">
                   <h4 className="text-base font-medium mb-3">Market Efficiency</h4>
                   <p className="text-sm text-muted-foreground mb-3">
@@ -1949,7 +1636,7 @@ export default function Whitepaper() {
                     ))}
                   </ul>
                 </div>
-                
+
                 <div className="bg-muted/50 p-4 rounded-lg">
                   <h4 className="text-base font-medium mb-3">Long-term Value</h4>
                   <p className="text-sm text-muted-foreground mb-3">
@@ -1969,7 +1656,7 @@ export default function Whitepaper() {
                     ))}
                   </ul>
                 </div>
-                
+
                 <div className="bg-muted/50 p-4 rounded-lg">
                   <h4 className="text-base font-medium mb-3">Technical Specifications</h4>
                   <ul className="space-y-2">
@@ -1977,9 +1664,9 @@ export default function Whitepaper() {
                       "Built on Solana blockchain for fast, low-cost transactions",
                       "Smart contracts for secure, automated transactions",
                       "Decentralized storage for content via IPFS",
-                      "SWL-444 token standard for sound memes",
-                      "Automated Market Makers (AMM) for NFT liquidity",
-                      "Bonding curves for tokenized sound memes",
+                      "SWL-444 token standard with bonding curves",
+                      "Automated graduation to Meteora DAMM v2",
+                      "Diamond-hand holder gate for premium launches",
                       "Woo Swap for seamless token swaps directly within the platform",
                       "Woo Dex for advanced DEX visualization with real-time price charts"
                     ].map((item, index) => (
@@ -2103,68 +1790,35 @@ export default function Whitepaper() {
                 <span className="font-semibold text-foreground"> 100% of collected fees are distributed to $WOODENG Holders.</span>
               </p>
 
-              <div className="grid md:grid-cols-2 gap-6">
+              <div className="grid md:grid-cols-1 gap-6">
                 <div className="bg-muted/50 p-6 rounded-lg border border-border">
                   <div className="flex items-center gap-3 mb-4">
-                    <Music2 className="w-5 h-5 text-primary" />
-                    <h4 className="font-semibold">Music NFT Revenue</h4>
+                    <Coins className="w-5 h-5 text-primary" />
+                    <h4 className="font-semibold">SWL-444 Token Revenue</h4>
                   </div>
                   <ul className="space-y-3">
                     <li className="space-y-1">
                       <div className="flex items-start gap-2 text-sm font-medium">
                         <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                        <span>Music NFT Primary Sales</span>
-                      </div>
-                      <div className="text-xs text-muted-foreground ml-6">
-                        20% of sale (100% to $WOODENG Holders)
+                        <span>Bonding Curve Buys: 1% to $WOODENG Stakers</span>
                       </div>
                     </li>
                     <li className="space-y-1">
                       <div className="flex items-start gap-2 text-sm font-medium">
                         <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                        <span>Music NFT Secondary Royalties</span>
+                        <span>Bonding Early Sells: 4% to $WOODENG Stakers</span>
                       </div>
-                      <div className="text-xs text-muted-foreground ml-6">
-                        20% of royalties up to 15% (100% to $WOODENG Holders)
+                    </li>
+                    <li className="space-y-1">
+                      <div className="flex items-start gap-2 text-sm font-medium">
+                        <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                        <span>AMM Swaps (pre-graduation): 0.1% to $WOODENG Stakers</span>
                       </div>
                     </li>
                   </ul>
-                </div>
-
-                <div className="bg-muted/50 p-6 rounded-lg border border-border">
-                  <div className="flex items-center gap-3 mb-4">
-                    <Sparkles className="w-5 h-5 text-primary" />
-                    <h4 className="font-semibold">Sound Meme Transactions</h4>
-                  </div>
-                  <ul className="space-y-3">
-                    <li className="space-y-1">
-                      <div className="flex items-start gap-2 text-sm font-medium">
-                        <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                        <span>Liquidity Pool Transactions</span>
-                      </div>
-                      <div className="text-xs text-muted-foreground ml-6">
-                        0.1% on liquidity transactions (100% to $WOODENG Holders)
-                      </div>
-                    </li>
-                    <li className="space-y-1">
-                      <div className="flex items-start gap-2 text-sm font-medium">
-                        <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                        <span>Pre-Migration Bonding Curve</span>
-                      </div>
-                      <div className="text-xs text-muted-foreground ml-6">
-                        1% on bonding curve + 4% on early sellers (100% to $WOODENG Holders)
-                      </div>
-                    </li>
-                    <li className="space-y-1">
-                      <div className="flex items-start gap-2 text-sm font-medium">
-                        <ChevronRight className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                        <span>Post-Migration Bonding Curve</span>
-                      </div>
-                      <div className="text-xs text-muted-foreground ml-6">
-                        0.1% on bonding curve (100% to $WOODENG Holders)
-                      </div>
-                    </li>
-                  </ul>
+                  <p className="text-xs text-muted-foreground mt-4">
+                    After graduation to Meteora, trading fees go to Meteora LPs. Staking rewards are funded by pre-graduation trading activity only.
+                  </p>
                 </div>
               </div>
             </div>
@@ -2327,7 +1981,7 @@ export default function Whitepaper() {
                   "Trade Liquidity Pools Development",
                   "White Paper V2",
                   "Website V2",
-                  "Sound Memes SWL-444 NFT Integration",
+                  "SWL-444 Token Standard Integration",
                   "Marketing Campaign"
                 ]
               },
@@ -2348,7 +2002,9 @@ export default function Whitepaper() {
                 description: "Woodeng Ecosystem Live",
                 items: [
                   "Woodeng Platform V1 live",
-                  "First Sound Memes Launch",
+                  "First SWL-444 Token Launches",
+                  "Meteora DAMM v2 Graduation Integration",
+                  "Diamond-Hand Holder Gate",
                   "Ambassors emboarding",
                   "NFT Airdrop Campaign",
                   "Marketing Campaign"
@@ -2414,7 +2070,7 @@ export default function Whitepaper() {
             <h3 className="text-xl font-semibold">Long-term Vision</h3>
           </div>
           <p className="text-muted-foreground mb-4">
-            Our ultimate goal is to bring a different approach to the music, Web3 and meme industries by creating an ecosystem that is fairer, more transparent and more focused on creators and users. We envision a future where creators have complete control over their work and can build direct and meaningful relationships with their fans.
+            Our ultimate goal is to bring a different approach to Web3, DeFi, and creator economy by creating an ecosystem that is fairer, more transparent and more focused on creators and users. We envision a future where creators have complete control over their work and can build direct and meaningful relationships with their fans.
           </p>
           <p className="text-muted-foreground">
             Through continuous innovation and community-driven development, the Woo platform aims to become an alternative decentralised space where creators and users benefit equally.

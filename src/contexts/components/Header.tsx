@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { usePrivy } from "@privy-io/react-auth";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { Connection, PublicKey } from '@solana/web3.js';
 
@@ -29,6 +30,8 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 
 import { useWoodengBalanceLive } from '@/hooks/useWoodengBalanceLive';
+import { useUnifiedWallet } from '@/hooks/useUnifiedWallet';
+import WalletPanel from "../../../app/components/WalletPanel";
 
 
 
@@ -215,25 +218,24 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
             )}
 
             {suggestions.map((s) => (
-              <Link href={s.href} key={s.key} legacyBehavior>
-                <a
-                  onMouseDown={(e) => e.preventDefault()}
-                  onPointerDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setOpen(false);
-                    onPickLink?.();
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "10px 12px",
-                    color: "#e6e6ff",
-                    textDecoration: "none",
-                    fontSize: 14,
-                    borderTop: "1px solid #191c29",
-                  }}
-                >
+              <Link href={s.href} key={s.key}
+                onMouseDown={(e) => e.preventDefault()}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setOpen(false);
+                  onPickLink?.();
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 12px",
+                  color: "#e6e6ff",
+                  textDecoration: "none",
+                  fontSize: 14,
+                  borderTop: "1px solid #191c29",
+                }}
+              >
                   <span
                     style={{
                       fontSize: 11,
@@ -266,7 +268,6 @@ const SearchBox: React.FC<SearchBoxProps> = React.memo(
                   </div>
 
                   <ChevronRight size={16} style={{ opacity: 0.6 }} />
-                </a>
               </Link>
             ))}
           </div>
@@ -322,11 +323,9 @@ function NavItem({
 }
 
   return (
-  <Link href={href!} legacyBehavior>
-    <a className="ni" style={baseStyle} onClick={onClick}>
-      {icon}
-      <span style={{ whiteSpace: "nowrap", marginLeft: 3 }}>{label}</span>
-    </a>
+  <Link href={href!} className="ni" style={baseStyle} onClick={onClick}>
+    {icon}
+    <span style={{ whiteSpace: "nowrap", marginLeft: 3 }}>{label}</span>
   </Link>
 );
 }
@@ -374,11 +373,9 @@ function MobileNavItem({
   }
 
   return (
-    <Link href={href!} legacyBehavior>
-      <a onClick={onClick} style={itemStyle}>
-        {icon}
-        <span style={{ marginLeft: 3 }}>{label}</span>
-      </a>
+    <Link href={href!} onClick={onClick} style={itemStyle}>
+      {icon}
+      <span style={{ marginLeft: 3 }}>{label}</span>
     </Link>
   );
 }
@@ -472,23 +469,21 @@ function NavMenu({
         }}
       >
         {items.map((it) => (
-          <Link href={it.href} key={it.href} legacyBehavior>
-            <a
-              role="menuitem"
-              style={{
-                display: "block",
-                textDecoration: "none",
-                color: "#e6e6ff",
-                padding: "10px 12px",
-                borderRadius: 10,
-              }}
-              onMouseDown={(e) => e.preventDefault()}
-            >
-              <div style={{ fontWeight: 700, fontSize: 14 }}>{it.title}</div>
-              {it.subtitle && (
-                <div style={{ fontSize: 12, color: "#9aa0b6", marginTop: 2 }}>{it.subtitle}</div>
-              )}
-            </a>
+          <Link href={it.href} key={it.href}
+            role="menuitem"
+            style={{
+              display: "block",
+              textDecoration: "none",
+              color: "#e6e6ff",
+              padding: "10px 12px",
+              borderRadius: 10,
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{it.title}</div>
+            {it.subtitle && (
+              <div style={{ fontSize: 12, color: "#9aa0b6", marginTop: 2 }}>{it.subtitle}</div>
+            )}
           </Link>
         ))}
       </div>
@@ -500,6 +495,10 @@ function NavMenu({
 
 
 
+function abbr(addr: string) {
+  return addr ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : "";
+}
+
 export default function Header() {
   const { connection } = useConnection();
 if (typeof window !== 'undefined') {
@@ -508,6 +507,9 @@ if (typeof window !== 'undefined') {
 
 
   const wallet = useWallet();
+  const { login, logout, authenticated, user: privyUser } = usePrivy();
+  const { address: unifiedAddress, publicKey: unifiedPublicKey } = useUnifiedWallet();
+  const providerLabel = (privyUser?.linkedAccounts?.[0] as any)?.type?.replace('_oauth', '') ?? 'privy';
   const router = useRouter();
   const pathname = usePathname();
   const isMobile = useIsMobile(860);
@@ -523,8 +525,8 @@ if (typeof window !== 'undefined') {
     return conn;
   }, []);
 
-  // ⬇️ Use the forced connection here
-  const liveWoodengBalance = useWoodengBalanceLive(forced, wallet.publicKey, WOODENG_MINT_PK);
+  // ⬇️ Use unified publicKey so Privy embedded wallets also show balance
+  const liveWoodengBalance = useWoodengBalanceLive(forced, unifiedPublicKey, WOODENG_MINT_PK);
  
 
 
@@ -535,11 +537,25 @@ if (typeof window !== 'undefined') {
   const [loading, setLoading] = useState(false);
   const [addrResult, setAddrResult] = useState<ResolvedKind>({ kind: "unknown" });
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [walletPanelOpen, setWalletPanelOpen] = useState(false);
+  const [createBtnPulse, setCreateBtnPulse] = useState(false);
+  const createHoveredRef = useRef(false);
 
   const searchRefMobile = useRef<HTMLInputElement>(null!);
   const isOnSoundMemes = pathname?.startsWith("/sound-memes") ?? false;
 
  
+
+  /* periodic attention pulse on Create button every 8s (pauses on hover) */
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!createHoveredRef.current) {
+        setCreateBtnPulse(true);
+        setTimeout(() => setCreateBtnPulse(false), 450);
+      }
+    }, 8000);
+    return () => clearInterval(id);
+  }, []);
 
   /* lock body scroll + autofocus search when drawer opens */
   useEffect(() => {
@@ -812,6 +828,69 @@ const navStyle: React.CSSProperties = {
         .iconText { font-size: 22px; line-height: 1; font-weight: 700; display: block; transform: translateY(-1px); }
       `}</style>
 
+      <style jsx global>{`
+        @keyframes btn-attention {
+          0%,100%{transform:scale(1)}
+          25%{transform:scale(1.08)}
+          50%{transform:scale(0.97)}
+          75%{transform:scale(1.05)}
+        }
+        @keyframes shimmer-sweep {
+          from{background-position:-200% 0}
+          to{background-position:200% 0}
+        }
+        .create-btn {
+          position: relative !important;
+          overflow: hidden !important;
+          text-decoration: none !important;
+          transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.2s ease !important;
+          display: inline-block;
+        }
+        .create-btn::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(to top, #6b52ff 0%, #907aff 100%);
+          transform: translateY(100%);
+          transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+          border-radius: inherit;
+          z-index: 0;
+        }
+        .create-btn:hover::before { transform: translateY(0%); }
+        .create-btn::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(105deg, transparent 38%, rgba(255,255,255,0.22) 50%, transparent 62%);
+          background-size: 200% 100%;
+          background-position: -200% 0;
+          border-radius: inherit;
+          z-index: 2;
+          pointer-events: none;
+          opacity: 0;
+        }
+        .create-btn:hover::after {
+          opacity: 1;
+          animation: shimmer-sweep 0.65s ease 0.1s 1 forwards;
+        }
+        .create-btn:hover {
+          transform: scale(1.05) !important;
+          box-shadow: 0 4px 20px rgba(107,82,255,0.5), 0 0 0 1px rgba(144,122,255,0.2) !important;
+          text-decoration: none !important;
+        }
+        .create-btn:active {
+          transform: scale(0.93) !important;
+          transition: transform 0.08s ease !important;
+        }
+        .create-btn.btn-pulsing {
+          animation: btn-attention 0.45s ease both;
+        }
+        .create-btn > * {
+          position: relative;
+          z-index: 1;
+        }
+      `}</style>
+
       <div style={contentWrapper}>
         {/* Left: Hamburger (mobile) + Logo + Search + Nav */}
         <div style={leftSection}>
@@ -872,8 +951,7 @@ const navStyle: React.CSSProperties = {
 
 
   <NavItem href="/" label="Home" icon={<Home size={17} />} />
-  {/* Disabled "Market Place" */}
-  <NavItem label="Market Place" icon={<Music size={17} />} disabled />
+  <NavItem href="/profile" label="Profile" icon={<UserIcon size={17} />} />
   <NavItem href="/sound-memes" label="Sound Memes" icon={<AnimatedSoundWaveIcon />} />
   <NavItem href="/staking" label="Staking" icon={<ShieldCheck size={17} />} />
 
@@ -895,7 +973,7 @@ const navStyle: React.CSSProperties = {
     },
     {
       href: "/guides/trade-sound-memes",
-      title: "How to trade Sound Memes",
+      title: "How to trade tokens on woodeng",
       subtitle: "Step-by-step trading on Woodeng AMM & bonding.",
     },
   ]}
@@ -918,9 +996,12 @@ const navStyle: React.CSSProperties = {
         <div className="hide-on-mobile"
      style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0, marginLeft: "auto" }}>
 
-          <Link href="/create" legacyBehavior>
-  <a className="create-btn" style={createButtonStyle}>+ Create</a>
-</Link>
+          <Link href="/create"
+  className={`create-btn${createBtnPulse ? ' btn-pulsing' : ''}`}
+  style={createButtonStyle}
+  onMouseEnter={() => { createHoveredRef.current = true; }}
+  onMouseLeave={() => { createHoveredRef.current = false; }}
+><span style={{ position: 'relative', zIndex: 1 }}>+ Create</span></Link>
 
 
           <div
@@ -950,18 +1031,34 @@ const navStyle: React.CSSProperties = {
          
 
 
-          <WalletMultiButton
-            style={{
-              borderRadius: 16,
-              background: "#a088fa",
-              color: "#fff",
-              padding: "9px 30px",
-              fontWeight: 700,
-              fontSize: "16px",
-              whiteSpace: "nowrap",
+          {authenticated ? (
+            <button
+              onClick={() => setWalletPanelOpen(true)}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                background: "rgba(78,205,196,0.08)",
+                border: "1px solid rgba(78,205,196,0.2)",
+                borderRadius: 16, padding: "8px 18px",
+                color: "#4ECDC4", fontSize: 14, fontWeight: 600,
+                cursor: "pointer", whiteSpace: "nowrap",
+                transition: "background 0.15s",
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = "rgba(78,205,196,0.15)")}
+              onMouseLeave={e => (e.currentTarget.style.background = "rgba(78,205,196,0.08)")}
+            >
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#4ECDC4", flexShrink: 0 }} />
+              {unifiedAddress ? abbr(unifiedAddress) : providerLabel}
+            </button>
+          ) : (
+            <button onClick={login} style={{
+              borderRadius: 16, background: "#a088fa", color: "#fff",
+              padding: "9px 30px", fontWeight: 700, fontSize: "16px",
+              border: "none", cursor: "pointer", whiteSpace: "nowrap",
               letterSpacing: "0.01em",
-            }}
-          />
+            }}>
+              Login
+            </button>
+          )}
         </div>
       </div>
 
@@ -1049,11 +1146,10 @@ const navStyle: React.CSSProperties = {
 
             {/* actions row */}
             <div style={{ display: "flex", gap: 10, margin: "8px 0 6px" }}>
-              <button
-  type="button"
-  aria-label="Profile (coming soon)"
-  aria-disabled="true"
-  onClick={(e) => e.preventDefault()}
+              <Link
+  href="/profile"
+  aria-label="Profile"
+  onClick={() => setMobileOpen(false)}
   style={{
     height: 44,
     width: 44,
@@ -1065,26 +1161,38 @@ const navStyle: React.CSSProperties = {
     color: "#e6e6ff",
     border: "1px solid #232332",
     flex: "0 0 44px",
-    cursor: "not-allowed",
-    opacity: 0.6,
+    cursor: "pointer",
+    textDecoration: "none",
   }}
 >
   <UserIcon size={18} />
-</button>
+</Link>
 
 
-              <WalletMultiButton
-                style={{
-                  flex: 1,
-                  borderRadius: 12,
-                  background: "#a088fa",
-                  color: "#fff",
-                  padding: "10px 16px",
-                  fontWeight: 700,
-                  fontSize: "15px",
-                  lineHeight: 1,
-                }}
-              />
+              {authenticated ? (
+                <button
+                  onClick={() => { setWalletPanelOpen(true); setMobileOpen(false); }}
+                  style={{
+                    flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                    background: "rgba(78,205,196,0.08)",
+                    border: "1px solid rgba(78,205,196,0.2)",
+                    borderRadius: 12, padding: "10px 16px",
+                    color: "#4ECDC4", fontSize: 15, fontWeight: 700,
+                    cursor: "pointer", lineHeight: 1,
+                  }}
+                >
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#4ECDC4", flexShrink: 0 }} />
+                  {unifiedAddress ? abbr(unifiedAddress) : providerLabel}
+                </button>
+              ) : (
+                <button onClick={() => { login(); setMobileOpen(false); }} style={{
+                  flex: 1, borderRadius: 12, background: "#a088fa", color: "#fff",
+                  padding: "10px 16px", fontWeight: 700, fontSize: "15px",
+                  border: "none", cursor: "pointer", lineHeight: 1,
+                }}>
+                  Login
+                </button>
+              )}
             </div>
 
             {/* search (compact) */}
@@ -1106,12 +1214,11 @@ const navStyle: React.CSSProperties = {
 
   <MobileNavItem href="/" label="Home" icon={<Home size={17} />} onClick={() => setMobileOpen(false)} />
 
-  {/* Disabled "Market Place" */}
-  <MobileNavItem label="Market Place" icon={<Music size={17} />} disabled />
+  <MobileNavItem href="/profile" label="Profile" icon={<UserIcon size={17} />} onClick={() => setMobileOpen(false)} />
 
   <MobileNavItem
     href="/sound-memes"
-    label="Sound Memes"
+    label="Tokens"
     icon={<AnimatedSoundWaveIcon />}
     onClick={() => setMobileOpen(false)}
   />
@@ -1156,22 +1263,21 @@ const navStyle: React.CSSProperties = {
 
             {/* user actions */}
             <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-              <Link href="/create" legacyBehavior>
-                <a
-                  onClick={() => setMobileOpen(false)}
-                  style={{
-                    background: "#a088fa",
-                    color: "white",
-                    padding: "12px 20px",
-                    borderRadius: "24px",
-                    fontWeight: 700,
-                    fontSize: "16px",
-                    textAlign: "center",
-                    boxShadow: "0 2px 16px 0 #a088fa1a",
-                  }}
-                >
-                  + Create
-                </a>
+              <Link href="/create"
+                className="create-btn"
+                onClick={() => setMobileOpen(false)}
+                style={{
+                  background: "#a088fa",
+                  color: "white",
+                  padding: "12px 20px",
+                  borderRadius: "24px",
+                  fontWeight: 700,
+                  fontSize: "16px",
+                  textAlign: "center",
+                  boxShadow: "0 2px 16px 0 #a088fa1a",
+                }}
+              >
+                <span style={{ position: 'relative', zIndex: 1 }}>+ Create</span>
               </Link>
 
               <div
@@ -1197,6 +1303,8 @@ const navStyle: React.CSSProperties = {
           </aside>
         </div>
       )}
+
+      <WalletPanel open={walletPanelOpen} onClose={() => setWalletPanelOpen(false)} />
     </header>
   );
 }

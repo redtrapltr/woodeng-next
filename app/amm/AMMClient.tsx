@@ -25,6 +25,7 @@ import { AnchorProvider, Program, BN } from '@project-serum/anchor';
 import type { Idl } from '@project-serum/anchor';
 
 import { useWallet } from '@solana/wallet-adapter-react';
+import { useUnifiedWallet } from '@/hooks/useUnifiedWallet';
 import { Metaplex, walletAdapterIdentity } from '@metaplex-foundation/js';
 
 import {
@@ -118,7 +119,22 @@ interface OrderAccount { publicKey: PublicKey; account: OrderData }
 
 
   const wallet = useWallet();
-  const { publicKey, signTransaction, signAllTransactions } = wallet;
+  const { publicKey: unifiedPublicKey, connected: unifiedConnected, sendTransaction: unifiedSendTransaction, signTransaction: unifiedSignTransaction } = useUnifiedWallet();
+  const effectivePublicKey = (wallet.connected && wallet.publicKey) ? wallet.publicKey : unifiedPublicKey;
+  const effectiveConnected = wallet.connected || unifiedConnected;
+  const effectiveSendTx = (wallet.connected && wallet.sendTransaction) ? wallet.sendTransaction : unifiedSendTransaction;
+  const effectiveSignTx = (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction;
+  const anchorWalletEff = {
+    ...wallet,
+    publicKey: effectivePublicKey,
+    connected: effectiveConnected,
+    signTransaction: effectiveSignTx,
+    signAllTransactions: (wallet.connected && wallet.signAllTransactions)
+      ? wallet.signAllTransactions
+      : ((txs: Transaction[]) => Promise.all(txs.map((tx) => effectiveSignTx(tx)))),
+  };
+  const publicKey = effectivePublicKey;
+  const signTransaction = effectiveSignTx;
 
   // State
   const [program, setProgram] = useState<Program<Idl> | null>(null);
@@ -303,7 +319,7 @@ async function rpcWithLogs<T>(p: Promise<T>, conn: Connection) {
     const tx = new Transaction().add(...ixs);
     tx.feePayer = owner;
     tx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash;
-    const signed = await wallet.signTransaction!(tx);
+    const signed = await effectiveSignTx!(tx);
     const sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false });
     await conn.confirmTransaction(sig, 'confirmed');
   }
@@ -346,7 +362,7 @@ async function rpcWithLogs<T>(p: Promise<T>, conn: Connection) {
     const tx = new Transaction().add(ix);
     tx.feePayer = payer;
     tx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash;
-    const signed = await wallet.signTransaction!(tx);
+    const signed = await effectiveSignTx!(tx);
     const sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false });
     await conn.confirmTransaction(sig, 'confirmed');
   }
@@ -601,13 +617,13 @@ useEffect(() => {
 
 
   useEffect(() => {
-  if (!publicKey || !signTransaction || !signAllTransactions) return;
+  if (!publicKey || !signTransaction) return;
   const endpoint =
     process.env.NEXT_PUBLIC_SOLANA_RPC ?? process.env.NEXT_PUBLIC_SOLANA_RPC as string;
   const conn = new Connection(endpoint, 'confirmed');
-  const provider = new AnchorProvider(conn, wallet as any, { preflightCommitment: 'confirmed' });
+  const provider = new AnchorProvider(conn, anchorWalletEff as any, { preflightCommitment: 'confirmed' });
   setProgram(new Program(idl as Idl, PROGRAM_ID, provider));
-}, [publicKey, signTransaction, signAllTransactions]);
+}, [publicKey, signTransaction, effectiveConnected]);
 
 
   useEffect(() => {
@@ -1179,7 +1195,7 @@ stakingConfig: configPda,
           );
           closeTx.feePayer = publicKey;
           closeTx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash;
-          const signed = await wallet.signTransaction!(closeTx);
+          const signed = await effectiveSignTx!(closeTx);
           const sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false });
           await conn.confirmTransaction(sig, 'confirmed');
         } catch { /* ok if not empty*/ }
@@ -1254,7 +1270,7 @@ stakingConfig: configPda,
           );
           closeTx.feePayer = publicKey;
           closeTx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash;
-          const signed = await wallet.signTransaction!(closeTx);
+          const signed = await effectiveSignTx!(closeTx);
           const sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false });
           await conn.confirmTransaction(sig, 'confirmed');
         } catch { /* ok if not empty*/ }
@@ -1427,7 +1443,7 @@ stakingConfig: configPda,
       );
       closeTx.feePayer = publicKey;
       closeTx.recentBlockhash = (await program.provider.connection.getLatestBlockhash('finalized')).blockhash;
-      const signed = await wallet.signTransaction!(closeTx);
+      const signed = await effectiveSignTx!(closeTx);
       const sig2 = await program.provider.connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
       await program.provider.connection.confirmTransaction(sig2, 'confirmed');
     } catch {}

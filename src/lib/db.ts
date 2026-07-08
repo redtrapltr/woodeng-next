@@ -7,12 +7,7 @@ declare global {
 }
 
 function getDbUrl() {
-  return (
-    process.env.TIMESCALE_URL ||
-    process.env.TIGER_CLOUD_DATABASE_URL ||
-    process.env.DATABASE_URL ||
-    ''
-  );
+  return process.env.DATABASE_URL || '';
 }
 
 export function getPool(): Pool {

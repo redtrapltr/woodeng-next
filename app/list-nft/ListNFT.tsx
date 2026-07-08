@@ -2,11 +2,12 @@
 ------------------------------------------------------------------- */
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter }       from 'next/navigation';
 
 import { WalletMultiButton }          from '@solana/wallet-adapter-react-ui';
 import { useWallet }                  from '@solana/wallet-adapter-react';
+import { useUnifiedWallet }           from '@/hooks/useUnifiedWallet';
 
 import {
   Loader2,
@@ -229,7 +230,27 @@ export default function ListNFT() {
 
   /* Wallet */
   const wallet                  = useWallet();
-  const { connected, publicKey} = wallet;
+  const { publicKey: unifiedPublicKey, connected: unifiedConnected, sendTransaction: unifiedSendTransaction, signTransaction: unifiedSignTransaction } = useUnifiedWallet();
+  const effectivePublicKey = (wallet.connected && wallet.publicKey) ? wallet.publicKey : unifiedPublicKey;
+  const effectiveConnected = wallet.connected || unifiedConnected;
+  const effectiveSendTx = (wallet.connected && wallet.sendTransaction) ? wallet.sendTransaction : unifiedSendTransaction;
+  const effectiveSignTx = (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction;
+
+  const anchorWallet = useMemo(() => {
+    if (!effectivePublicKey || !effectiveSignTx) return null;
+    return {
+      publicKey: effectivePublicKey,
+      signTransaction: effectiveSignTx,
+      signAllTransactions: async (txs: Transaction[]) => {
+        const signed: Transaction[] = [];
+        for (const tx of txs) signed.push(await effectiveSignTx(tx));
+        return signed;
+      },
+    };
+  }, [effectivePublicKey, effectiveSignTx]);
+
+  const connected = effectiveConnected;
+  const publicKey = effectivePublicKey;
 
   /* UI state */
   const [isLoading,    setIsLoading]    = useState(true);
@@ -247,7 +268,7 @@ const endpoint =
   process.env.NEXT_PUBLIC_SOLANA_RPC as string; // fallback
 
 const conn      = new Connection(endpoint, 'confirmed');
-const provider  = new AnchorProvider(conn, wallet as any, {
+const provider  = new AnchorProvider(conn, (anchorWallet ?? wallet) as any, {
   commitment: 'confirmed',
   preflightCommitment: 'confirmed',
 });
@@ -275,7 +296,7 @@ const isReviewMode = applyToSeries && reviewOpen;
 
 async function loadSeriesOrdersUi() {
   if (!publicKey || !baseUri) return;
-  const act = await findActiveOrdersForSeries(program, conn, wallet, publicKey, baseUri);
+  const act = await findActiveOrdersForSeries(program, conn, anchorWallet ?? wallet, publicKey, baseUri);
   const rows: SeriesRow[] = act.map((r) => ({
     orderPk: r.publicKey,
     mint: (r.account as any).nftMint as PublicKey,
@@ -293,12 +314,12 @@ async function loadSeriesOrdersUi() {
   useEffect(() => {
     async function load() {
       if (!nftId)   { setError('No NFT id'); return; }
-      if (!wallet.connected || !publicKey) return;
+      if (!effectiveConnected || !publicKey) return;
 
       try {
         setIsLoading(true); setError(null);
 
-        const mx   = Metaplex.make(conn).use(walletAdapterIdentity(wallet));
+        const mx   = Metaplex.make(conn).use(walletAdapterIdentity(anchorWallet ?? wallet));
         const mintPk  = new PublicKey(nftId);
         const onChain = await mx.nfts().findByMint({ mintAddress: mintPk });
 
@@ -348,7 +369,7 @@ const existingPriceLam = first ? new BN((first.account as any).price).toNumber()
 
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nftId, wallet.connected, publicKey?.toBase58()]);
+  }, [nftId, effectiveConnected, publicKey?.toBase58()]);
 
   /* ---------- submit: list or update (cancel + relist) ---------- */
   const handleSubmit = async (e: React.FormEvent) => {
@@ -392,7 +413,7 @@ if (applyToSeries && reviewOpen) {
 // ─────────────────────────────────────────────────────────────
 if (applyToSeries && reviewOpen && baseUri) {
   // refresh active orders to avoid stale UI
-  const active = await findActiveOrdersForSeries(program, conn, wallet, publicKey, baseUri);
+  const active = await findActiveOrdersForSeries(program, conn, anchorWallet ?? wallet, publicKey, baseUri);
 
   const allIxs: any[] = [];
   for (const r of active) {
@@ -454,7 +475,7 @@ if (applyToSeries && reviewOpen && baseUri) {
 // ─────────────────────────────────────────────────────────────
 if (applyToSeries && !reviewOpen && baseUri) {
   // 1) active orders in this series (oldest first)
-  let active = await findActiveOrdersForSeries(program, conn, wallet, publicKey, baseUri);
+  let active = await findActiveOrdersForSeries(program, conn, anchorWallet ?? wallet, publicKey, baseUri);
   active.sort((a, b) => {
     const aId = new BN((a.account as any).id);
     const bId = new BN((b.account as any).id);
@@ -505,7 +526,7 @@ if (applyToSeries && !reviewOpen && baseUri) {
       activeCountByMint.set(k, (activeCountByMint.get(k) || 0) + 1);
     }
 
-    const ownedMints = await findOwnedMintsInSeries(conn, wallet, publicKey, baseUri, mintPk);
+    const ownedMints = await findOwnedMintsInSeries(conn, anchorWallet ?? wallet, publicKey, baseUri, mintPk);
 
     let created = 0;
     for (const m of ownedMints) {

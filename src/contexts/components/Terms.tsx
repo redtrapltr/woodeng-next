@@ -54,7 +54,7 @@ const sections: Section[] = [
       {
         subtitle: 'Sound Meme Creation (SWL-444)',
         items: [
-          'Create sound meme NFTs using the SWL-444 standard that merges fungible and non-fungible token properties',
+          'Create tokens using the SWL-444 standard that merges fungible and non-fungible token properties',
           'Set token supply and distribution parameters',
           'Choose between liquidity pools or bonding curves for token pricing',
           'Establish initial liquidity pools or set bonding curve parameters',

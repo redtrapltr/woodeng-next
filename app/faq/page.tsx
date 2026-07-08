@@ -1,7 +1,6 @@
 'use client';
 
-import FAQ from '@/contexts/components/FAQ';          // default export
-import { Footer } from '@/contexts/components/Footer'; // named export
+import FAQ from '@/contexts/components/FAQ';
 
 export default function FaqPage() {
   return (
@@ -9,8 +8,6 @@ export default function FaqPage() {
       <main className="flex-1">
         <FAQ />
       </main>
-
-      <Footer />
     </div>
   );
 }

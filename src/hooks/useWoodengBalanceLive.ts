@@ -5,6 +5,7 @@ import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
+import { getCachedTokenBalance } from '@/lib/balanceCache';
 
 function toUi(amountStr?: string, decimals?: number) {
   const amount = Number(amountStr ?? '0');
@@ -40,15 +41,9 @@ export function useWoodengBalanceLive(
 
     const readATA = async (programId: PublicKey) => {
       const ata = getAssociatedTokenAddressSync(mint, owner, false, programId);
-      try {
-        const r = await connection.getTokenAccountBalance(ata, 'processed');
-        const ui =
-          r?.value?.uiAmount ??
-          toUi(r?.value?.amount, r?.value?.decimals);
-        return { ata, amount: ui, exists: true };
-      } catch {
-        return { ata, amount: 0, exists: false };
-      }
+      const r = await getCachedTokenBalance(connection, ata, 'processed');
+      if (!r) return { ata, amount: 0, exists: false };
+      return { ata, amount: r.uiAmount, exists: true };
     };
 
     // Fallback: scan & sum ALL token accounts for this mint (unparsed -> robust)

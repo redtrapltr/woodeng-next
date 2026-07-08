@@ -1,11 +1,12 @@
 'use client';
 
 import React, {
-  useEffect, useMemo, useState, useTransition, useDeferredValue, useCallback, startTransition,
+  useEffect, useMemo, useRef, useState, useTransition, useDeferredValue, useCallback, startTransition,
 } from 'react';
 
 import dynamic from 'next/dynamic';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { useUnifiedWallet } from '@/hooks/useUnifiedWallet';
 import {
   Coins,
   Lock,
@@ -17,7 +18,6 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
-  Music2,
   Volume2,
   Target,
   DollarSign,
@@ -31,11 +31,12 @@ import {
   getStakingProgram,
   deriveModePda,
   setWsolVault,
+  createAndSetWsolVault,   // ← ADD THIS
 sanitizeWsolIndex,
 
 } from '@/lib/staking';
 
-import { PublicKey, Connection } from '@solana/web3.js';
+import { PublicKey, Connection, Transaction } from '@solana/web3.js';
 import { useWoodengBalanceLive } from '@/hooks/useWoodengBalanceLive';
 
 import { WOODENG_MINT } from '@/lib/staking';
@@ -157,7 +158,27 @@ const toNum = (v: any, fallback = 0): number => {
 
 export default function StakingClient() {
   const wallet = useWallet();
-const { connected, publicKey } = wallet;
+  const { publicKey: unifiedPublicKey, connected: unifiedConnected, sendTransaction: unifiedSendTransaction, signTransaction: unifiedSignTransaction } = useUnifiedWallet();
+  const effectivePublicKey = (wallet.connected && wallet.publicKey) ? wallet.publicKey : unifiedPublicKey;
+  const effectiveConnected = wallet.connected || unifiedConnected;
+  const effectiveSendTx = (wallet.connected && wallet.sendTransaction) ? wallet.sendTransaction : unifiedSendTransaction;
+  const effectiveSignTx = (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction;
+
+  const anchorWallet = useMemo(() => {
+    if (!effectivePublicKey || !effectiveSignTx) return null;
+    return {
+      publicKey: effectivePublicKey,
+      signTransaction: effectiveSignTx,
+      signAllTransactions: async (txs: Transaction[]) => {
+        const signed: Transaction[] = [];
+        for (const tx of txs) signed.push(await effectiveSignTx(tx));
+        return signed;
+      },
+    };
+  }, [effectivePublicKey, effectiveSignTx]);
+
+  const connected = effectiveConnected;
+  const publicKey = effectivePublicKey;
 
     const owner = publicKey?.toBase58() || '';
   // 🔒 Force the staking page to the same cluster as the header
@@ -184,7 +205,7 @@ useEffect(() => {
 
       // fetch config to display authority (optional but helpful)
       try {
-        const provider = getProvider(connection, wallet);
+        const provider = getProvider(connection, anchorWallet ?? wallet);
         const program  = getStakingProgram(provider);
         const cfgAcc: any = await (program.account as any).config.fetch(cfg);
         if (alive) setConfigAuthority(new PublicKey(cfgAcc.authority).toBase58());
@@ -215,7 +236,7 @@ useEffect(() => {
 useEffect(() => {
   (async () => {
     try {
-      const provider = getProvider(connection, wallet);
+      const provider = getProvider(connection, anchorWallet ?? wallet);
       const program  = getStakingProgram(provider);
       const cfgPda   = deriveConfigPda();
 
@@ -282,7 +303,7 @@ useEffect(() => {
   let alive = true;
   (async () => {
     try {
-      const provider = getProvider(connection, wallet);
+      const provider = getProvider(connection, anchorWallet ?? wallet);
       const program  = getStakingProgram(provider);
       const cfgPda   = deriveConfigPda();
 
@@ -361,36 +382,50 @@ useEffect(() => {
 
 
 
+  // never show the loading spinner again once we've successfully loaded once —
+  // re-fetches (e.g. as Privy finishes initializing and anchorWallet changes)
+  // should update data in place, not flash back to "loading"
+  const statsLoadedOnceRef = useRef(false);
+  const poolsLoadedOnceRef = useRef(false);
+
+  // Global stats are read-only — fetch regardless of wallet connection state.
   useEffect(() => {
-  let alive = true;
-  (async () => {
-    if (!connected || !publicKey) return;
-    try {
-      if (alive) {
-        setLoadingPools(true);
-        setLoadingStats(true);
+    let alive = true;
+    (async () => {
+      if (!statsLoadedOnceRef.current) setLoadingStats(true);
+      try {
+        const stats = await loadGlobalStats(connection, anchorWallet ?? wallet);
+        if (!alive) return;
+        setGlobalStats(stats);
+        statsLoadedOnceRef.current = true;
+      } catch (e) {
+        console.error('[STAKING] global stats load failed', e);
+      } finally {
+        if (alive) setLoadingStats(false);
       }
+    })();
+    return () => { alive = false; };
+  }, [connection, wallet, anchorWallet]);
 
-      const [poolsRes, statsRes] = await Promise.allSettled([
-        loadUserStaking(connection, wallet, publicKey),
-        loadGlobalStats(connection, wallet),
-      ]);
-
-      if (!alive) return;
-
-      if (poolsRes.status === 'fulfilled') setStakingPools(poolsRes.value);
-      if (statsRes.status === 'fulfilled') setGlobalStats(statsRes.value);
-    } catch (e) {
-      console.error('staking init load failed', e);
-    } finally {
-      if (alive) {
-        setLoadingPools(false);
-        setLoadingStats(false);
+  // User-specific pools require a wallet.
+  useEffect(() => {
+    if (!publicKey) return;
+    let alive = true;
+    (async () => {
+      if (!poolsLoadedOnceRef.current) setLoadingPools(true);
+      try {
+        const pools = await loadUserStaking(connection, anchorWallet ?? wallet, publicKey);
+        if (!alive) return;
+        setStakingPools(pools);
+        poolsLoadedOnceRef.current = true;
+      } catch (e) {
+        console.error('[STAKING] user pools load failed', e);
+      } finally {
+        if (alive) setLoadingPools(false);
       }
-    }
-  })();
-  return () => { alive = false; };
-}, [connected, publicKey, connection, wallet]);
+    })();
+    return () => { alive = false; };
+  }, [publicKey, connection, wallet, anchorWallet]);
 
 
 
@@ -440,8 +475,8 @@ const refreshAll = useCallback(async () => {
 
   try {
     const [pools, stats] = await Promise.all([
-      loadUserStaking(connection, wallet, publicKey),
-      loadGlobalStats(connection, wallet),
+      loadUserStaking(connection, anchorWallet ?? wallet, publicKey),
+      loadGlobalStats(connection, anchorWallet ?? wallet),
     ]);
     setStakingPools(pools);
     setGlobalStats(stats);
@@ -465,7 +500,7 @@ const confirmIfPossible = async (sig?: string) => {
 
 
   const handleStake = async () => {
-  if (!connected || !publicKey) return;
+  if (!connected || !publicKey || !anchorWallet) return;
   const amt = Number(stakeAmount || 0);
   if (!amt || amt <= 0 || amt > userBalance) return;
 
@@ -474,7 +509,7 @@ const confirmIfPossible = async (sig?: string) => {
     // your SDK may return a signature; it's fine if it returns void
     const sig = await stakeTx(
       connection,
-      wallet,
+      anchorWallet ?? wallet,
       publicKey,
       amt,
       stakingMode,
@@ -512,7 +547,7 @@ const confirmIfPossible = async (sig?: string) => {
 
 
   const handleUnstake = async () => {
-  if (!connected || !publicKey || !selectedPool) return;
+  if (!connected || !publicKey || !anchorWallet || !selectedPool) return;
   const amt = Number(unstakeAmount || 0);
   if (!amt || amt <= 0 || amt > selectedPool.amount) return;
 
@@ -520,7 +555,7 @@ const confirmIfPossible = async (sig?: string) => {
   try {
     const sig = await unstakeTx(
       connection,
-      wallet,
+      anchorWallet ?? wallet,
       publicKey,
       amt,
       selectedPool
@@ -559,16 +594,16 @@ const confirmIfPossible = async (sig?: string) => {
 
 
   const handleClaimAll = async () => {
-  if (!connected || !publicKey) return;
+  if (!connected || !publicKey || !anchorWallet) return;
 
   setIsProcessing(true);
   try {
-    const res = await claimTx(connection, wallet, publicKey);
+    const res = await claimTx(connection, anchorWallet ?? wallet, publicKey);
 
     // refresh from chain
     const [pools, stats] = await Promise.all([
-      loadUserStaking(connection, wallet, publicKey),
-      loadGlobalStats(connection, wallet),
+      loadUserStaking(connection, anchorWallet ?? wallet, publicKey),
+      loadGlobalStats(connection, anchorWallet ?? wallet),
     ]);
     setStakingPools(pools);
     setGlobalStats(stats);
@@ -653,7 +688,7 @@ const confirmIfPossible = async (sig?: string) => {
           onClick={async () => {
             setIsProcessing(true);
             try {
-              await initializeIfNeeded(connection, wallet); // this will call initModesIfNeeded if config exists
+              await initializeIfNeeded(connection, anchorWallet ?? wallet); // this will call initModesIfNeeded if config exists
               setNeedsInit(false);
               setMissingModes(false);
               setTransactionStatus('success');
@@ -1043,52 +1078,30 @@ const confirmIfPossible = async (sig?: string) => {
       </p>
 
       <div className="space-y-4">
-        {/* Music NFT Revenue */}
-        <div className="bg-muted/50 rounded-lg p-3 md:p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Music2 className="w-4 h-4 text-primary" />
-            <h4 className="text-sm md:text-base font-medium">Music NFT Revenue</h4>
-          </div>
-          <ul className="space-y-1 text-xs md:text-sm">
-            <li className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-              <span>20% from primary sales</span>
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-              <span>20% from secondary royalties</span>
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-              <span>AMM trading fees flow to stakers</span>
-            </li>
-          </ul>
-        </div>
-
-        {/* Sound Meme Revenue */}
+        {/* SWL-444 Token Revenue */}
         <div className="bg-muted/50 rounded-lg p-3 md:p-4">
           <div className="flex items-center gap-2 mb-3">
             <Volume2 className="w-4 h-4 text-secondary" />
-            <h4 className="text-sm md:text-base font-medium">Sound Meme Revenue</h4>
+            <h4 className="text-sm md:text-base font-medium">SWL-444 Token Revenue</h4>
           </div>
-          <ul className="space-y-1 text-xs md:text-sm">
+          <p className="text-xs text-muted-foreground mb-2">Pre-graduation activity:</p>
+          <ul className="space-y-1 text-xs md:text-sm mb-3">
+            <li className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 bg-secondary rounded-full"></span>
+              <span>1% from bonding curve buys (staker share)</span>
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 bg-secondary rounded-full"></span>
+              <span>4% from bonding curve early sells (staker share)</span>
+            </li>
             <li className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 bg-secondary rounded-full"></span>
               <span>0.1% from AMM swaps (staker share)</span>
             </li>
-            <li className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-secondary rounded-full"></span>
-              <span>4% from bonding early sales (staker share) (pre-migration)</span>
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-secondary rounded-full"></span>
-              <span>1% from bonding buys (staker share) (pre-migration)</span>
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-secondary rounded-full"></span>
-              <span>0.1% from bonding curve (staker share) (post-migration)</span>
-            </li>
           </ul>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            After graduation to Meteora DAMM v2, trading fees are earned by liquidity providers on Meteora. SWL-444 staking rewards come only from pre-graduation trading activity.
+          </p>
         </div>
       </div>
     </div>
@@ -1159,7 +1172,7 @@ const confirmIfPossible = async (sig?: string) => {
             onClick={async () => {
               setIsProcessing(true);
               try {
-                await initializeIfNeeded(connection, wallet);
+                await initializeIfNeeded(connection, anchorWallet ?? wallet);
                 setNeedsInit(false);
                 setMissingModes(false);
                 setTransactionStatus('success');
@@ -1196,8 +1209,8 @@ const confirmIfPossible = async (sig?: string) => {
                 setIsProcessing(true);
                 try {
                   // optional: ensure initialized first
-                  await initializeIfNeeded(connection, wallet);
-                  await depositRewards(connection, wallet, Number(topupAmount || 0));
+                  await initializeIfNeeded(connection, anchorWallet ?? wallet);
+                  await depositRewards(connection, anchorWallet ?? wallet, Number(topupAmount || 0));
                   setTransactionStatus('success');
                   setTransactionMessage(`Deposited ${topupAmount} WOODENG into rewards stream.`);
                 } catch (e:any) {
@@ -1221,7 +1234,7 @@ const confirmIfPossible = async (sig?: string) => {
   onClick={async () => {
     setIsProcessing(true);
     try {
-      await setParams(connection, wallet, {
+      await setParams(connection, anchorWallet ?? wallet, {
         flexiblePenaltyBps: 1000, // 10%
         minFlexDays: 30,          // 30 days
       });
@@ -1249,7 +1262,7 @@ const confirmIfPossible = async (sig?: string) => {
         setIsProcessing(true);
         try {
           const { sanitizeWoodengIndex } = await import('@/lib/staking');
-          await sanitizeWoodengIndex(connection, wallet);
+          await sanitizeWoodengIndex(connection, anchorWallet ?? wallet);
           await refreshAll();
           setTransactionStatus('success');
           setTransactionMessage('Rebased WOODENG rewards to vault balance.');
@@ -1272,11 +1285,7 @@ const confirmIfPossible = async (sig?: string) => {
       onClick={async () => {
         setIsProcessing(true);
         try {
-          await setWsolVault(
-            connection,
-            wallet,
-            new PublicKey('HcWV8aYv7ixaXzK9ZfQddCJdNt1TVDfFQmTkjCLx75Jh')
-          );
+          await createAndSetWsolVault(connection, anchorWallet ?? wallet);
           await refreshAll();
           setTransactionStatus('success');
           setTransactionMessage('WSOL vault set to existing fees vault ✅');
@@ -1299,7 +1308,7 @@ const confirmIfPossible = async (sig?: string) => {
       onClick={async () => {
         setIsProcessing(true);
         try {
-          await sanitizeWsolIndex(connection, wallet);
+          await sanitizeWsolIndex(connection, anchorWallet ?? wallet);
           await refreshAll();
           setTransactionStatus('success');
           setTransactionMessage('Rebased WSOL index to vault balance ✅');

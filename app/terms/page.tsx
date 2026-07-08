@@ -1,7 +1,6 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { Footer } from '@/contexts/components/Footer';
 
 /* lazy-load because the file is very big */
 const Terms = dynamic(() => import('@/contexts/components/Terms'), {
@@ -14,7 +13,6 @@ export default function TermsPage() {
       <main className="flex-1">
         <Terms />
       </main>
-      <Footer />
     </div>
   );
 }

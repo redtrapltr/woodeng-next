@@ -16,16 +16,26 @@ import {
 /* ────────────────────────────────────────────────────────────────────────────
    Program IDs & mints
 ──────────────────────────────────────────────────────────────────────────── */
-export const WOODENG_STAKING_PROGRAM_ID = new PublicKey(
+// Mainnet
+export const WOODENG_STAKING_PROGRAM_ID_MAINNET = new PublicKey(
   'BFJU3f7PXgzcrYPD2MkQsjRko9wDTpEbyJTtLUzSyhFG'
 );
+export const WOODENG_MINT_MAINNET = new PublicKey('83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5');
+
+// Devnet
+export const WOODENG_STAKING_PROGRAM_ID_DEVNET = new PublicKey(
+  '9Q5BUszjz6HFNXXPWerjn1HM7sTvdXVaNqswJAzZC1s'
+);
+export const WOODENG_MINT_DEVNET = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad');
+
+// Defaults (mainnet) — StakingClient page always uses mainnet
+export const WOODENG_STAKING_PROGRAM_ID = WOODENG_STAKING_PROGRAM_ID_MAINNET;
+export const WOODENG_MINT = WOODENG_MINT_MAINNET;
 
 export const WSOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
 const WSOL_DECIMALS = 9;
 const WSOL_FACTOR = BigInt(10) ** BigInt(WSOL_DECIMALS);
 
-// Your WOODENG mint (unchanged)
-export const WOODENG_MINT = new PublicKey('83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5');
 export const WOODENG_DECIMALS = 9;
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -109,8 +119,8 @@ export interface GlobalStats {
 export function getProvider(connection: Connection, wallet: any) {
   return new AnchorProvider(connection, wallet, AnchorProvider.defaultOptions());
 }
-export function getStakingProgram(provider: AnchorProvider) {
-  return new Program(woodengStakingIdl as Idl, WOODENG_STAKING_PROGRAM_ID, provider);
+export function getStakingProgram(provider: AnchorProvider, programId: PublicKey = WOODENG_STAKING_PROGRAM_ID) {
+  return new Program(woodengStakingIdl as Idl, programId, provider);
 }
 
 export async function fetchConfig(connection: Connection, wallet: any) {
@@ -130,22 +140,22 @@ export async function fetchConfig(connection: Connection, wallet: any) {
 /* ────────────────────────────────────────────────────────────────────────────
    PDA helpers (must match Rust program)
 ──────────────────────────────────────────────────────────────────────────── */
-export function deriveConfigPda(woodengMint = WOODENG_MINT) {
+export function deriveConfigPda(woodengMint = WOODENG_MINT, stakingProgramId = WOODENG_STAKING_PROGRAM_ID) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(CONFIG_SEED), woodengMint.toBuffer()],
-    WOODENG_STAKING_PROGRAM_ID
+    stakingProgramId
   )[0];
 }
-export function deriveModePda(config: PublicKey, modeByte: 0 | 3 | 6 | 12) {
+export function deriveModePda(config: PublicKey, modeByte: 0 | 3 | 6 | 12, stakingProgramId = WOODENG_STAKING_PROGRAM_ID) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(MODE_SEED), config.toBuffer(), Buffer.from(Uint8Array.of(modeByte))],
-    WOODENG_STAKING_PROGRAM_ID
+    stakingProgramId
   )[0];
 }
-export function derivePositionPda(owner: PublicKey, config: PublicKey, modePda: PublicKey) {
+export function derivePositionPda(owner: PublicKey, config: PublicKey, modePda: PublicKey, stakingProgramId = WOODENG_STAKING_PROGRAM_ID) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(POS_SEED), owner.toBuffer(), config.toBuffer(), modePda.toBuffer()],
-    WOODENG_STAKING_PROGRAM_ID
+    stakingProgramId
   )[0];
 }
 
@@ -153,17 +163,17 @@ export function derivePositionPda(owner: PublicKey, config: PublicKey, modePda: 
 
 
 
-export function deriveVaultPdas(woodengMint = WOODENG_MINT) {
-  const config = deriveConfigPda(woodengMint);
+export function deriveVaultPdas(woodengMint = WOODENG_MINT, stakingProgramId = WOODENG_STAKING_PROGRAM_ID) {
+  const config = deriveConfigPda(woodengMint, stakingProgramId);
 
   const stakingVault = PublicKey.findProgramAddressSync(
     [Buffer.from(STAKE_V_SEED), woodengMint.toBuffer()],
-    WOODENG_STAKING_PROGRAM_ID
+    stakingProgramId
   )[0];
 
   const rewardsVault = PublicKey.findProgramAddressSync(
     [Buffer.from(REWARD_V_SEED), woodengMint.toBuffer()],
-    WOODENG_STAKING_PROGRAM_ID
+    stakingProgramId
   )[0];
 
   return { config, stakingVault, rewardsVault };
@@ -171,10 +181,10 @@ export function deriveVaultPdas(woodengMint = WOODENG_MINT) {
 
 
 
-export function deriveMarkerPda(user: PublicKey, config: PublicKey) {
+export function deriveMarkerPda(user: PublicKey, config: PublicKey, stakingProgramId = WOODENG_STAKING_PROGRAM_ID) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(MARKER_SEED), user.toBuffer(), config.toBuffer()],
-    WOODENG_STAKING_PROGRAM_ID
+    stakingProgramId
   )[0];
 }
 
@@ -736,6 +746,42 @@ export async function setWsolVault(
     });
 
   return sendBuilder(connection, wallet, authority, builder);
+}
+
+
+/**
+ * Create a wSOL ATA owned by the staking config PDA, then call setWsolVault.
+ * Safe on any cluster — creates the ATA if missing, then registers it.
+ */
+export async function createAndSetWsolVault(connection: Connection, wallet: any) {
+  const provider = getProvider(connection, wallet);
+  const authority = provider.wallet.publicKey;
+  const { config } = deriveVaultPdas(WOODENG_MINT);
+
+  // wSOL ATA for the config PDA (allowOwnerOffCurve = true → PDA owner OK)
+  const wsolAta = getAssociatedTokenAddressSync(WSOL_MINT, config, true);
+
+  // Create the ATA if it doesn't already exist
+  const info = await connection.getAccountInfo(wsolAta);
+  if (!info) {
+    const createIx = createAssociatedTokenAccountInstruction(
+      authority,  // payer
+      wsolAta,    // ATA to create
+      config,     // owner = staking config PDA
+      WSOL_MINT,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    const tx = new Transaction().add(createIx);
+    tx.feePayer = authority;
+    await (provider as AnchorProvider).sendAndConfirm(tx, [], { commitment: 'confirmed' });
+    console.log('[STAKING] Created wSOL ATA for config PDA:', wsolAta.toBase58());
+  } else {
+    console.log('[STAKING] wSOL ATA already exists:', wsolAta.toBase58());
+  }
+
+  // Register it in the staking config
+  return setWsolVault(connection, wallet, wsolAta);
 }
 
 export async function sanitizeWsolIndex(connection: Connection, wallet: any) {

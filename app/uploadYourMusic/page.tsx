@@ -4,6 +4,7 @@ import React, { useState } from 'react'
 import Link from 'next/link'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { useWallet } from '@solana/wallet-adapter-react'
+import { useUnifiedWallet } from '@/hooks/useUnifiedWallet'
 import { Metaplex, walletAdapterIdentity, token } from '@metaplex-foundation/js'
 import {
   Connection,
@@ -210,7 +211,13 @@ const blankTrack: Track = {
 
 export default function UploadYourMusic() {
   const wallet = useWallet()
-  const { publicKey, connected } = wallet
+  const { publicKey: unifiedPublicKey, connected: unifiedConnected, sendTransaction: unifiedSendTransaction, signTransaction: unifiedSignTransaction } = useUnifiedWallet();
+  const effectivePublicKey = (wallet.connected && wallet.publicKey) ? wallet.publicKey : unifiedPublicKey;
+  const effectiveConnected = wallet.connected || unifiedConnected;
+  const effectiveSendTx = (wallet.connected && wallet.sendTransaction) ? wallet.sendTransaction : unifiedSendTransaction;
+  const effectiveSignTx = (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction;
+  const publicKey = effectivePublicKey;
+  const connected = effectiveConnected;
 
   // wizard state
   const [currentStep, setCurrentStep] = useState(0)
@@ -288,6 +295,13 @@ React.useEffect(() => {
       return
     }
 
+    const anchorWalletEff = {
+      ...wallet,
+      publicKey: effectivePublicKey,
+      connected: effectiveConnected,
+      signTransaction: ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : effectiveSignTx) as any,
+      signAllTransactions: ((wallet.connected && wallet.signAllTransactions) ? wallet.signAllTransactions : ((txs: any[]) => Promise.all(txs.map((tx: any) => ((wallet.connected && wallet.signTransaction) ? wallet.signTransaction : effectiveSignTx)(tx))))) as any,
+    };
 
     const missingFile = tracks.some(t => {
       const hasImage = isBundle ? !!t.trackImage : !!t.cover;
@@ -383,7 +397,7 @@ const meta: any = {
       }
 
       // 2) Mint via Metaplex
-      const mx = Metaplex.make(new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'finalized')).use(walletAdapterIdentity(wallet))
+      const mx = Metaplex.make(new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'finalized')).use(walletAdapterIdentity(anchorWalletEff as any))
       const nCopies = Math.max(1, parseInt(copies, 10))
       const minted: PublicKey[] = []
 
@@ -416,7 +430,7 @@ const meta: any = {
   minted.push(sft.address)
   const extra = Math.max(0, nCopies - 1)
   if (extra > 0) {
-    const ata = await ensureQuoteAtaAndMaybeWrap(mx.connection, publicKey, sft.address, wallet, 0);
+    const ata = await ensureQuoteAtaAndMaybeWrap(mx.connection, publicKey, sft.address, anchorWalletEff as any, 0);
     await mx.tokens().mint({
       mintAddress: sft.address,
       amount: token(extra, 0),
@@ -431,7 +445,7 @@ const meta: any = {
       if (skipDeposit) {
         // Auto-list freshly minted NFT(s)
 const conn3 = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'confirmed');
-const provider3 = new AnchorProvider(conn3, wallet as any, {});
+const provider3 = new AnchorProvider(conn3, anchorWalletEff as any, {});
 const prog3 = new Program(idl as any, PROGRAM_ID, provider3);
 
 const quoteMint = (tokenType === 'sol') ? WSOL_MINT : WOODENG_MINT;
@@ -495,7 +509,7 @@ for (let i = 0; i < minted.length; i++) {
       // 3) create & seed AMM pool on-chain via Anchor
       if (!skipDeposit) {
         const conn2 = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC as string, 'confirmed')
-        const provider2 = new AnchorProvider(conn2, wallet as any, {})
+        const provider2 = new AnchorProvider(conn2, anchorWalletEff as any, {})
         const prog2 = new Program(idl as any, PROGRAM_ID, provider2)
 
         const depLam = new BN(depositRaw);

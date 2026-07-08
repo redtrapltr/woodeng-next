@@ -6,6 +6,7 @@ import React, {
 } from 'react';
 
 import { useWallet } from '@solana/wallet-adapter-react';
+import { useUnifiedWallet } from '@/hooks/useUnifiedWallet';
 import { loadMarketNfts } from '@/lib/loadMarketNfts';
 import { cn } from '@/lib/utils';
 import dynamic from 'next/dynamic';
@@ -236,7 +237,10 @@ function Filters({ filters, setFilters }: any) {
 /* ---------------- Main component ---------------- */
 export default function MarketplaceClient() {
   const router = useRouter();
-  const { publicKey } = useWallet();
+  const wallet = useWallet();
+  const { publicKey: unifiedPublicKey } = useUnifiedWallet();
+  const effectivePublicKey = (wallet.connected && wallet.publicKey) ? wallet.publicKey : unifiedPublicKey;
+  const publicKey = effectivePublicKey;
 
   const searchParams = useSearchParams();
   const queryRaw = (searchParams.get('q') || '').trim();

@@ -22,19 +22,24 @@ import {
  import type { Idl } from '@project-serum/anchor'
  
 
- import { useWallet } from '@solana/wallet-adapter-react'
+ import { useWallet, useConnection } from '@solana/wallet-adapter-react'
+import { useNetwork } from '../network-context'
 import type { WalletContextState } from '@solana/wallet-adapter-react'
+import { useUnifiedWallet } from '@/hooks/useUnifiedWallet'
 
 
 
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import {
-  TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction,
+  TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddress,
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountInstruction,
   ASSOCIATED_TOKEN_PROGRAM_ID, createInitializeMintInstruction, createMintToInstruction,
   createSetAuthorityInstruction, AuthorityType, createAssociatedTokenAccountIdempotentInstruction
 } from '@solana/spl-token'
 import idlJson from '../../idl/hybrid_meme_coin_nft_locker.json'
+import lockerIdlV2Json from '../../idl/hybrid_meme_coin_nft_locker_v2.json'
 import poolIdlJson from '../../idl/my_sound_meme_pool.json'
+import poolIdlV2Json from '../../idl/my_sound_meme_pool_v2.json'
 
 
 
@@ -49,7 +54,7 @@ import {
 import { Siren as Fire, Info, Coins, Volume2 } from 'lucide-react'
 import { Globe, Send, Twitter } from 'lucide-react'
 import Link from 'next/link'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, ArrowRight } from 'lucide-react'
 import { LiquidChargeButton } from "../../src/contexts/components/LiquidChargeButton"
 import { useRouter } from 'next/navigation'
 
@@ -65,20 +70,66 @@ function ModalPortal({ children }: { children: React.ReactNode }) {
 }
 
 
+// ── DEVNET TESTING ──────────────────────────────────────────────────────────
+// Runtime toggle — controlled by UI switch, defaults to mainnet (v1)
+// DO NOT hardcode to true/false — the toggle lives in the component state
+const DEVNET_RPC = 'https://devnet.helius-rpc.com/?api-key=6b56ae36-a263-4599-a807-43a5289701dc';
+const MAINNET_RPC = (() => {
+  const rpc = (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_SOLANA_RPC && process.env.NEXT_PUBLIC_SOLANA_RPC.startsWith('http'))
+    ? process.env.NEXT_PUBLIC_SOLANA_RPC
+    : 'https://mainnet.helius-rpc.com/?api-key=6b56ae36-a263-4599-a807-43a5289701dc';
+  return rpc;
+})();
 
-const PROGRAM_ID = new PublicKey('cJcMJ8YWacxRPMG5r1E8GmVgxnS9KogUe6m7sN2TaHS')
-const POOL_PROGRAM_ID = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV')
-const WOODENG_MINT = new PublicKey('83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5')
+// ⚠️ LOCKER: deploy to devnet and paste the new program ID here
+const LOCKER_PROGRAM_ID_DEVNET = new PublicKey('kqS1V5vUTtJC4bGqt2VhYy6Se2w1naUkS5t78Weprb4');
+const LOCKER_PROGRAM_ID_MAINNET = new PublicKey('cJcMJ8YWacxRPMG5r1E8GmVgxnS9KogUe6m7sN2TaHS');
 
+const POOL_PROGRAM_ID_DEVNET = new PublicKey('C1pGixxtxw1z8x7eGcG2kzs4ZWBkXKVLwPJsDjxWTsin');
+const POOL_PROGRAM_ID_MAINNET = new PublicKey('8YCde6Jm1Xz8FDiYS3R4AksgNVPEmrjNvkmdMnugEzrV');
 
-import { getConnection } from '@/lib/conn'; // <-- add with your other imports (top of file)
+// Devnet vs mainnet WOODENG mints
+const WOODENG_MINT_DEVNET = new PublicKey('CWMoq79uHDL8XgAfMLSP6kCwmu9WzgfxNJxBSLtqYEad');
+const WOODENG_MINT_MAINNET = new PublicKey('83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5');
 
-const connection = getConnection();
+// V21 has 4th arg (minAvgHoldDays). Set to false until you redeploy v21 on devnet.
+// Once deployed: flip to true.
+const V2_IS_V21 = true; // v21 is deployed on devnet with holderProfile + minAvgHoldDays
+
+// Always mainnet V2 — toggle removed
+function getClusterConfig() {
+  return {
+    connection: new Connection(MAINNET_RPC, { commitment: 'processed' }),
+    programId: LOCKER_PROGRAM_ID_MAINNET,
+    poolProgramId: POOL_PROGRAM_ID_DEVNET, // V2 placeholder — update after mainnet deploy
+    woodengMint: WOODENG_MINT_MAINNET,
+    stakingProgramId: STAKING_PROGRAM_ID_MAINNET,
+    isV2: true,
+    isV21: true,
+  };
+}
+
+// Default connection for initial render (mainnet)
+const USE_DEVNET = false; // kept for backward compat in non-toggle code paths
+
+// These are now derived from the toggle — see getClusterConfig()
+// Kept as defaults for code that runs outside the component
+const PROGRAM_ID = LOCKER_PROGRAM_ID_MAINNET;
+const POOL_PROGRAM_ID = POOL_PROGRAM_ID_MAINNET;
+
+// Default mainnet WOODENG — overridden by cluster.woodengMint in component
+const WOODENG_MINT = WOODENG_MINT_MAINNET;
+
+// ── CONNECTION (default mainnet, overridden by toggle in component) ──
+const connection = new Connection(MAINNET_RPC, { commitment: 'processed' });
 
 const BONDING_SUPPLY = 444_000_000;
 
 
-const STAKING_PROGRAM_ID = new PublicKey('BFJU3f7PXgzcrYPD2MkQsjRko9wDTpEbyJTtLUzSyhFG');
+const STAKING_PROGRAM_ID_MAINNET = new PublicKey('BFJU3f7PXgzcrYPD2MkQsjRko9wDTpEbyJTtLUzSyhFG');
+const STAKING_PROGRAM_ID_DEVNET = new PublicKey('9Q5BUszjz6HFNXXPWerjn1HM7sTvdXVaNqswJAzZC1s');
+// Default for module-level code (mainnet)
+const STAKING_PROGRAM_ID = STAKING_PROGRAM_ID_MAINNET;
 
 
 const WSOL_MINT = NATIVE_MINT;       // So11111111111111111111111111111111111111112
@@ -90,8 +141,8 @@ const CURVE_THRESHOLD = 44_000_000;                     // BONDING_CURVE_THRESHO
 const L = 10 ** QUOTE_DECIMALS;               // 1e9
 
 // Must mirror on-chain program constants:
-const TARGET_PRICE_LAMPORTS_SOL      = 44 * L;          // matches Rust TARGET_PRICE_LAMPORTS_SOL
-const TARGET_PRICE_LAMPORTS_WOODENG  = 4_444_444 * L;   // matches Rust TARGET_PRICE_LAMPORTS_WOODENG
+const TARGET_PRICE_LAMPORTS_SOL      = 2_857;            // 0.000002857 SOL/MEME — ~40 SOL to graduate
+const TARGET_PRICE_LAMPORTS_WOODENG  = 100_000_000;     // 0.1 WOODENG/MEME — matches Rust
 
 function targetPriceFor(mint: PublicKey): number {
   return mint.equals(WSOL_MINT) ? TARGET_PRICE_LAMPORTS_SOL : TARGET_PRICE_LAMPORTS_WOODENG;
@@ -270,41 +321,43 @@ async function ensureCounterAndNextLocker(
 
 
 
-// helpers to derive staking PDAs for WOODENG
-function findStakingConfigPda() {
+// helpers to derive staking PDAs — accept mint + program ID for devnet vs mainnet
+function findStakingConfigPda(woodengMint: PublicKey = WOODENG_MINT, stakingProgram: PublicKey = STAKING_PROGRAM_ID) {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from('config'), WOODENG_MINT.toBuffer()],
-    STAKING_PROGRAM_ID
+    [Buffer.from('config'), woodengMint.toBuffer()],
+    stakingProgram
   )[0];
 }
 
 
-function findStakingRewardsVaultPdaWood(): PublicKey {
-  // seeds: ["reward_vault", WOODENG_MINT]
+function findStakingRewardsVaultPdaWood(woodengMint: PublicKey = WOODENG_MINT, stakingProgram: PublicKey = STAKING_PROGRAM_ID): PublicKey {
+  // seeds: ["reward_vault", woodengMint]
   return PublicKey.findProgramAddressSync(
-    [Buffer.from('reward_vault'), WOODENG_MINT.toBuffer()],
-    STAKING_PROGRAM_ID
+    [Buffer.from('reward_vault'), woodengMint.toBuffer()],
+    stakingProgram
   )[0];
 }
 
 function findStakingRewardsVaultPdaWsol(config: PublicKey): PublicKey {
-  // seeds: ["reward_vault_wsol", CONFIG_PDA, WSOL_MINT]
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from('reward_vault_wsol'), config.toBuffer(), WSOL_MINT.toBuffer()],
-    STAKING_PROGRAM_ID
-  )[0];
+  // The WSOL vault is an ATA owned by the config PDA, NOT a program PDA
+  return getAssociatedTokenAddressSync(WSOL_MINT, config, true);
 }
 
 
 // near your other helpers in page.tsx
-async function assertStakingReady(conn: Connection) {
-  const cfg = findStakingConfigPda();
+async function assertStakingReady(conn: Connection, woodengMint: PublicKey = WOODENG_MINT, isDevnet = false, stakingProgram: PublicKey = STAKING_PROGRAM_ID) {
+  const cfg = findStakingConfigPda(woodengMint, stakingProgram);
   const wsolVault = findStakingRewardsVaultPdaWsol(cfg);
-  const woodVault = findStakingRewardsVaultPdaWood();
+  const woodVault = findStakingRewardsVaultPdaWood(woodengMint, stakingProgram);
   const infos = await conn.getMultipleAccountsInfo([cfg, wsolVault, woodVault]);
-  if (!infos[0]) throw new Error('Staking not initialized: missing Config PDA');
-  if (!infos[1]) throw new Error('Staking not initialized: missing WSOL rewards vault');
-  if (!infos[2]) throw new Error('Staking not initialized: missing WOODENG rewards vault');
+  if (isDevnet) {
+    // On devnet, staking might not be initialized — skip the check
+    if (!infos[0]) { console.warn('[devnet] Staking not initialized — skipping staking fees'); return; }
+  } else {
+    if (!infos[0]) throw new Error('Staking not initialized: missing Config PDA');
+    if (!infos[1]) throw new Error('Staking not initialized: missing WSOL rewards vault');
+    if (!infos[2]) throw new Error('Staking not initialized: missing WOODENG rewards vault');
+  }
 }
 
 
@@ -391,7 +444,8 @@ async function ensureAtaExists(
   mint: PublicKey,
   payer: PublicKey,
   wallet: WalletContextState,
-  isPdaOwner = false
+  isPdaOwner = false,
+  connection: Connection
 ): Promise<PublicKey> {
   const tokenProgram = await getTokenProgramForMint(connection, mint);
 
@@ -435,14 +489,14 @@ function getLockerPda(memeMint: PublicKey, user: PublicKey, lockId: bigint | num
 
 
 
-async function getConfigPda(memeMint: PublicKey) {
-  return await PublicKey.findProgramAddress([Buffer.from('config'), memeMint.toBuffer()], POOL_PROGRAM_ID)
+async function getConfigPda(memeMint: PublicKey, programId: PublicKey = POOL_PROGRAM_ID) {
+  return await PublicKey.findProgramAddress([Buffer.from('config'), memeMint.toBuffer()], programId)
 }
-function getPoolMemeVaultPda(memeMint: PublicKey): Promise<[PublicKey, number]> {
-  return PublicKey.findProgramAddress([Buffer.from('pool_meme_vault'), memeMint.toBuffer()], POOL_PROGRAM_ID)
+function getPoolMemeVaultPda(memeMint: PublicKey, programId: PublicKey = POOL_PROGRAM_ID): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress([Buffer.from('pool_meme_vault'), memeMint.toBuffer()], programId)
 }
-function getPoolWoodengVaultPda(memeMint: PublicKey): Promise<[PublicKey, number]> {
-  return PublicKey.findProgramAddress([Buffer.from('pool_woodeng_vault'), memeMint.toBuffer()], POOL_PROGRAM_ID)
+function getPoolWoodengVaultPda(memeMint: PublicKey, programId: PublicKey = POOL_PROGRAM_ID): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress([Buffer.from('pool_woodeng_vault'), memeMint.toBuffer()], programId)
 }
 
 // === read live pool params so JS math matches the program ===
@@ -580,7 +634,8 @@ async function buildCreateMintIx(
   payer: PublicKey,
   decimals: number,
   mintAuthority: PublicKey,
-  vanitySuffix?: string // e.g. "woo"
+  vanitySuffix?: string, // e.g. "woo"
+  tokenProgramId: PublicKey = TOKEN_PROGRAM_ID
 ): Promise<{ mint: PublicKey; ixs: TransactionInstruction[]; signers: Keypair[] }> {
   // IMPORTANT: keep the await here
   const kp = vanitySuffix ? await mineVanityKeypair(vanitySuffix) : Keypair.generate();
@@ -591,9 +646,9 @@ async function buildCreateMintIx(
     newAccountPubkey: kp.publicKey,
     lamports,
     space: 82,
-    programId: TOKEN_PROGRAM_ID,
+    programId: tokenProgramId,
   });
-  const initIx = createInitializeMintInstruction(kp.publicKey, decimals, mintAuthority, null, TOKEN_PROGRAM_ID);
+  const initIx = createInitializeMintInstruction(kp.publicKey, decimals, mintAuthority, null, tokenProgramId);
 
   return { mint: kp.publicKey, ixs: [createIx, initIx], signers: [kp] };
 }
@@ -607,43 +662,85 @@ async function buildLockerIxs(params: {
   metaUri: string;
   memeName: string;
   memeSymbol: string;
+  programId: PublicKey;
+  isV2: boolean;
 }): Promise<{
   lockerPda: PublicKey;
   nftMint: PublicKey;
   ixs: TransactionInstruction[];
   signers: Keypair[];
 }> {
-  const { provider, wallet, memeMint, threshold, metaUri, memeName, memeSymbol } = params;
-  const lockerProgram = new Program(idlJson as Idl, PROGRAM_ID, provider);
+  const { provider, wallet, memeMint, threshold, metaUri, memeName, memeSymbol, programId, isV2 } = params;
+  const lockerProgram = new Program((isV2 ? lockerIdlV2Json : idlJson) as Idl, programId, provider);
+  const user = wallet.publicKey!;
 
-  // (a) Create the NFT mint (0 decimals) — returns ixs + signer
-  const nftMintBuild = await buildCreateMintIx(wallet.publicKey!, 0, wallet.publicKey!);
+  console.log('[buildLockerIxs] ──────────────────────────────────────');
+  console.log('[buildLockerIxs] PROGRAM_ID:', programId.toBase58());
+  console.log('[buildLockerIxs] memeMint:', memeMint.toBase58());
+  console.log('[buildLockerIxs] user:', user.toBase58());
 
-    // (b) PDAs (derive the *next* locker for this (memeMint, user))
-  const { counterPda, lockerPda, maybeInitCounterIx } =
-    await ensureCounterAndNextLocker(provider, memeMint, wallet.publicKey!);
+  // (a) Create the NFT mint (0 decimals, classic SPL Token) — returns ixs + signer
+  const nftMintBuild = await buildCreateMintIx(user, 0, user);
+  console.log('[buildLockerIxs] nftMint:', nftMintBuild.mint.toBase58());
 
-
-
-  // (c) Locker meme vault ATA (owned by PDA)
-  const { ata: lockerMemeAta, ix: lockerMemeAtaIx } =
-    await ensureAtaIx(lockerPda, memeMint, wallet.publicKey!, true);
-
-    // (d) Hand NFT mint authority to the locker PDA (so it can mint on lock).
-  // Your on-chain InitializeLocker has:
-  //   constraint = nft_mint.mint_authority == COption::Some(locker.key())
-  // so we must set authority *BEFORE* initializeLocker.
-  const setAuthIx = createSetAuthorityInstruction(
-    nftMintBuild.mint,
-    wallet.publicKey!,
-    AuthorityType.MintTokens,
-    lockerPda
+  // (b) Derive counter PDA and check if it exists
+  const [counterPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from('counter'), memeMint.toBuffer(), user.toBuffer()],
+    programId
   );
 
+  let nextId = 0n;
+  let maybeInitCounterIx: TransactionInstruction | undefined;
+
+  const counterInfo = await provider.connection.getAccountInfo(counterPda);
+  if (counterInfo) {
+    const acc: any = await lockerProgram.account.lockCounter.fetch(counterPda);
+    nextId = BigInt(acc.count.toString());
+    console.log('[buildLockerIxs] counter EXISTS, count =', nextId.toString());
+  } else {
+    maybeInitCounterIx = await lockerProgram.methods
+      .initializeCounter()
+      .accounts({
+        user,
+        counter: counterPda,
+        memeMint,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    nextId = 0n;
+    console.log('[buildLockerIxs] counter DOES NOT EXIST, will init with count=0');
+  }
+
+  // (c) Derive locker PDA using nextId
+  const lockIdBytes = new Uint8Array(8);
+  new DataView(lockIdBytes.buffer).setBigUint64(0, nextId, true);
+
+  const [lockerPda, lockerBump] = PublicKey.findProgramAddressSync(
+    [Buffer.from('locker'), memeMint.toBuffer(), user.toBuffer(), Buffer.from(lockIdBytes)],
+    programId
+  );
+
+  console.log('[buildLockerIxs] lockId (u64 LE):', Array.from(lockIdBytes).map(b => b.toString(16).padStart(2, '0')).join(' '));
+  console.log('[buildLockerIxs] lockerPda:', lockerPda.toBase58());
+  console.log('[buildLockerIxs] lockerBump:', lockerBump);
+
+  // (d) Locker meme vault ATA (owned by PDA)
+  const { ata: lockerMemeAta, ix: lockerMemeAtaIx } =
+    await ensureAtaIx(lockerPda, memeMint, user, true);
+
+  // (e) Hand NFT mint authority to the locker PDA (classic SPL Token)
+  const setAuthIx = createSetAuthorityInstruction(
+    nftMintBuild.mint,
+    user,
+    AuthorityType.MintTokens,
+    lockerPda,
+  );
+
+  // (f) Build initializeLocker instruction
   const initLockerIx = await lockerProgram.methods
     .initializeLocker(new BN(threshold), memeName, memeSymbol, metaUri)
     .accounts({
-      user: wallet.publicKey!,
+      user,
       counter: counterPda,
       locker: lockerPda,
       memeMint,
@@ -656,17 +753,27 @@ async function buildLockerIxs(params: {
     })
     .instruction();
 
-  // Important ordering:
-  // - maybeInitCounterIx only if the counter doesn't exist yet
-  // - setAuthIx must happen before initLockerIx to satisfy the mint_authority constraint
+  // Log every account key in the instruction for debugging
+  const expectedNames = [
+    'user', 'counter', 'locker', 'memeMint', 'nftMint',
+    'lockerMemeAccount', 'systemProgram', 'tokenProgram',
+    'associatedTokenProgram', 'rent'
+  ];
+  console.log('[buildLockerIxs] initLockerIx account keys:');
+  initLockerIx.keys.forEach((k, i) => {
+    const label = expectedNames[i] || `extra[${i}]`;
+    console.log(`  [${i}] ${label}: ${k.pubkey.toBase58()} (signer=${k.isSigner}, writable=${k.isWritable})`);
+  });
+  console.log('[buildLockerIxs] ──────────────────────────────────────');
+
+  // Instruction ordering:
   const ixs = [
     ...nftMintBuild.ixs,             // create + init NFT mint (authority = wallet)
-    lockerMemeAtaIx,                 // locker’s meme vault ATA
+    lockerMemeAtaIx,                 // locker's meme vault ATA
     ...(maybeInitCounterIx ? [maybeInitCounterIx] : []),
-    setAuthIx,                       // ✅ set mint authority to locker PDA
-    initLockerIx,                    // then create locker (program will increment counter)
+    setAuthIx,                       // set mint authority to locker PDA
+    initLockerIx,                    // then create locker
   ];
-
 
   return { lockerPda, nftMint: nftMintBuild.mint, ixs, signers: nftMintBuild.signers };
 }
@@ -761,7 +868,7 @@ function FileUploader({ onUri }: FileUploaderProps) {
           {uploading ? 'Uploading…' : 'Drop file here or tap to select'}
         </div>
 
-        {/* BIG “uploaded” pill for mobile */}
+        {/* BIG "uploaded" pill for mobile */}
         {fileUrl && (
           <span className="ml-3 inline-flex items-center text-xs sm:text-sm font-bold px-3 py-1 rounded-full bg-[#ffc371] text-black">
             Uploaded ✓
@@ -810,7 +917,7 @@ function FileUploader({ onUri }: FileUploaderProps) {
                   alt="Uploaded"
                   className="w-full rounded-lg border border-[#2b2d35]"
                 />
-                {/* BIG ribbon so users can’t miss it */}
+                {/* BIG ribbon so users can't miss it */}
                 <div className="mt-2 text-xs sm:text-sm text-[#c9cbd6]">
                   <div className="font-semibold">{fileName}</div>
                   <div>Size: {fileSize}</div>
@@ -935,6 +1042,26 @@ export default function MemeLockerFactory() {
 
   
   const wallet = useWallet()
+  const { publicKey: unifiedPublicKey, connected: unifiedConnected, signTransaction: unifiedSignTransaction } = useUnifiedWallet()
+  const effectivePublicKey = wallet.publicKey ?? unifiedPublicKey
+  const effectiveConnected = wallet.connected || unifiedConnected
+  const { connection: walletAdapterConnection } = useConnection()
+
+  const cluster = React.useMemo(() => getClusterConfig(), []);
+
+  // Ensure wallet adapter stays on mainnet
+  const { setEndpoint } = useNetwork();
+  useEffect(() => {
+    setEndpoint(MAINNET_RPC);
+  }, [setEndpoint]);
+
+  useEffect(() => {
+    walletAdapterConnection.getGenesisHash().then(h => console.log('[GENESIS]', h)).catch(console.error)
+  }, [walletAdapterConnection])
+
+  // ── Holder whitelist (v2 only) ──
+  const [minAvgHoldDays, setMinAvgHoldDays] = useState(0);
+
   // AFTER
 const [txStep, setTxStep] = useState<TxStep>({ open: false, step: 0, total: 0, title: "" });
 
@@ -951,8 +1078,8 @@ const closeSteps = () => setTxStep(s => ({ ...s, open: false }));
   // Meme details
   const [memeName, setMemeName] = useState("")
   const [memeSymbol, setMemeSymbol] = useState("")
-  const [totalSupply, setTotalSupply] = useState(1_000_000)
-  const [threshold, setThreshold] = useState(50000)
+  const [totalSupply] = useState(444_000_000) // always 444M for culture memes
+  const [threshold] = useState(44400) // fixed at 44,400 for SWL-444
   const [memeDescription, setMemeDescription] = useState("")
   const [audioUri, setAudioUri] = useState("")
   const [fileType, setFileType] = useState("audio/mpeg")
@@ -969,6 +1096,11 @@ const [audioMime, setAudioMime] = useState<string>("");
   const [tgUrl, setTgUrl] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
 
+  // UI toggles
+  const [socialsOpen, setSocialsOpen] = useState(false);
+  const [diamondGateOpen, setDiamondGateOpen] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+
   // inside the component, near other hooks
 const inFlight = useRef(false);
 const [busy, setBusy] = useState(false); // for UI disable
@@ -981,7 +1113,7 @@ const [busy, setBusy] = useState(false); // for UI disable
 const isBonding = !isAmm;
 
   const [quoteToken, setQuoteToken] = useState<'WOODENG' | 'SOL'>('WOODENG');
-const QUOTE_MINT  = quoteToken === 'WOODENG' ? WOODENG_MINT : WSOL_MINT;
+const QUOTE_MINT  = quoteToken === 'WOODENG' ? cluster.woodengMint : WSOL_MINT;
 const quoteLabel  = quoteToken === 'WOODENG' ? 'WOODENG'     : 'SOL';
 
 
@@ -1007,11 +1139,7 @@ useEffect(() => {
 }, [poolType]);
 
 
-useEffect(() => {
-  if (isBonding) {
-    setTotalSupply(444_000_000);
-  }
-}, [poolType]);
+// totalSupply is always 444M — no effect needed
 
 
   // Internals
@@ -1040,6 +1168,20 @@ useEffect(() => {
   return () => window.removeEventListener('keydown', onKey as any, true)
 }, [tradeModal.open])
 
+
+// ── AMM: derived "creator keeps" helper ─────────────────────────────────────
+const creatorKeeps = isAmm ? Math.max(0, totalSupply - initialMemeLiquidity) : 0;
+
+const WIZARD_STEPS = [
+  { num: 1, label: 'Identity & Media' },
+  { num: 2, label: 'Economics' },
+  { num: 3, label: 'Protection' },
+  { num: 4, label: 'Launch' },
+] as const;
+
+const step1Valid = memeName.trim().length > 0 && memeSymbol.trim().length > 0 && audioUri.trim().length > 0;
+const step2Valid = !isAmm || (initialMemeLiquidity > 0 && initialQuoteLiquidity > 0 && initialMemeLiquidity <= totalSupply);
+const canAdvance = ([step1Valid, step2Valid, true, false] as const)[wizardStep - 1] ?? false;
 
 
 // ──────────────────────────────────────────────────────────────
@@ -1198,28 +1340,71 @@ function normalizeUrl(raw: string, type: 'website' | 'x' | 'telegram'): string {
   // ========== CREATION STEPS ==========
   // ──────────────────────────────────────────────────────────────
 async function handleCreateAll() {
+  // Use the cluster-specific connection (devnet or mainnet based on toggle)
+  const conn = cluster.connection;
   try {
     if (inFlight.current) return;
 inFlight.current = true;
 setBusy(true);
 
-    if (!wallet.connected || !wallet.publicKey) throw new Error("Connect your wallet first!");
+    if (!effectiveConnected || !effectivePublicKey) throw new Error("Connect your wallet first!");
     if (!memeName.trim() || !memeSymbol.trim() || !audioUri.trim()) throw new Error("Fill all meme details and upload audio!");
     if (!agreedTOS || !agreedOwn) throw new Error("You must accept the terms to proceed.");
 
-    const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" });
-    // fees go to the creator (connected wallet)
-const feeOwner = wallet.publicKey!;
+    // ── NETWORK MISMATCH GUARD ──────────────────────────────────────────────
+    // walletAdapterConnection reflects Phantom's actual RPC endpoint (set via
+    // ConnectionProvider). cluster.connection is our own devnet/mainnet RPC.
+    // Check walletAdapterConnection so we detect when Phantom is still on mainnet.
+    const DEVNET_GENESIS  = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+    try {
+      const genesisHash = await walletAdapterConnection.getGenesisHash();
+      if (genesisHash === DEVNET_GENESIS) {
+        throw new Error(
+          '🔴 Network mismatch! Phantom is on Devnet. Switch Phantom back to Mainnet in Settings.'
+        );
+      }
+    } catch (e: any) {
+      if (e.message?.startsWith('🔴')) throw e;
+      // genesis check failed for unrelated reason — let it through
+    }
+    // ── END NETWORK MISMATCH GUARD ──────────────────────────────────────────
 
-    const poolProgram = new Program(poolIdlJson as Idl, POOL_PROGRAM_ID, provider);
+    // ── AMM guard: meme liquidity must not exceed total supply ──
+    if (isAmm) {
+      if (initialMemeLiquidity > totalSupply) {
+        throw new Error(
+          `Meme liquidity (${initialMemeLiquidity.toLocaleString()}) cannot exceed total supply (${totalSupply.toLocaleString()}). ` +
+          `The pool gets ${initialMemeLiquidity.toLocaleString()} and you keep ${creatorKeeps.toLocaleString()}.`
+        );
+      }
+      if (initialMemeLiquidity <= 0) {
+        throw new Error("Set the amount of meme tokens to seed into the pool (Initial Meme Liquidity).");
+      }
+      if (initialQuoteLiquidity <= 0) {
+        throw new Error(`Set the amount of ${quoteLabel} to seed into the pool.`);
+      }
+    }
+
+    const pk = effectivePublicKey!;
+    const effectiveWalletForProvider = {
+      publicKey: pk,
+      signTransaction: (wallet.signTransaction ?? unifiedSignTransaction) as any,
+      signAllTransactions: (wallet.signAllTransactions ?? ((txs: any[]) => Promise.all(txs.map((tx: any) => (wallet.signTransaction ?? unifiedSignTransaction)(tx))))) as any,
+      sendTransaction: wallet.sendTransaction,
+    };
+    const provider = new AnchorProvider(cluster.connection, effectiveWalletForProvider as any, { preflightCommitment: "confirmed" });
+    // fees go to the creator (connected wallet)
+const feeOwner = pk;
+
+    const poolProgram = new Program((cluster.isV2 ? poolIdlV2Json : poolIdlJson) as Idl, cluster.poolProgramId, provider);
 
 
     // One persistent progress count for the whole flow
 const totalSteps =
-  2 + (isAmm ? 1 : (founderBuyPct > 0 ? 1 : 0));
-// AMM: 3 (Upload → Create+Init → Seed Liquidity)
-// Bonding w/o pre-buy: 2 (Upload → Create+Init)
-// Bonding w/ pre-buy: 3 (Upload → Create+Init → Creator pre-buy)
+  3 + (isAmm ? 1 : (founderBuyPct > 0 ? 1 : 0));
+// AMM: 4 (Upload → Create+Init → Seed Liquidity → Create Locker)
+// Bonding w/o pre-buy: 3 (Upload → Create+Init → Create Locker)
+// Bonding w/ pre-buy: 4 (Upload → Create+Init → Creator pre-buy → Create Locker)
 
 
     // 1) Off-chain uploads (unchanged)
@@ -1284,7 +1469,7 @@ validateMeta(metaJson);
 
     const metaUri = await pinFile(new File([JSON.stringify(metaJson)], "metadata.json", { type:"application/json" }));
 
-    // 2) Build on-chain instructions (we’ll sign ONCE)
+    // 2) Build on-chain instructions (we'll sign ONCE)
     showStep(2, totalSteps, "Preparing on-chain creation", "Deriving PDAs, creating mints, ATAs & metadata…");
 
 
@@ -1294,9 +1479,9 @@ showStep(2, totalSteps, 'Mining vanity mint', 'Looking for a mint address ending
 
 
 const memeMintBuild = await buildCreateMintIx(
-  wallet.publicKey,
+  pk,
   MEME_DECIMALS,
-  wallet.publicKey,
+  pk,
   'woo' // ← vanity suffix
 );
 
@@ -1308,13 +1493,13 @@ if (!_memeMintB58.endsWith('woo')) {
 }
 
 // LP mint is normal (no vanity)
-const lpMintBuild = await buildCreateMintIx(wallet.publicKey, 0, wallet.publicKey);
+const lpMintBuild = await buildCreateMintIx(pk, 0, pk);
 
 
     // metadata for MEME
-const mdIx = buildMetadataIx(wallet.publicKey, memeMintBuild.mint, metaUri, memeName, memeSymbol);
+const mdIx = buildMetadataIx(pk, memeMintBuild.mint, metaUri, memeName, memeSymbol);
 
-// placeholders for things we’ll send in Phase-2 (bonding)
+// placeholders for things we'll send in Phase-2 (bonding)
 
 let founderBuyIxPhase2: TransactionInstruction | null = null;
 let userWoodAtaIxPhase2: TransactionInstruction | null = null;
@@ -1322,9 +1507,9 @@ let creatorMemeAtaIxPhase2: TransactionInstruction | null = null;
 
 
     // PDAs
-    const [configPda]        = await getConfigPda(memeMintBuild.mint);
-    const [poolMemeVault]    = await getPoolMemeVaultPda(memeMintBuild.mint);
-    const [poolWoodengVault] = await getPoolWoodengVaultPda(memeMintBuild.mint);
+    const [configPda]        = await getConfigPda(memeMintBuild.mint, cluster.poolProgramId);
+    const [poolMemeVault]    = await getPoolMemeVaultPda(memeMintBuild.mint, cluster.poolProgramId);
+    const [poolWoodengVault] = await getPoolWoodengVaultPda(memeMintBuild.mint, cluster.poolProgramId);
 
    
 
@@ -1332,13 +1517,13 @@ let creatorMemeAtaIxPhase2: TransactionInstruction | null = null;
 
     // fee vault (PROJECT_WALLET, WOODENG)
     const { ata: lpFeeVault, ix: lpFeeVaultIx } =
-  await ensureAtaIx(feeOwner, QUOTE_MINT, wallet.publicKey!, false);
+  await ensureAtaIx(feeOwner, QUOTE_MINT, pk, false);
 
 
 
     // creator meme ATA (for AMM seeding)
     const { ata: creatorMemeAta, ix: creatorMemeAtaIx } =
-      await ensureAtaIx(wallet.publicKey, memeMintBuild.mint, wallet.publicKey, false);
+      await ensureAtaIx(pk, memeMintBuild.mint, pk, false);
 
     // optional: user WOODENG / LP ATAs (for AMM)
     let userWoodAta: PublicKey;
@@ -1348,22 +1533,22 @@ let wrapIxs: TransactionInstruction[] = [];
 if (quoteToken === 'SOL') {
   // We'll decide the required amount below in each path and fill wrapIxs there
   // For now we only know the ATA address:
-  userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey, false);
+  userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, pk, false);
 } else {
   // bonding: defer creating the ATA to Phase-2
-  userWoodAta = await getAssociatedTokenAddress(QUOTE_MINT, wallet.publicKey, false);
+  userWoodAta = await getAssociatedTokenAddress(QUOTE_MINT, pk, false);
   // userWoodAtaIx will be built (and sent) in Phase-2
 }
 
 
 const isWsolPair = QUOTE_MINT.equals(WSOL_MINT);
-const stakingConfigPda = findStakingConfigPda();
+const stakingConfigPda = findStakingConfigPda(cluster.woodengMint, cluster.stakingProgramId);
 const stakingRewardsVaultPda = isWsolPair
   ? findStakingRewardsVaultPdaWsol(stakingConfigPda)
-  : findStakingRewardsVaultPdaWood();
+  : findStakingRewardsVaultPdaWood(cluster.woodengMint, cluster.stakingProgramId);
 
     const { ata: userLpAta,   ix: userLpAtaIx } =
-      await ensureAtaIx(wallet.publicKey, lpMintBuild.mint, wallet.publicKey, false);
+      await ensureAtaIx(pk, lpMintBuild.mint, pk, false);
 
 
 
@@ -1371,23 +1556,20 @@ const stakingRewardsVaultPda = isWsolPair
 
       // --- Guard: make sure we have enough SOL to create any missing ATAs ---
 const TOKEN_ACC_SIZE = 165; // SPL token account size
-const tokenAccRent = await connection.getMinimumBalanceForRentExemption(TOKEN_ACC_SIZE);
+const tokenAccRent = await cluster.connection.getMinimumBalanceForRentExemption(TOKEN_ACC_SIZE);
 
 const ataCandidates: PublicKey[] = [
   lpFeeVault,
   ...(isAmm ? [creatorMemeAta] : []),
-  // userLpAta is created in Phase 2; no rent check here yet
 ];
 
-// Check which of these ATAs are missing
-const ataInfos = await Promise.all(ataCandidates.map(a => connection.getAccountInfo(a)));
+const ataInfos = await Promise.all(ataCandidates.map(a => cluster.connection.getAccountInfo(a)));
 const missingCount = ataInfos.filter(a => !a).length;
 
-// Small headroom for fees
-const FEE_PAD = 30_000; // ~0.00003 SOL
+const FEE_PAD = 30_000;
 const needNow = missingCount * tokenAccRent + FEE_PAD;
 
-const payerBal = await connection.getBalance(wallet.publicKey!);
+const payerBal = await cluster.connection.getBalance(pk);
 if (payerBal < needNow) {
   const needSol = needNow / 1e9;
   const haveSol = payerBal / 1e9;
@@ -1398,38 +1580,55 @@ if (payerBal < needNow) {
 }
 
 
-    // price params
-    const P1_UI = 35 / 44_000_000;
-    const DEFAULT_P0_UI = Math.min(0.00000070, 0.95 * P1_UI);
+    // price params — 15x range (pump.fun-like), using per-quote-mint target
+    const P1_LAMPORTS = targetPriceFor(QUOTE_MINT);
+    const P1_UI = P1_LAMPORTS / (10 ** QUOTE_DECIMALS);
+    const DEFAULT_P0_UI = P1_UI / 15;
     const p0Lamports = new BN(Math.floor(DEFAULT_P0_UI * 10 ** QUOTE_DECIMALS));
 
-    const poolInfo = await connection.getAccountInfo(POOL_PROGRAM_ID);
+    const poolInfo = await cluster.connection.getAccountInfo(cluster.poolProgramId);
 console.log("POOL program exists?", !!poolInfo, "executable?", poolInfo?.executable);
 if (!poolInfo?.executable) throw new Error("POOL_PROGRAM_ID is not executable on this cluster. Wrong cluster or not deployed.");
 
 
 
-    const initIx = await poolProgram.methods
-  .initializeSoundMemeAndPool(p0Lamports, isBonding, new BN(threshold))
-  .accounts({
-    authority: wallet.publicKey,
-    config: configPda,
-    memeMint: memeMintBuild.mint,
-    poolMemeVault,
-    poolWoodengVault,
-    lpMint: lpMintBuild.mint,
-    woodengMint: QUOTE_MINT,
-
-    // keep these two:
-    projectWalletOwner: feeOwner,
-projectWalletAta:   lpFeeVault,
-
-
-    tokenProgram: TOKEN_PROGRAM_ID,
-    systemProgram: SystemProgram.programId,
-    rent: SYSVAR_RENT_PUBKEY,
-  })
-  .instruction();
+    // v21 (devnet after redeploy): pass min_avg_hold_days as 4th arg
+    // v20 or v1: only 3 args
+    const initIx = cluster.isV21
+      ? await poolProgram.methods
+          .initializeSoundMemeAndPool(p0Lamports, isBonding, new BN(threshold), minAvgHoldDays)
+          .accounts({
+            authority: pk,
+            config: configPda,
+            memeMint: memeMintBuild.mint,
+            poolMemeVault,
+            poolWoodengVault,
+            lpMint: lpMintBuild.mint,
+            woodengMint: QUOTE_MINT,
+            projectWalletOwner: feeOwner,
+            projectWalletAta: lpFeeVault,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            rent: SYSVAR_RENT_PUBKEY,
+          })
+          .instruction()
+      : await poolProgram.methods
+          .initializeSoundMemeAndPool(p0Lamports, isBonding, new BN(threshold))
+          .accounts({
+            authority: pk,
+            config: configPda,
+            memeMint: memeMintBuild.mint,
+            poolMemeVault,
+            poolWoodengVault,
+            lpMint: lpMintBuild.mint,
+            woodengMint: QUOTE_MINT,
+            projectWalletOwner: feeOwner,
+            projectWalletAta: lpFeeVault,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            rent: SYSVAR_RENT_PUBKEY,
+          })
+          .instruction();
 
 
 
@@ -1455,7 +1654,7 @@ const ixsPhase1: TransactionInstruction[] = [
   mdIx,                       // ← metadata BEFORE init
 ];
 
-// AMM needs creator’s MEME ATA in Phase-1; Bonding can defer it
+// AMM needs creator's MEME ATA in Phase-1; Bonding can defer it
 if (isAmm) {
   ixsPhase1.push(creatorMemeAtaIx);
 } else {
@@ -1472,25 +1671,30 @@ const founderQty = founderBuyTokens;
 
 if (isAmm) {
   if (totalSupply < initialMemeLiquidity) {
-    throw new Error("Initial meme liquidity cannot exceed total supply");
+    throw new Error(
+      `Initial meme liquidity (${initialMemeLiquidity.toLocaleString()}) cannot exceed total supply (${totalSupply.toLocaleString()}). ` +
+      `Reduce meme liquidity or increase total supply.`
+    );
   }
   const supplyToMint = totalSupply * 10 ** MEME_DECIMALS; // MEME_DECIMALS = 0
   ixsPhase1.push( // ✅ correct array in the happy path
     buildMintToIx(
       memeMintBuild.mint,
       creatorMemeAta,
-      wallet.publicKey!,
+      pk,
       supplyToMint
     )
   );
 
   // NOTE: userLpAtaIx will be sent in Phase 2
 
+  // Log the split so it's visible in console
+  console.log(`[AMM] Total supply: ${totalSupply}, Pool gets: ${initialMemeLiquidity}, Creator keeps: ${creatorKeeps}`);
 
   // 2) Fund quote (wrap SOL or ensure quote ATA)
     if (quoteToken === 'SOL') {
     // We will wrap SOL in Phase 2 right before addLiquidity
-    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
+    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, pk, false);
   } else {
     // We will create the WOODENG ATA idempotently in Phase 2
   }
@@ -1502,10 +1706,17 @@ if (isAmm) {
 ixsPhase1.push(initIx);
 
 
+// Derive HolderProfile PDA (used in prebuy for both code paths)
+const HOLDER_SEED_PREBUY = Buffer.from('holder');
+const [holderProfilePrebuy] = PublicKey.findProgramAddressSync(
+  [HOLDER_SEED_PREBUY, pk.toBuffer()],
+  cluster.poolProgramId,
+);
+
 // 4) Pool-specific (bonding) — prepare for Phase-2 only
 if (isBonding && founderQty > 0) {
 
-  await assertStakingReady(connection); // ✅ prevent 0xbc4
+  await assertStakingReady(conn, cluster.woodengMint, cluster.isV2, cluster.stakingProgramId); // ✅ prevent 0xbc4
 
   // read live pool params (fee, sold, curve) to quote accurately
   const live = await readPoolParams(poolProgram, configPda, {
@@ -1541,19 +1752,19 @@ const lamportsInBN = lamportsIn0.muln(102).divn(100).addn(1);
   const lamportsInNum = Number(lamportsInBN.toString());
   if (lamportsInNum > 0) {
     const FEE_PAD  = 30_000;
-    const wsolAta  = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
-    const wsolInfo = await connection.getAccountInfo(wsolAta);
-    const rent     = wsolInfo ? 0 : await connection.getMinimumBalanceForRentExemption(165);
+    const wsolAta  = await getAssociatedTokenAddress(NATIVE_MINT, pk, false);
+    const wsolInfo = await conn.getAccountInfo(wsolAta);
+    const rent     = wsolInfo ? 0 : await conn.getMinimumBalanceForRentExemption(165);
     const need     = lamportsInNum + rent + FEE_PAD;
 
-    const bal = await connection.getBalance(wallet.publicKey!);
+    const bal = await conn.getBalance(pk);
     if (bal < need) {
       throw new Error(
         `Not enough SOL to wrap ${(lamportsInNum/1e9).toFixed(9)} SOL and pay ~${(rent/1e9).toFixed(6)} SOL rent + fees. ` +
         `Keep at least ${(need/1e9).toFixed(6)} SOL.`
       );
     }
-    const w = await buildWrapSolIxs(wallet.publicKey!, lamportsInNum);
+    const w = await buildWrapSolIxs(pk, lamportsInNum);
     userWoodAta = w.ata;
     wrapIxs     = w.ixs;
   }
@@ -1561,7 +1772,7 @@ const lamportsInBN = lamportsIn0.muln(102).divn(100).addn(1);
  else {
 
     // ensure WOODENG ATA idempotently (Phase-2)
-    const res = await ensureAtaIx(wallet.publicKey!, QUOTE_MINT, wallet.publicKey!, false);
+    const res = await ensureAtaIx(pk, QUOTE_MINT, pk, false);
     userWoodAta        = res.ata;
     userWoodAtaIxPhase2 = res.ix;
   }
@@ -1573,17 +1784,16 @@ const lamportsInBN = lamportsIn0.muln(102).divn(100).addn(1);
     memeMint:         memeMintBuild.mint,
     poolMemeVault,
     poolWoodengVault,
-    buyer:            wallet.publicKey!,
+    buyer:            pk,
     buyerMemeAta:     creatorMemeAta,
     buyerWoodengAta:  userWoodAta,
     projectWalletAta: lpFeeVault,
-    
+    holderProfile:    holderProfilePrebuy,
 
     // 👇 REQUIRED by new Trade context
     stakingConfig:        stakingConfigPda,
     stakingRewardsVault:  stakingRewardsVaultPda,
-    // 👇 add this
-    stakingProgram: STAKING_PROGRAM_ID,
+    stakingProgram: cluster.stakingProgramId,
 
     tokenProgram:     TOKEN_PROGRAM_ID,
     systemProgram:    SystemProgram.programId,
@@ -1607,7 +1817,7 @@ if (isAmm) {
       config:          configPda,
       poolMemeVault,
       poolWoodengVault,
-      user:            wallet.publicKey!,
+      user:            pk,
       userMemeAta:     creatorMemeAta,
       userWoodengAta:  userWoodAta,
       lpMint:          lpMintBuild.mint,
@@ -1633,11 +1843,14 @@ if (isAmm) {
     "• Create MEME + LP mints",
     "• Write token metadata",
     ...(isAmm
-        ? ["• Create idempotent ATAs (creator + fee vault)"]
+        ? [
+            "• Create idempotent ATAs (creator + fee vault)",
+            `• Mint ${totalSupply.toLocaleString()} tokens to your wallet`,
+          ]
         : ["• Create idempotent ATAs (fee vault)"]),
     "• Initialize the pool (takes authorities)",
     isAmm
-  ? "• (AMM) Liquidity will follow as the next approval"
+  ? `• Next step: seed ${initialMemeLiquidity.toLocaleString()} MEME + ${initialQuoteLiquidity.toLocaleString()} ${quoteLabel} into pool (you keep ${creatorKeeps.toLocaleString()} MEME)`
   : `• (Bonding) Optional creator pre-buy: ${founderBuyPct.toFixed(2)}%`,
 
   ].join("\n")
@@ -1647,7 +1860,7 @@ if (isAmm) {
 
 
     try {
-      await sendIxsOnce(connection, wallet, ixsPhase1, signersPhase1, { skipPreflight: false });
+      await sendIxsOnce(cluster.connection, effectiveWalletForProvider, ixsPhase1, signersPhase1, { skipPreflight: false });
 
 
 // keep modal open; next step will update it
@@ -1662,6 +1875,29 @@ if (isBonding) {
       `Buying ~${founderBuyPct.toFixed(2)}% of supply before trading opens.`
     );
 
+    // Init HolderProfile if missing or stale (< 48 bytes = old struct without firstBuyTs)
+    const hpInfoPrebuy = await cluster.connection.getAccountInfo(holderProfilePrebuy);
+    if (!hpInfoPrebuy || hpInfoPrebuy.data.length < 48) {
+      const initHpIx = await poolProgram.methods
+        .initHolderProfile()
+        .accounts({
+          buyer:         pk,
+          holderProfile: holderProfilePrebuy,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction();
+      await sendIxsOnce(
+        cluster.connection, effectiveWalletForProvider,
+        [
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
+          initHpIx,
+        ],
+        [],
+        { skipPreflight: false }
+      );
+    }
+
     const phase2Bonding: TransactionInstruction[] = [
       ComputeBudgetProgram.setComputeUnitLimit({ units: 500_000 }),
       makeUniqueMemoIx('prebuy'),        // 👈 add this
@@ -1671,9 +1907,38 @@ if (isBonding) {
       founderBuyIxPhase2,
     ];
 
-    await sendIxsOnce(connection, wallet, phase2Bonding, [], { skipPreflight: true });
+    await sendIxsOnce(cluster.connection, effectiveWalletForProvider, phase2Bonding, [], { skipPreflight: true });
 
   }
+
+// ── Phase 3: Create Locker (bonding path) ────────────────────────────────
+showStep(totalSteps, totalSteps, "Creating Sound NFT locker",
+  "Setting up locker so fans can lock tokens → mint NFTs…"
+);
+
+const lockerBuild = await buildLockerIxs({
+  provider,
+  wallet: effectiveWalletForProvider,
+  memeMint: memeMintBuild.mint,
+  threshold,
+  metaUri,
+  memeName,
+  memeSymbol,
+  programId: cluster.programId,
+  isV2: cluster.isV2,
+});
+
+await sendIxsOnce(
+  cluster.connection, effectiveWalletForProvider,
+  [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+    makeUniqueMemoIx('init-locker'),
+    ...lockerBuild.ixs,
+  ],
+  lockerBuild.signers,
+  { skipPreflight: false }
+);
+
 closeSteps();
 setTradeModal({ open: true, memeMint: memeMintBuild.mint, configPda });
 setStatus("Sound Meme & Pool created!");
@@ -1683,26 +1948,26 @@ return; // wait for user to click the CTA
 
 
 
-// AMM: Phase 2 = seed liquidity (no locker)
+// AMM: Phase 2 = seed liquidity (then locker)
 if (isAmm && addLiqIxPhase2) {
   // --- simplified preflight: only LP ATA + quote ATA rent ---
   {
-    const rentAta = await connection.getMinimumBalanceForRentExemption(165);
+    const rentAta = await conn.getMinimumBalanceForRentExemption(165);
     let need = 30_000; // fee pad
-    const lpInfo = await connection.getAccountInfo(userLpAta);
+    const lpInfo = await conn.getAccountInfo(userLpAta);
     if (!lpInfo) need += rentAta;
 
     if (quoteToken === 'SOL') {
-      const wAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
-      const wInfo = await connection.getAccountInfo(wAta);
+      const wAta = await getAssociatedTokenAddress(NATIVE_MINT, pk, false);
+      const wInfo = await conn.getAccountInfo(wAta);
       if (!wInfo) need += rentAta;
     } else {
-      const qAta = await getAssociatedTokenAddress(QUOTE_MINT, wallet.publicKey!, false);
-      const qInfo = await connection.getAccountInfo(qAta);
+      const qAta = await getAssociatedTokenAddress(QUOTE_MINT, pk, false);
+      const qInfo = await conn.getAccountInfo(qAta);
       if (!qInfo) need += rentAta;
     }
 
-    const haveSol = await connection.getBalance(wallet.publicKey!);
+    const haveSol = await conn.getBalance(pk);
     if (haveSol < need) {
       throw new Error(`Not enough SOL for rent/fees (~${(need/1e9).toFixed(6)} SOL needed). Top up and retry.`);
     }
@@ -1719,16 +1984,16 @@ if (isAmm && addLiqIxPhase2) {
   if (quoteToken === 'SOL') {
     const lamportsNeeded = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
     if (lamportsNeeded > 0) {
-      const w = await buildWrapSolIxs(wallet.publicKey!, lamportsNeeded);
+      const w = await buildWrapSolIxs(pk, lamportsNeeded);
       userWoodAta = w.ata;
       phase2Ixs.push(...w.ixs);
     }
   } else {
-    const res = await ensureAtaIx(wallet.publicKey!, QUOTE_MINT, wallet.publicKey!, false);
+    const res = await ensureAtaIx(pk, QUOTE_MINT, pk, false);
     userWoodAta = res.ata;
     phase2Ixs.push(res.ix);
 
-    const bal = await connection.getTokenAccountBalance(userWoodAta).catch(() => null);
+    const bal = await conn.getTokenAccountBalance(userWoodAta).catch(() => null);
     const have = bal ? BigInt(bal.value.amount) : 0n;
     const need = BigInt(Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS));
     if (have < need) throw new Error(
@@ -1738,12 +2003,41 @@ if (isAmm && addLiqIxPhase2) {
 
   phase2Ixs.push(addLiqIxPhase2);
 
-  // show “step 3/3” (Upload=1, Create=2, Seed=3)
+  // show "step 3/3" (Upload=1, Create=2, Seed=3)
   showStep(3, totalSteps, "Seed liquidity",
-    `Deposit ${initialMemeLiquidity} ${memeSymbol} + ${initialQuoteLiquidity} ${quoteLabel} into the pool.`
+    `Depositing ${initialMemeLiquidity.toLocaleString()} ${memeSymbol} + ${initialQuoteLiquidity.toLocaleString()} ${quoteLabel} into the pool.\n` +
+    `You will keep ${creatorKeeps.toLocaleString()} ${memeSymbol} in your wallet.`
   );
-  await sendIxsOnce(connection, wallet, phase2Ixs, [], { skipPreflight: true });
+  await sendIxsOnce(cluster.connection, effectiveWalletForProvider, phase2Ixs, [], { skipPreflight: true });
 
+
+  // ── Phase 3: Create Locker (AMM path) ────────────────────────────────────
+  showStep(totalSteps, totalSteps, "Creating Sound NFT locker",
+    "Setting up locker so fans can lock tokens → mint NFTs…"
+  );
+
+  const lockerBuildAmm = await buildLockerIxs({
+    provider,
+    wallet: effectiveWalletForProvider as any,
+    memeMint: memeMintBuild.mint,
+    threshold,
+    metaUri,
+    memeName,
+    memeSymbol,
+    programId: cluster.programId,
+    isV2: cluster.isV2,
+  });
+
+  await sendIxsOnce(
+    cluster.connection, effectiveWalletForProvider,
+    [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+      makeUniqueMemoIx('init-locker'),
+      ...lockerBuildAmm.ixs,
+    ],
+    lockerBuildAmm.signers,
+    { skipPreflight: false }
+  );
 
   closeSteps();
 setTradeModal({ open: true, memeMint: memeMintBuild.mint, configPda });
@@ -1788,20 +2082,22 @@ if (isAmm) {
 
 if (isAmm) {
   if (totalSupply < initialMemeLiquidity) {
-    throw new Error("Initial meme liquidity cannot exceed total supply");
+    throw new Error(
+      `Initial meme liquidity (${initialMemeLiquidity.toLocaleString()}) exceeds total supply (${totalSupply.toLocaleString()}).`
+    );
   }
   const supplyToMint = totalSupply * 10 ** MEME_DECIMALS; // 0-decimals -> integer
   ixsP1.push(
     buildMintToIx(
       memeMintBuild.mint,
       creatorMemeAta,
-      wallet.publicKey!,
+      pk,
       supplyToMint
     ),
   );
   // LP ATA + quote funding will be sent in Phase 2
   if (quoteToken === 'SOL') {
-    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
+    userWoodAta = await getAssociatedTokenAddress(NATIVE_MINT, pk, false);
   }
 
 
@@ -1814,7 +2110,7 @@ ixsP1.push(initIx);
 if (isBonding) {
   const exactTargetP1 = founderBuyTokens;
 if (exactTargetP1 > 0) {
-  await assertStakingReady(connection); // ✅ prevent 0xbc4
+  await assertStakingReady(conn, cluster.woodengMint, cluster.isV2, cluster.stakingProgramId); // ✅ prevent 0xbc4
   const live = await readPoolParams(poolProgram, configPda, {
     p0Lamports,
     targetPriceLamports: targetPriceFor(QUOTE_MINT),
@@ -1843,12 +2139,12 @@ if (exactTargetP1 > 0) {
     if (quoteToken === 'SOL') {
   if (lamportsInNum > 0) {
     const FEE_PAD  = 30_000;
-    const wsolAta  = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
-    const wsolInfo = await connection.getAccountInfo(wsolAta);
-    const rent     = wsolInfo ? 0 : await connection.getMinimumBalanceForRentExemption(165);
+    const wsolAta  = await getAssociatedTokenAddress(NATIVE_MINT, pk, false);
+    const wsolInfo = await conn.getAccountInfo(wsolAta);
+    const rent     = wsolInfo ? 0 : await conn.getMinimumBalanceForRentExemption(165);
     const need     = lamportsInNum + rent + FEE_PAD;
 
-    const bal = await connection.getBalance(wallet.publicKey!);
+    const bal = await conn.getBalance(pk);
     if (bal < need) {
       throw new Error(
         `Not enough SOL to wrap ${(lamportsInNum/1e9).toFixed(9)} SOL and pay ~${(rent/1e9).toFixed(6)} SOL rent + fees. ` +
@@ -1856,12 +2152,12 @@ if (exactTargetP1 > 0) {
       );
     }
 
-    const w = await buildWrapSolIxs(wallet.publicKey!, lamportsInNum);
+    const w = await buildWrapSolIxs(pk, lamportsInNum);
     userWoodAta = w.ata;
     wrapIxs     = w.ixs; // send in Phase-2
   }
 } else {
-  const res = await ensureAtaIx(wallet.publicKey!, QUOTE_MINT, wallet.publicKey!, false);
+  const res = await ensureAtaIx(pk, QUOTE_MINT, pk, false);
   userWoodAta        = res.ata;
   userWoodAtaIxPhase2 = res.ix; // send in Phase-2
 }
@@ -1874,7 +2170,7 @@ if (exactTargetP1 > 0) {
     memeMint:         memeMintBuild.mint,
     poolMemeVault,
     poolWoodengVault,
-    buyer:            wallet.publicKey!,
+    buyer:            pk,
     buyerMemeAta:     creatorMemeAta,
     buyerWoodengAta:  userWoodAta,
     projectWalletAta: lpFeeVault,
@@ -1884,7 +2180,7 @@ if (exactTargetP1 > 0) {
     stakingConfig:        stakingConfigPda,
     stakingRewardsVault:  stakingRewardsVaultPda,
 
-    stakingProgram: STAKING_PROGRAM_ID,
+    stakingProgram: cluster.stakingProgramId,
     
 
     tokenProgram:     TOKEN_PROGRAM_ID,
@@ -1898,18 +2194,43 @@ if (exactTargetP1 > 0) {
 
 showStep(2, totalSteps, "Create mints + init",
   isAmm
-    ? "Creates mints/metadata/ATAs and initializes the pool. Liquidity will follow."
+    ? `Creates mints/metadata/ATAs and initializes the pool.\nMinting ${totalSupply.toLocaleString()} tokens. Liquidity seeding follows next.`
     : "Creates mints/metadata/ATAs and initializes the pool."
 );
 
 
 
-await sendIxsOnce(connection, wallet, ixsP1, signersPhase1, { skipPreflight: true });
+await sendIxsOnce(cluster.connection, effectiveWalletForProvider, ixsP1, signersPhase1, { skipPreflight: true });
 
 
 
 // Bonding Phase-2 (metadata + ATAs + founder buy)
 if (isBonding) {
+  // Init HolderProfile if missing or stale before prebuy
+  if (founderBuyIxPhase2) {
+    const hpInfoSplit = await cluster.connection.getAccountInfo(holderProfilePrebuy);
+    if (!hpInfoSplit || hpInfoSplit.data.length < 48) {
+      const initHpIxSplit = await poolProgram.methods
+        .initHolderProfile()
+        .accounts({
+          buyer:         pk,
+          holderProfile: holderProfilePrebuy,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction();
+      await sendIxsOnce(
+        cluster.connection, effectiveWalletForProvider,
+        [
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
+          initHpIxSplit,
+        ],
+        [],
+        { skipPreflight: false }
+      );
+    }
+  }
+
   const phase2BondingSplit: TransactionInstruction[] = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: 500_000 }),
     makeUniqueMemoIx('prebuy'),        // 👈 add this
@@ -1921,7 +2242,7 @@ if (isBonding) {
 
  showStep(totalSteps === 3 ? 3 : 2, totalSteps, "Creator pre-buy");
 try {
-  await sendIxsOnce(connection, wallet, phase2BondingSplit, [], { skipPreflight: true });
+  await sendIxsOnce(cluster.connection, effectiveWalletForProvider, phase2BondingSplit, [], { skipPreflight: true });
 
 } catch (e: any) {
   const joined = (e?.logs ? (e.logs as string[]).join(" ") : "").toLowerCase();
@@ -1933,7 +2254,34 @@ try {
 }
 
 
-  // ✅ Redirect after success
+  // ✅ Phase 3: Create Locker (split bonding path)
+  showStep(totalSteps, totalSteps, "Creating Sound NFT locker",
+    "Setting up locker so fans can lock tokens → mint NFTs…"
+  );
+
+  const lockerBuildSplitB = await buildLockerIxs({
+    provider,
+    wallet: effectiveWalletForProvider as any,
+    memeMint: memeMintBuild.mint,
+    threshold,
+    metaUri,
+    memeName,
+    memeSymbol,
+    programId: cluster.programId,
+    isV2: cluster.isV2,
+  });
+
+  await sendIxsOnce(
+    cluster.connection, effectiveWalletForProvider,
+    [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+      makeUniqueMemoIx('init-locker'),
+      ...lockerBuildSplitB.ixs,
+    ],
+    lockerBuildSplitB.signers,
+    { skipPreflight: false }
+  );
+
   closeSteps();
 setTradeModal({ open: true, memeMint: memeMintBuild.mint, configPda });
 setStatus("Sound Meme & Pool created!");
@@ -1954,7 +2302,7 @@ if (isAmm) {
       config:          configPda,
       poolMemeVault,
       poolWoodengVault,
-      user:            wallet.publicKey!,
+      user:            pk,
       userMemeAta:     creatorMemeAta,
       userWoodengAta:  userWoodAta,
       lpMint:          lpMintBuild.mint,
@@ -1965,23 +2313,23 @@ if (isAmm) {
 
   // --- Phase-2 preflight (AMM, simplified: LP ATA + quote ATA only) ---
 {
-  const rentAta = await connection.getMinimumBalanceForRentExemption(165);
+  const rentAta = await conn.getMinimumBalanceForRentExemption(165);
   let need = 30_000; // fee pad
 
-  const lpInfo = await connection.getAccountInfo(userLpAta);
+  const lpInfo = await conn.getAccountInfo(userLpAta);
   if (!lpInfo) need += rentAta;
 
   if (quoteToken === 'SOL') {
-    const wAta = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
-    const wInfo = await connection.getAccountInfo(wAta);
+    const wAta = await getAssociatedTokenAddress(NATIVE_MINT, pk, false);
+    const wInfo = await conn.getAccountInfo(wAta);
     if (!wInfo) need += rentAta;
   } else {
-    const qAta = await getAssociatedTokenAddress(QUOTE_MINT, wallet.publicKey!, false);
-    const qInfo = await connection.getAccountInfo(qAta);
+    const qAta = await getAssociatedTokenAddress(QUOTE_MINT, pk, false);
+    const qInfo = await conn.getAccountInfo(qAta);
     if (!qInfo) need += rentAta;
   }
 
-  const haveSol = await connection.getBalance(wallet.publicKey!);
+  const haveSol = await conn.getBalance(pk);
   if (haveSol < need) {
     throw new Error(`Not enough SOL for rent/fees (~${(need/1e9).toFixed(6)} SOL needed). Top up and retry.`);
   }
@@ -2003,12 +2351,12 @@ if (isAmm) {
     const lamportsNeeded2 = Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS);
     if (lamportsNeeded2 > 0) {
       const FEE_PAD  = 30_000;
-      const wsolAta  = await getAssociatedTokenAddress(NATIVE_MINT, wallet.publicKey!, false);
-      const wsolInfo = await connection.getAccountInfo(wsolAta);
-      const rent     = wsolInfo ? 0 : await connection.getMinimumBalanceForRentExemption(165);
+      const wsolAta  = await getAssociatedTokenAddress(NATIVE_MINT, pk, false);
+      const wsolInfo = await conn.getAccountInfo(wsolAta);
+      const rent     = wsolInfo ? 0 : await conn.getMinimumBalanceForRentExemption(165);
       const need     = lamportsNeeded2 + rent + FEE_PAD;
 
-      const bal = await connection.getBalance(wallet.publicKey!);
+      const bal = await conn.getBalance(pk);
       if (bal < need) {
         throw new Error(
           `Not enough SOL to wrap ${(lamportsNeeded2/1e9).toFixed(9)} SOL and pay ~${(rent/1e9).toFixed(6)} SOL rent + fees. ` +
@@ -2016,17 +2364,17 @@ if (isAmm) {
         );
       }
 
-      const w2 = await buildWrapSolIxs(wallet.publicKey!, lamportsNeeded2);
+      const w2 = await buildWrapSolIxs(pk, lamportsNeeded2);
       userWoodAta = w2.ata;
       phase2IxsSplit.push(...w2.ixs);
     }
   } else {
-    const res2 = await ensureAtaIx(wallet.publicKey!, QUOTE_MINT, wallet.publicKey!, false);
+    const res2 = await ensureAtaIx(pk, QUOTE_MINT, pk, false);
     userWoodAta = res2.ata;
     phase2IxsSplit.push(res2.ix);
 
     // Optional: assert WOODENG balance is enough
-    const bal = await connection.getTokenAccountBalance(userWoodAta).catch(() => null);
+    const bal = await conn.getTokenAccountBalance(userWoodAta).catch(() => null);
     const have = bal ? BigInt(bal.value.amount) : 0n;
     const need = BigInt(Math.floor(initialQuoteLiquidity * 10 ** QUOTE_DECIMALS));
     if (have < need) {
@@ -2041,13 +2389,42 @@ if (isAmm) {
 
   // Send (A)
   showStep(3, totalSteps, "Seed liquidity",
-    `Deposit ${initialMemeLiquidity} ${memeSymbol} + ${initialQuoteLiquidity} ${quoteLabel} into the pool.`);
-  await sendIxsOnce(connection, wallet, phase2IxsSplit, [], { skipPreflight: true });
+    `Depositing ${initialMemeLiquidity.toLocaleString()} ${memeSymbol} + ${initialQuoteLiquidity.toLocaleString()} ${quoteLabel} into the pool.\n` +
+    `You will keep ${creatorKeeps.toLocaleString()} ${memeSymbol} in your wallet.`
+  );
+  await sendIxsOnce(cluster.connection, effectiveWalletForProvider, phase2IxsSplit, [], { skipPreflight: true });
 
 
 
 
-// ✅ Redirect immediately
+// ✅ Phase 3: Create Locker (split AMM path)
+showStep(totalSteps, totalSteps, "Creating Sound NFT locker",
+  "Setting up locker so fans can lock tokens → mint NFTs…"
+);
+
+const lockerBuildSplitA = await buildLockerIxs({
+  provider,
+  wallet: effectiveWalletForProvider,
+  memeMint: memeMintBuild.mint,
+  threshold,
+  metaUri,
+  memeName,
+  memeSymbol,
+  programId: cluster.programId,
+  isV2: cluster.isV2,
+});
+
+await sendIxsOnce(
+  cluster.connection, effectiveWalletForProvider,
+  [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+    makeUniqueMemoIx('init-locker'),
+    ...lockerBuildSplitA.ixs,
+  ],
+  lockerBuildSplitA.signers,
+  { skipPreflight: false }
+);
+
 closeSteps();
 setTradeModal({ open: true, memeMint: memeMintBuild.mint, configPda });
 setStatus("Sound Meme & Pool created!");
@@ -2068,7 +2445,7 @@ return; // wait for user to click the CTA
         extra = '\n' + logs.join('\n');
         const low = logs.join(' ').toLowerCase();
         if (low.includes('createidempotent') && low.includes('insufficient lamports')) {
-          const rent = await connection.getMinimumBalanceForRentExemption(165);
+          const rent = await conn.getMinimumBalanceForRentExemption(165);
           friendly = `Not enough SOL to create a token account (~${(rent/1e9).toFixed(6)} SOL per new account). Top up a little SOL and retry.\n\n`;
         }
       }
@@ -2100,8 +2477,8 @@ return; // wait for user to click the CTA
     setStatus("Searching...")
     try {
       const addr = new PublicKey(searchAddress.trim())
-      const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" })
-      const program = new Program(idlJson as Idl, PROGRAM_ID, provider)
+      const provider = new AnchorProvider(cluster.connection, wallet as any, { preflightCommitment: "confirmed" })
+      const program = new Program((cluster.isV2 ? lockerIdlV2Json : idlJson) as Idl, cluster.programId, provider)
       const locker = await program.account.lockerState.fetch(addr)
       setSearchResult({
         memeName: locker.memeName as string,
@@ -2120,31 +2497,38 @@ return; // wait for user to click the CTA
 
   // ====== LOCK & MINT and BURN & UNLOCK ======
   async function lockTokensForMeme(locker: LockerResult) {
-  if (!wallet.publicKey || !locker) return;
+  if (!effectivePublicKey || !locker) return;
   setStatus("Locking tokens & minting NFT...");
   try {
+    const pk = effectivePublicKey!;
     const { memeMint, nftMint, lockerPda } = locker;
+    const effectiveWallet = {
+      publicKey: pk,
+      signTransaction: (wallet.signTransaction ?? unifiedSignTransaction) as any,
+      signAllTransactions: (wallet.signAllTransactions ?? ((txs: any[]) => Promise.all(txs.map((tx: any) => (wallet.signTransaction ?? unifiedSignTransaction)(tx))))) as any,
+      sendTransaction: wallet.sendTransaction,
+    };
 
-    const userMemeToken    = await ensureAtaExists(wallet.publicKey, memeMint, wallet.publicKey, wallet, false);
-    const lockerMemeAccount= await ensureAtaExists(lockerPda,       memeMint, wallet.publicKey, wallet, true);
-    const userNftToken     = await ensureAtaExists(wallet.publicKey, nftMint, wallet.publicKey, wallet, false);
+    const userMemeToken    = await ensureAtaExists(pk, memeMint, pk, effectiveWallet as any, false, cluster.connection);
+    const lockerMemeAccount= await ensureAtaExists(lockerPda, memeMint, pk, effectiveWallet as any, true,  cluster.connection);
+    const userNftToken     = await ensureAtaExists(pk, nftMint, pk, effectiveWallet as any, false, cluster.connection);
 
     // 👇 required by IDL
     const metadata = findMetadataPda(nftMint);
     const edition  = findMasterEditionPda(nftMint); // 👈 add this
 
-    const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" });
-    const program  = new Program(idlJson as Idl, PROGRAM_ID, provider);
+    const provider = new AnchorProvider(cluster.connection, effectiveWallet as any, { preflightCommitment: "confirmed" });
+    const lockerProgram = new Program((cluster.isV2 ? lockerIdlV2Json : idlJson) as Idl, cluster.programId, provider);
 
     // use values already stored on the locker (your IDL has these fields)
     const name   = String(locker.memeName ?? "Sound Meme");
     const symbol = String(locker.memeSymbol ?? "SMEME");
     const uri    = String(locker.memeUri ?? ""); // if blank, pass your coin JSON
 
-    const ix = await program.methods
+    const ix = await lockerProgram.methods
   .lockTokensAndMintNft(name, symbol, uri)
   .accounts({
-    user: wallet.publicKey,
+    user: pk,
     locker: lockerPda,
     userMemeAccount: userMemeToken,
     lockerMemeAccount,
@@ -2159,7 +2543,9 @@ return; // wait for user to click the CTA
   })
   .instruction();
 
-await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
+console.log('[LockNFT] lockerProgram.programId:', lockerProgram.programId.toString());
+console.log('[LockNFT] tokenMetadataProgram:', TOKEN_METADATA_PROGRAM_ID.toString());
+await sendIxsOnce(cluster.connection, effectiveWallet, [ix], [], { skipPreflight: false });
 
 
     setStatus("Tokens locked and NFT minted!");
@@ -2169,26 +2555,33 @@ await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
 }
 
   async function burnNftAndUnlockTokens(locker: LockerResult) {
-    if (!wallet.publicKey || !locker) return
+    if (!effectivePublicKey || !locker) return
     setStatus("Burning NFT and unlocking tokens...")
     try {
+      const pk = effectivePublicKey!;
+      const effectiveWallet = {
+        publicKey: pk,
+        signTransaction: (wallet.signTransaction ?? unifiedSignTransaction) as any,
+        signAllTransactions: (wallet.signAllTransactions ?? ((txs: any[]) => Promise.all(txs.map((tx: any) => (wallet.signTransaction ?? unifiedSignTransaction)(tx))))) as any,
+        sendTransaction: wallet.sendTransaction,
+      };
       const memeMint = locker.memeMint
       const nftMint = locker.nftMint
       const lockerPda = locker.lockerPda
-      const userMemeToken = await ensureAtaExists(wallet.publicKey, memeMint, wallet.publicKey,wallet, false)
-      const lockerMemeAccount = await ensureAtaExists(lockerPda, memeMint, wallet.publicKey,wallet, true)
-      const userNftToken = await ensureAtaExists(wallet.publicKey, nftMint, wallet.publicKey,wallet, false)
+      const userMemeToken = await ensureAtaExists(pk, memeMint, pk, effectiveWallet as any, false, cluster.connection)
+      const lockerMemeAccount = await ensureAtaExists(lockerPda, memeMint, pk, effectiveWallet as any, true, cluster.connection)
+      const userNftToken = await ensureAtaExists(pk, nftMint, pk, effectiveWallet as any, false, cluster.connection)
 
 
 
-      
 
-      const provider = new AnchorProvider(connection, wallet as any, { preflightCommitment: "confirmed" })
-      const program = new Program(idlJson as Idl, PROGRAM_ID, provider)
+
+      const provider = new AnchorProvider(cluster.connection, effectiveWallet as any, { preflightCommitment: "confirmed" })
+      const program = new Program((cluster.isV2 ? lockerIdlV2Json : idlJson) as Idl, cluster.programId, provider)
       const ix = await program.methods
   .burnNftAndUnlockTokens()
   .accounts({
-    user: wallet.publicKey,
+    user: pk,
     userMemeAccount: userMemeToken,
     locker: lockerPda,
     lockerMemeAccount: lockerMemeAccount,
@@ -2198,7 +2591,7 @@ await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
   })
   .instruction();
 
-await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
+await sendIxsOnce(cluster.connection, effectiveWallet, [ix], [], { skipPreflight: false });
 
       setStatus("NFT burned and tokens unlocked!")
     } catch (e: unknown) {
@@ -2210,6 +2603,7 @@ await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
 
   return (
     <div className="bg-[#181920] text-white min-h-screen pt-[92px] sm:pt-[108px] pb-8 sm:pb-12 px-4 sm:px-6 flex flex-col items-center">
+
       <ModalPortal>
   <StepModal
     open={txStep.open}
@@ -2239,7 +2633,7 @@ await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
           ✕
         </button>
 
-        <h2 className="text-2xl font-bold mb-4">Sound Meme Created!</h2>
+        <h2 className="text-2xl font-bold mb-4">Culture Meme Created! 💎</h2>
 
         <p className="break-all text-sm bg-[#23252b] rounded p-3 mb-6">
           {tradeModal.memeMint.toBase58()}
@@ -2256,7 +2650,7 @@ await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
             window.scrollTo(0, 0)
           }}
         >
-          Trade your Sound Meme
+          Trade your Culture Meme 🚀
         </button>
       </div>
     </div>
@@ -2267,9 +2661,9 @@ await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
 
       {/* Back to selection */}
       <div className="w-full max-w-2xl mx-auto mb-4">
-        <Link href="/create" className="flex items-center gap-2 text-[#8d95a5] hover:text-[#4ECDC4] mb-2">
+        <Link href="/sound-memes" className="flex items-center gap-2 text-[#8d95a5] hover:text-[#4ECDC4] mb-2">
           <ArrowLeft className="w-4 h-4" />
-          Back to selection
+          Back to memes
         </Link>
       </div>
 
@@ -2277,326 +2671,445 @@ await sendIxsOnce(connection, wallet, [ix], [], { skipPreflight: false });
       <div className="w-full max-w-2xl mx-auto flex flex-col md:flex-row md:justify-between md:items-center mb-4">
         <div>
           <h1 className="text-3xl font-extrabold bg-gradient-to-r from-[#FF6B6B] to-[#4ECDC4] bg-clip-text text-transparent mb-1">
-            Create Sound Meme
+            Create Your Token
           </h1>
           <p className="mb-6 text-[#b5b5be]">
-            Create your SWL-444 sound meme NFT with liquidity pool 🚀
+            Launch your SWL-444 token — bonding fairlaunch, gated, auto-graduating to Meteora 🚀
           </p>
         </div>
-        <div className="mb-4 md:mb-0 flex justify-end">
-  <WalletMultiButton className="w-full sm:w-auto" />
-</div>
-
       </div>
 
-      {/* Form container with rainbow border only, no outer black */}
-      <div className="w-full max-w-2xl mx-auto space-y-8">
+      {/* ── WIZARD ── */}
+      <div className="w-full max-w-2xl mx-auto space-y-5">
 
-        <div className="bg-gradient-to-r from-[#FF6B6B] via-[#4ECDC4] to-[#FFE66D] p-[2.5px] rounded-2xl">
-          <div className="bg-[#181920] rounded-[18px] p-8 md:p-12">
-            <form onSubmit={e => { e.preventDefault(); handleCreateAll() }} className="space-y-8">
-
-              {/* Meme Details Card */}
-              <div>
-                <div className="flex items-center gap-3 mb-5">
-                  <Fire className="w-5 h-5 text-[#FF6B6B]" />
-                  <h2 className="text-xl font-semibold">Meme Details</h2>
-                </div>
-                <div className="mb-4">
-                  <label className="block mb-1 font-medium">Name</label>
-                  <input className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2 mb-3" value={memeName} onChange={e => setMemeName(e.target.value)} maxLength={32} />
-                  <label className="block mb-1 font-medium">Ticker</label>
-                  <input className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2 mb-3" value={memeSymbol} onChange={e => setMemeSymbol(e.target.value)} maxLength={10} />
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-                    <div>
-                      <label className="block mb-1 font-medium">Total Supply</label>
-                      <input
-  type="number"
-  className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
-  value={totalSupply}
-  onChange={e => setTotalSupply(Number(e.target.value) || 0)}
-  disabled={isBonding}
-/>
-<span className="text-xs text-[#aaa]">
-  {isBonding
-    ? 'Fixed at 444,000,000 for bonding fairlaunch'
-    : 'Set the supply for your meme coin'}
-</span>
-
+        {/* Progress Bar */}
+        <div className="bg-[#13141b] rounded-2xl border border-[#1e1f2e] px-5 py-4">
+          <div className="flex items-center">
+            {WIZARD_STEPS.map((s, i) => {
+              const completed = wizardStep > s.num;
+              const active = wizardStep === s.num;
+              return (
+                <React.Fragment key={s.num}>
+                  <button
+                    type="button"
+                    onClick={() => { if (completed) setWizardStep(s.num); }}
+                    className={`flex flex-col items-center gap-1.5 ${completed ? 'cursor-pointer' : 'cursor-default'}`}
+                  >
+                    <div
+                      className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
+                        completed ? 'bg-[#4ECDC4] text-black shadow-[0_0_8px_rgba(78,205,196,0.4)]'
+                          : active ? 'text-black shadow-[0_0_12px_rgba(255,195,113,0.5)]'
+                          : 'bg-[#1e1f2e] text-[#3d4155]'
+                      }`}
+                      style={active ? { background: 'linear-gradient(135deg, #ffc371, #ff6b6b)' } : undefined}
+                    >
+                      {completed ? '✓' : s.num}
                     </div>
+                    <span className={`text-[9px] font-semibold hidden sm:block tracking-wider ${active ? 'text-[#ffc371]' : completed ? 'text-[#4ECDC4]' : 'text-[#2a2d3a]'}`}>
+                      {s.label.toUpperCase()}
+                    </span>
+                  </button>
+                  {i < WIZARD_STEPS.length - 1 && (
+                    <div
+                      className="flex-1 h-px mx-2 transition-all duration-500"
+                      style={{ background: wizardStep > s.num ? '#4ECDC4' : '#1e1f2e' }}
+                    />
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Step card */}
+        <div className="bg-gradient-to-r from-[#FF6B6B] via-[#4ECDC4] to-[#FFE66D] p-[2px] rounded-2xl">
+          <div className="bg-[#0f1016] rounded-[18px] p-7 md:p-10">
+            <form onSubmit={e => { e.preventDefault(); handleCreateAll(); }}>
+
+              {/* ── Step 1: Identity & Media ── */}
+              {wizardStep === 1 && (
+                <div className="space-y-5 animate-fadeIn">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style={{ background: 'linear-gradient(135deg, #ffc371, #ff6b6b)' }}>🎭</div>
                     <div>
-                      <label className="block mb-1 font-medium">Threshold (for NFT Mint)</label>
-                      <input type="number" className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2" value={threshold} onChange={e => setThreshold(Number(e.target.value) || 0)} />
-                      <span className="text-xs text-[#aaa]">Number of tokens required to mint the NFT</span>
+                      <h2 className="text-xl font-bold">Identity & Media</h2>
+                      <p className="text-sm text-[#6b7084]">Name your token and upload its visuals and sound</p>
                     </div>
                   </div>
-                  <label className="block mt-4 mb-1 font-medium">Description</label>
-                  <textarea className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2 mb-2" value={memeDescription} onChange={e => setMemeDescription(e.target.value)} maxLength={256} />
-
-
-                    {/* Socials (optional) */}
-<div className="mt-4">
-  <label className="block mb-2 font-bold">
-    Socials <span className="text-xs font-normal text-[#9aa1af]">(optional)</span>
-  </label>
-
-  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-    {/* X / Twitter */}
-    <div className="relative">
-      <div className="absolute left-3 top-2.5">
-        <Twitter className="w-4 h-4 text-[#b5b5be]" />
-      </div>
-      <input
-        className="w-full bg-[#181920] border border-[#282a31] rounded pl-9 pr-3 py-2"
-        placeholder="@handle or https://x.com/handle"
-        value={xUrl}
-        onChange={(e) => setXUrl(e.target.value)}
-      />
-    </div>
-
-    {/* Telegram */}
-    <div className="relative">
-      <div className="absolute left-3 top-2.5">
-        <Send className="w-4 h-4 text-[#b5b5be]" />
-      </div>
-      <input
-        className="w-full bg-[#181920] border border-[#282a31] rounded pl-9 pr-3 py-2"
-        placeholder="@channel or https://t.me/channel"
-        value={tgUrl}
-        onChange={(e) => setTgUrl(e.target.value)}
-      />
-    </div>
-
-    {/* Website */}
-    <div className="relative">
-      <div className="absolute left-3 top-2.5">
-        <Globe className="w-4 h-4 text-[#b5b5be]" />
-      </div>
-      <input
-        className="w-full bg-[#181920] border border-[#282a31] rounded pl-9 pr-3 py-2"
-        placeholder="myproject.xyz or https://…"
-        value={websiteUrl}
-        onChange={(e) => setWebsiteUrl(e.target.value)}
-      />
-    </div>
-  </div>
-
-  {/* tiny helper */}
-  <p className="text-[11px] text-[#8d95a5] mt-2">
-    Tips: Enter a <b>@handle</b> (X / Telegram) or paste a URL. We will automatically format the links.
-  </p>
-</div>
-
+                  <div className="grid grid-cols-1 lg:grid-cols-[1fr_200px] gap-6">
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-semibold mb-1.5 text-[#d6daf6]">Token Name <span className="text-[#ff6b6b]">*</span></label>
+                        <input
+                          className="w-full bg-[#13141b] border border-[#282a31] rounded-xl px-4 py-3 text-white placeholder-[#3d4155] focus:outline-none focus:border-[#ffc371] transition"
+                          placeholder="e.g. WoodSqueeze"
+                          value={memeName}
+                          onChange={e => setMemeName(e.target.value)}
+                          maxLength={32}
+                        />
+                        <p className="text-[10px] text-[#3d4155] mt-1 text-right">{memeName.length}/32</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold mb-1.5 text-[#d6daf6]">Ticker Symbol <span className="text-[#ff6b6b]">*</span></label>
+                        <input
+                          className="w-full bg-[#13141b] border border-[#282a31] rounded-xl px-4 py-3 text-white placeholder-[#3d4155] focus:outline-none focus:border-[#ffc371] transition font-mono tracking-widest uppercase"
+                          placeholder="TICKER"
+                          value={memeSymbol}
+                          onChange={e => setMemeSymbol(e.target.value.toUpperCase())}
+                          maxLength={10}
+                        />
+                        <p className="text-[10px] text-[#3d4155] mt-1 text-right">{memeSymbol.length}/10</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold mb-1.5 text-[#d6daf6]">Description <span className="text-[#3d4155] font-normal">(optional)</span></label>
+                        <textarea
+                          className="w-full bg-[#13141b] border border-[#282a31] rounded-xl px-4 py-3 text-white placeholder-[#3d4155] focus:outline-none focus:border-[#ffc371] transition resize-none"
+                          rows={3}
+                          placeholder="What's the vibe of this token?"
+                          value={memeDescription}
+                          onChange={e => setMemeDescription(e.target.value)}
+                          maxLength={500}
+                        />
+                        <p className="text-[10px] text-[#3d4155] mt-1 text-right">{memeDescription.length}/500</p>
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => setSocialsOpen(o => !o)}
+                          className="flex items-center gap-2 text-sm font-semibold text-[#6b7084] hover:text-white transition mb-2"
+                        >
+                          <span className="w-4 text-center">{socialsOpen ? '−' : '+'}</span>
+                          Add socials
+                          <span className="text-xs font-normal">(optional)</span>
+                        </button>
+                        {socialsOpen && (
+                          <div className="space-y-2">
+                            <div className="relative">
+                              <Twitter className="absolute left-3 top-2.5 w-4 h-4 text-[#3d4155]" />
+                              <input className="w-full bg-[#13141b] border border-[#282a31] rounded-xl pl-9 pr-3 py-2 text-white placeholder-[#3d4155] focus:outline-none focus:border-[#ffc371] transition" placeholder="@handle or https://x.com/…" value={xUrl} onChange={e => setXUrl(e.target.value)} />
+                            </div>
+                            <div className="relative">
+                              <Send className="absolute left-3 top-2.5 w-4 h-4 text-[#3d4155]" />
+                              <input className="w-full bg-[#13141b] border border-[#282a31] rounded-xl pl-9 pr-3 py-2 text-white placeholder-[#3d4155] focus:outline-none focus:border-[#ffc371] transition" placeholder="@channel or https://t.me/…" value={tgUrl} onChange={e => setTgUrl(e.target.value)} />
+                            </div>
+                            <div className="relative">
+                              <Globe className="absolute left-3 top-2.5 w-4 h-4 text-[#3d4155]" />
+                              <input className="w-full bg-[#13141b] border border-[#282a31] rounded-xl pl-9 pr-3 py-2 text-white placeholder-[#3d4155] focus:outline-none focus:border-[#ffc371] transition" placeholder="myproject.xyz" value={websiteUrl} onChange={e => setWebsiteUrl(e.target.value)} />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {/* Live Preview */}
+                    <div>
+                      <p className="text-[9px] font-semibold text-[#3d4155] uppercase tracking-widest mb-2">Preview</p>
+                      <div className="rounded-xl border border-[#282a31] bg-[#13141b] p-3">
+                        <div className="aspect-square rounded-lg bg-[#1a1b22] flex items-center justify-center mb-2 overflow-hidden">
+                          {coverImageUri
+                            ? <img src={coverImageUri.replace('ipfs://', 'https://ipfs.io/ipfs/')} className="w-full h-full object-cover" alt="" />
+                            : <span className="text-3xl opacity-20">🎵</span>
+                          }
+                        </div>
+                        <div className="font-bold text-sm text-white truncate">{memeName || <span className="text-[#3d4155]">Token Name</span>}</div>
+                        <div className="text-xs text-[#ffc371] font-mono mt-0.5">{memeSymbol || <span className="text-[#3d4155]">TICKER</span>}</div>
+                        {memeDescription && <p className="text-[10px] text-[#6b7084] mt-1 line-clamp-2">{memeDescription}</p>}
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#ffc371]/10 border border-[#ffc371]/20 text-[#ffc371] font-bold">444M</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-300 font-bold">SWL-444</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Media uploads */}
+                  <div>
+                    <label className="block text-sm font-semibold mb-2 text-[#d6daf6]">Cover Image <span className="text-[#6b7084] font-normal">(optional)</span></label>
+                    <FileUploader onUri={(uri, type) => { setCoverImageUri(uri); setCoverImageMime(type); }} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold mb-2 text-[#d6daf6]">Audio File <span className="text-[#ff6b6b]">*</span></label>
+                    <FileUploader onUri={(uri, type) => { setAudioUri(uri); setFileType(type); setAudioMime(type); }} />
+                    <div className="mt-2 p-3 rounded-xl bg-[#13141b] border border-[#282a31] text-xs text-[#6b7084] flex items-center gap-2">
+                      <Info className="w-4 h-4 shrink-0 text-[#4ECDC4]" />
+                      Max 3 minutes · MP3 / M4A(AAC) / OGG · Max 25 MB
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-xl border" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.08), rgba(8,145,178,0.08))', borderColor: 'rgba(124,58,237,0.2)' }}>
+                    <div className="flex items-start gap-3">
+                      <span className="text-xl">✨</span>
+                      <div>
+                        <p className="text-sm font-semibold text-white">Living Meme</p>
+                        <p className="text-xs text-[#6b7084] mt-1">Your token's metadata can be updated over time — swap the audio, refresh the artwork, evolve the story.</p>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="block mb-1 font-bold">Cover Image</label>
-                  <span className="text-sm">Image (PNG/JPG, optional but recommended)</span>
-                  <FileUploader onUri={(uri, type) => { setCoverImageUri(uri); setCoverImageMime(type); }} />
+              )}
 
-
-
-                  <label className="block mb-1 font-bold">Media File</label>
-                  <span className="text-sm">Audio *</span>
-                  <FileUploader onUri={(uri, type) => { setAudioUri(uri); setFileType(type); setAudioMime(type); }} />
-
-
-
-                  <div className="mt-2 p-2 rounded bg-[#262735] text-[12px] sm:text-sm flex items-center gap-2">
-  <Info className="w-4 h-4" />
-  Maximum duration: 3 minutes. Formats: MP3 / M4A(AAC) / OGG (max 25 MB)
-</div>
-
+              {/* ── Step 2: Economics ── */}
+              {wizardStep === 2 && (
+                <div className="space-y-6 animate-fadeIn">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style={{ background: 'linear-gradient(135deg, #FFE66D, #f7b733)' }}>💰</div>
+                    <div>
+                      <h2 className="text-xl font-bold">Economics</h2>
+                      <p className="text-sm text-[#6b7084]">Configure your token's market parameters</p>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold mb-3 text-[#d6daf6]">Launch Currency</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {([
+                        { key: 'WOODENG' as const, title: 'WOODENG', blurb: 'Ecosystem token — better pool promotion' },
+                        { key: 'SOL' as const, title: 'SOL', blurb: 'Auto-wrapped to wSOL under the hood' },
+                      ]).map(opt => {
+                        const active = quoteToken === opt.key;
+                        return (
+                          <button key={opt.key} type="button" onClick={() => setQuoteToken(opt.key)}
+                            className={`text-left rounded-xl border p-4 transition ${active ? 'border-[#ffc371] bg-[#ffc371]/5' : 'border-[#282a31] bg-[#13141b] hover:bg-[#1a1b22]'}`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold">{opt.title}</span>
+                              {active && <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#ffc371] text-black font-bold">✓</span>}
+                            </div>
+                            <p className="text-xs text-[#6b7084] mt-1">{opt.blurb}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[11px] text-[#3d4155] mt-2">Traders will buy your token with <b className="text-[#6b7084]">{quoteLabel}</b></p>
+                  </div>
+                  {isBonding && (
+                    <div className="p-4 rounded-xl bg-[#13141b] border border-[#282a31]">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Volume2 className="w-4 h-4 text-[#FFE66D]" />
+                        <span className="font-semibold text-sm text-[#d6daf6]">Creator Pre-Buy</span>
+                        <span className="text-xs text-[#3d4155] ml-1">max 1%</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input type="range" min={0} max={1} step={0.01} value={founderBuyPct}
+                          onChange={e => setFounderBuyPct(Math.max(0, Math.min(1, Number(e.target.value))))}
+                          className="w-full accent-[#ffc371]"
+                        />
+                        <span className="w-14 text-right tabular-nums text-sm font-mono font-bold text-[#ffc371]">{founderBuyPct.toFixed(2)}%</span>
+                      </div>
+                      <p className="text-xs text-[#6b7084] mt-2">You'll pre-buy <b className="text-white">{fmt(founderBuyTokens)}</b> tokens at launch</p>
+                      <p className="text-xs text-[#3d4155] mt-1">Pool graduates at ~1.4M {quoteLabel} market cap</p>
+                    </div>
+                  )}
+                  {isAmm && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-semibold mb-1.5 text-[#d6daf6]">Meme tokens → Pool</label>
+                          <input type="number" value={initialMemeLiquidity}
+                            onChange={e => setInitialMemeLiquidity(Number(e.target.value) || 0)}
+                            className="w-full bg-[#13141b] border border-[#282a31] rounded-xl px-4 py-3 text-white focus:outline-none focus:border-[#ffc371] transition"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-semibold mb-1.5 text-[#d6daf6]">{quoteLabel} → Pool</label>
+                          <input type="number" value={initialQuoteLiquidity}
+                            onChange={e => setInitialQuoteLiquidity(Number(e.target.value) || 0)}
+                            className="w-full bg-[#13141b] border border-[#282a31] rounded-xl px-4 py-3 text-white focus:outline-none focus:border-[#ffc371] transition"
+                          />
+                        </div>
+                      </div>
+                      <div className="p-3 rounded-xl bg-[#13141b] border border-[#282a31] text-sm">
+                        <div className="font-semibold mb-2 text-[#ffc371]">Token Distribution</div>
+                        <div className="space-y-1">
+                          <div className="flex justify-between"><span className="text-[#6b7084]">Total supply</span><span className="font-mono">{totalSupply.toLocaleString()}</span></div>
+                          <div className="flex justify-between"><span className="text-[#6b7084]">→ Pool</span><span className="font-mono">{initialMemeLiquidity.toLocaleString()}</span></div>
+                          <div className="flex justify-between"><span className="text-[#6b7084]">→ You keep</span><span className={`font-mono ${creatorKeeps < 0 ? 'text-red-400' : 'text-[#4ECDC4]'}`}>{creatorKeeps.toLocaleString()}</span></div>
+                        </div>
+                        {creatorKeeps < 0 && <div className="mt-2 text-xs text-red-400">⚠️ Pool liquidity exceeds total supply — reduce meme liquidity amount</div>}
+                      </div>
+                    </div>
+                  )}
                 </div>
+              )}
+
+              {/* ── Step 3: Protection ── */}
+              {wizardStep === 3 && (
+                <div className="space-y-5 animate-fadeIn">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style={{ background: 'linear-gradient(135deg, #7c3aed, #0891b2)' }}>💎</div>
+                    <div>
+                      <h2 className="text-xl font-bold">Protection</h2>
+                      <p className="text-sm text-[#6b7084]">Gate your token to diamond-hand holders</p>
+                    </div>
+                  </div>
+                  {!diamondGateOpen && (
+                    <button type="button" onClick={() => setDiamondGateOpen(true)}
+                      className="w-full flex items-center gap-3 px-5 py-4 rounded-xl text-left transition-all hover:scale-[1.01]"
+                      style={{ background: 'linear-gradient(135deg, #1a0a2e, #0d0d18)', border: '1px solid rgba(124,58,237,0.35)', boxShadow: '0 0 16px rgba(124,58,237,0.1)' }}
+                    >
+                      <span className="text-2xl">💎</span>
+                      <div className="flex-1">
+                        <div className="font-bold text-white">Enable Diamond-Hand Gate</div>
+                        <div className="text-xs text-[#6b7084] mt-0.5">Currently OFF — open to everyone. Click to gate your meme.</div>
+                      </div>
+                      <svg className="w-5 h-5 text-purple-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/></svg>
+                    </button>
+                  )}
+                  {diamondGateOpen && (
+                    <div className="rounded-xl p-[2px]" style={{ background: 'linear-gradient(135deg, #7c3aed, #0891b2)' }}>
+                      <div className="rounded-[10px] bg-[#0f1016] p-5 space-y-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">💎</span>
+                          <span className="font-bold text-white">Diamond Gate Active</span>
+                          <button type="button" onClick={() => { setDiamondGateOpen(false); setMinAvgHoldDays(0); }}
+                            className="ml-auto text-xs text-[#6b7084] hover:text-white transition px-3 py-1 rounded-lg bg-[#1a1b22] border border-[#282a31]"
+                          >✕ Remove</button>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <input type="range" min={0} max={444} step={1} value={minAvgHoldDays}
+                            onChange={e => setMinAvgHoldDays(Number(e.target.value))}
+                            className="w-full accent-purple-400"
+                          />
+                          <div className="w-20 text-right tabular-nums font-mono text-sm font-bold text-purple-300 shrink-0">
+                            {minAvgHoldDays === 0 ? '🧻 Open' : `${minAvgHoldDays}d`}
+                          </div>
+                        </div>
+                        {(() => {
+                          const tiers = [
+                            { min: 0, emoji: '🧻', label: 'Open' }, { min: 1, emoji: '🐀', label: 'Jeet' },
+                            { min: 3, emoji: '💩', label: 'Poor Fag' }, { min: 7, emoji: '🌀', label: 'Stinky Swinger' },
+                            { min: 14, emoji: '💎', label: 'Normie' }, { min: 30, emoji: '🚀', label: 'Ascender' },
+                            { min: 90, emoji: '👑', label: 'Chad' }, { min: 180, emoji: '🌌', label: 'PSL God' },
+                            { min: 360, emoji: '⚡', label: '444' },
+                          ];
+                          const d = minAvgHoldDays;
+                          return (
+                            <div className="flex flex-wrap gap-1">
+                              {tiers.map((t, ti) => {
+                                const active = d >= t.min && (tiers[ti+1] ? d < tiers[ti+1].min : true);
+                                return (
+                                  <button key={t.min} type="button" onClick={() => setMinAvgHoldDays(t.min)}
+                                    className={`text-[10px] px-1.5 py-0.5 rounded transition ${active ? 'bg-purple-500/30 text-purple-200 font-bold' : 'bg-[#1e1f2e] text-[#3d4155] hover:text-[#9aa1af]'}`}
+                                    title={`${t.label} (${t.min}d+)`}
+                                  >{t.emoji} {t.min}d</button>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+                        <p className="text-xs text-[#6b7084]">
+                          {minAvgHoldDays === 0 ? 'Open to everyone — no restriction.' : `Only wallets with ${minAvgHoldDays}+ day avg hold can buy during bonding.`}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    {[
+                      { icon: '🛡️', text: `Only wallets with avg hold time ≥ ${minAvgHoldDays || 'X'} days can buy during bonding` },
+                      { icon: '🤖', text: 'Prevents sniper bots and rewards loyal holders' },
+                      { icon: '🏁', text: 'Gate only applies during bonding — after graduation anyone can trade' },
+                    ].map((item, i) => (
+                      <div key={i} className="flex items-start gap-3 p-3 rounded-xl bg-[#13141b] border border-[#1e1f2e] text-sm">
+                        <span className="text-base shrink-0">{item.icon}</span>
+                        <span className="text-[#6b7084]">{item.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Step 4: Review & Launch ── */}
+              {wizardStep === 4 && (
+                <div className="space-y-5 animate-fadeIn">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style={{ background: 'linear-gradient(135deg, #FF6B6B, #ffc371)' }}>🚀</div>
+                    <div>
+                      <h2 className="text-xl font-bold">Review & Launch</h2>
+                      <p className="text-sm text-[#6b7084]">Confirm everything looks right then launch</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="rounded-xl bg-[#13141b] border border-[#282a31] p-4">
+                      <p className="text-[9px] font-semibold text-[#3d4155] uppercase tracking-widest mb-3">Token</p>
+                      {coverImageUri && (
+                        <img src={coverImageUri.replace('ipfs://', 'https://ipfs.io/ipfs/')} className="w-14 h-14 rounded-lg object-cover mb-3" alt="cover" />
+                      )}
+                      <div className="font-bold text-white">{memeName || <span className="text-red-400 text-sm">Name missing</span>}</div>
+                      <div className="text-sm text-[#ffc371] font-mono mt-0.5">{memeSymbol || <span className="text-red-400">Symbol missing</span>}</div>
+                      {memeDescription && <p className="text-xs text-[#6b7084] mt-2 line-clamp-2">{memeDescription}</p>}
+                    </div>
+                    <div className="rounded-xl bg-[#13141b] border border-[#282a31] p-4">
+                      <p className="text-[9px] font-semibold text-[#3d4155] uppercase tracking-widest mb-3">Parameters</p>
+                      <div className="space-y-1.5 text-sm">
+                        <div className="flex justify-between"><span className="text-[#6b7084]">Quote</span><span className="font-bold">{quoteLabel}</span></div>
+                        <div className="flex justify-between"><span className="text-[#6b7084]">Pool type</span><span className="font-bold capitalize">{poolType}</span></div>
+                        {isBonding && founderBuyPct > 0 && <div className="flex justify-between"><span className="text-[#6b7084]">Pre-buy</span><span className="font-mono">{founderBuyPct.toFixed(2)}%</span></div>}
+                        {diamondGateOpen && minAvgHoldDays > 0 && <div className="flex justify-between"><span className="text-[#6b7084]">Diamond Gate</span><span className="font-mono text-purple-300">{minAvgHoldDays}d</span></div>}
+                        <div className="flex justify-between"><span className="text-[#6b7084]">Supply</span><span className="font-mono">444M</span></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-xl bg-[#13141b] border border-[#282a31]">
+                    <p className="text-[9px] font-semibold text-[#3d4155] uppercase tracking-widest mb-2">Fees</p>
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between"><span className="text-[#6b7084]">Buy fee</span><span>1.5%</span></div>
+                      <div className="flex justify-between"><span className="text-[#6b7084]">Early sell penalty</span><span>10%</span></div>
+                      <div className="flex justify-between"><span className="text-[#6b7084]">After AMM flip</span><span>0.3%</span></div>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className={`flex-1 flex items-center gap-2 p-3 rounded-xl text-xs border ${coverImageUri ? 'border-[#4ECDC4]/20 bg-[#4ECDC4]/5 text-[#4ECDC4]' : 'border-[#282a31] bg-[#13141b] text-[#3d4155]'}`}>
+                      <span>{coverImageUri ? '✓' : '○'}</span><span>Cover {coverImageUri ? 'ready' : 'none'}</span>
+                    </div>
+                    <div className={`flex-1 flex items-center gap-2 p-3 rounded-xl text-xs border ${audioUri ? 'border-[#4ECDC4]/20 bg-[#4ECDC4]/5 text-[#4ECDC4]' : 'border-red-500/20 bg-red-500/5 text-red-400'}`}>
+                      <span>{audioUri ? '✓' : '!'}</span><span>Audio {audioUri ? 'ready' : 'missing'}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-3 pt-1">
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <input type="checkbox" checked={agreedOwn} onChange={e => setAgreedOwn(e.target.checked)} className="accent-[#4ECDC4] mt-0.5 shrink-0" />
+                      <span className="text-sm text-[#6b7084] group-hover:text-[#9aa1af] transition">I confirm that I own this sound or have permission to upload it</span>
+                    </label>
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <input type="checkbox" checked={agreedTOS} onChange={e => setAgreedTOS(e.target.checked)} className="accent-[#4ECDC4] mt-0.5 shrink-0" />
+                      <span className="text-sm text-[#6b7084] group-hover:text-[#9aa1af] transition">I agree to the{" "}
+                        <Link href="/terms" className="underline text-[#4ECDC4]" onClick={e => e.stopPropagation()}>Terms of Service</Link>
+                      </span>
+                    </label>
+                  </div>
+                  <LiquidChargeButton type="submit" disabled={!agreedOwn || !agreedTOS || busy || !audioUri} className="w-full text-lg py-5">
+                    Launch Token 🚀
+                  </LiquidChargeButton>
+                </div>
+              )}
+
+              {/* ── Navigation ── */}
+              <div className="flex items-center justify-between mt-8 pt-6 border-t border-[#1e1f2e]">
+                <button
+                  type="button"
+                  onClick={() => setWizardStep(s => Math.max(1, s - 1))}
+                  disabled={wizardStep === 1}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl border border-[#282a31] text-[#6b7084] hover:text-white hover:border-[#3a3d4a] transition disabled:opacity-20 disabled:cursor-not-allowed text-sm font-medium"
+                >
+                  <ArrowLeft className="w-4 h-4" /> Back
+                </button>
+                {wizardStep < 4 ? (
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(s => s + 1)}
+                    disabled={!canAdvance}
+                    className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition"
+                    style={{ background: canAdvance ? 'linear-gradient(135deg, #ffc371, #ff6b6b)' : '#1e1f2e', color: canAdvance ? 'black' : '#3d4155', cursor: canAdvance ? 'pointer' : 'not-allowed' }}
+                  >
+                    Next <ArrowRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <div />
+                )}
               </div>
-              {/* Pool Settings */}
-              <div>
-                <div className="flex items-center gap-3 mb-4 mt-10">
-                  <Coins className="w-5 h-5 text-[#FFE66D]" />
-                  <h2 className="text-xl font-semibold">Pool Settings</h2>
-                </div>
-                <div className="flex flex-col sm:flex-row gap-2 sm:gap-6 mb-3">
-                  <label>
-                    <input type="radio" checked={isBonding} onChange={() => setPoolType('bonding')} />
-                    <span className="ml-1">Bonding (Fairlaunch)</span>
-                  </label>
-                  <label>
-                    <input type="radio" checked={isAmm} onChange={() => setPoolType('amm')} />
-                    <span className="ml-1">AMM (You add the liquidity)</span>
-                  </label>
-                </div>
-
-                {/* Launch currency (card picker) */}
-<div className="mb-4">
-  <div className="flex items-center justify-between mb-2">
-    <span className="font-medium">Launch currency</span>
-  </div>
-
-  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-    {[
-      {
-        key: 'WOODENG' as const,
-        title: 'WOODENG',
-        blurb: 'Use the ecosystem token for a better promotion of the trading pool of your sound meme.',
-      },
-      {
-        key: 'SOL' as const,
-        title: 'SOL',
-        blurb: 'Fund with SOL — we auto-wrap to wSOL under the hood.',
-      },
-    ].map((opt) => {
-      const active = quoteToken === opt.key;
-      return (
-        <button
-          key={opt.key}
-          type="button"
-          onClick={() => setQuoteToken(opt.key)}
-          className={[
-            'text-left rounded-xl border p-4 bg-[#1a1b22] hover:bg-[#1f2128] transition',
-            active ? 'border-[#ffc371] ring-2 ring-[#ffc371]/30' : 'border-[#2b2d35]'
-          ].join(' ')}
-        >
-          <div className="flex items-center justify-between">
-            <span className="font-semibold">{opt.title}</span>
-            {active && (
-              <span className="text-[10px] px-2 py-1 rounded bg-[#ffc371] text-black">
-                Selected
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-[#9aa1af] mt-1">{opt.blurb}</p>
-        </button>
-      );
-    })}
-  </div>
-
-  <p className="text-[11px] text-[#8d95a5] mt-2">
-    This sets the currency paired with your meme at launch. Traders will buy your token with <b>{quoteLabel}</b>.
-  </p>
-</div>
-
-
-
-
-                {/* ⬇️ PASTE THIS BLOCK RIGHT HERE ⬇️ */}
-  {isBonding && (
-    <div className="mt-4 p-4 rounded-lg bg-[#1a1b22] border border-[#2b2d35]">
-      <div className="flex items-center gap-2 mb-2">
-        <Volume2 className="w-4 h-4 text-[#FFE66D]" />
-        <span className="font-medium">Creator pre-buy (max 1%)</span>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={/* 0.01% steps */ 0.01}
-          value={founderBuyPct}
-          onChange={(e) => {
-            const v = Math.max(0, Math.min(1, Number(e.target.value)));
-            setFounderBuyPct(v);
-          }}
-          className="w-full accent-[#ffc371]"
-        />
-        <div className="w-16 text-right tabular-nums">
-          {founderBuyPct.toFixed(2)}%
-        </div>
-      </div>
-
-      <div className="mt-2 text-xs text-[#9aa1af]">
-        You’ll pre-buy <b>{fmt(founderBuyTokens)}</b> MEME (≈ {founderBuyPct.toFixed(2)}% of 444,000,000).
-      </div>
-    </div>
-  )}
-  
-
-               {/* ─────────── Liquidity inputs ─────────── */}
-{poolType === 'amm' && (
-  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-    {/* Initial meme tokens */}
-    <div>
-      <label className="block mb-1 font-medium">Initial Meme Liquidity</label>
-      <input
-        type="number"
-        value={initialMemeLiquidity}
-        onChange={e => setInitialMemeLiquidity(Number(e.target.value) || 0)}
-        className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
-      />
-      <span className="text-xs text-[#aaa]">
-        Amount of meme tokens for pool
-      </span>
-    </div>
-
-    {/* Initial WOODENG */}
-    <div>
-      <label className="block mb-1 font-medium">
-  Initial {quoteLabel} Liquidity
-</label>
-<input
-  type="number"
-  value={initialQuoteLiquidity}
-  onChange={e => setInitialQuoteLiquidity(Number(e.target.value) || 0)}
-  className="w-full bg-[#181920] border border-[#282a31] rounded px-3 py-2"
-/>
-<span className="text-xs text-[#aaa]">
-  Amount of {quoteLabel} for pool
-</span>
-
-    </div>
-  </div>
-)}
-
-
-
-              </div>
-
-              {/* Terms Card */}
-              <div className="flex flex-col gap-3 mt-10">
-                <label className="flex items-center gap-2 text-sm font-medium">
-                  <input type="checkbox" checked={agreedOwn} onChange={e => setAgreedOwn(e.target.checked)} className="accent-[#4ECDC4]" />
-                  I confirm that I own this sound or have permission to upload it
-                </label>
-                <label className="flex items-center gap-2 text-sm font-medium">
-  <input
-    type="checkbox"
-    checked={agreedTOS}
-    onChange={e => setAgreedTOS(e.target.checked)}
-    className="accent-[#4ECDC4]"
-  />
-  I agree to the{" "}
-  <Link
-    href="/terms"
-    className="underline text-[#4ECDC4]"
-    onClick={(e) => {
-      // prevent the label from toggling the checkbox when clicking the link
-      e.stopPropagation();
-    }}
-  >
-    Terms of Service
-  </Link>
-</label>
-
-              </div>
-
-              <LiquidChargeButton
-  type="submit"
-  disabled={!agreedOwn || !agreedTOS || busy}
-  className="w-full"
->
-  Create Sound Meme & Pool <span className="ml-2">🌊<span className="ml-1">🔔</span></span>
-</LiquidChargeButton>
-
 
             </form>
           </div>
         </div>
 
-       
+
       </div>
     </div>
   )
 }
-
-
-
-

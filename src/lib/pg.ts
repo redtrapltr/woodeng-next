@@ -3,12 +3,11 @@ import { Pool } from 'pg';
 let _pool: Pool | null = null;
 
 function createPool() {
-  const connectionString =
-    process.env.TIGER_CLOUD_DATABASE_URL ?? process.env.DATABASE_URL;
+  const connectionString = process.env.DATABASE_URL;
 
   if (!connectionString) {
     throw new Error(
-      'No DB connection string. Set TIGER_CLOUD_DATABASE_URL or DATABASE_URL in .env.local'
+      'No DB connection string. Set DATABASE_URL in .env.local'
     );
   }
 

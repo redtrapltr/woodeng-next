@@ -1,7 +1,6 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { Footer } from '@/contexts/components/Footer';
 
 /* Lazy-load because the component is huge */
 const Whitepaper = dynamic(() => import('@/contexts/components/Whitepaper'), {
@@ -14,7 +13,6 @@ export default function WhitepaperPage() {
       <main className="flex-1">
         <Whitepaper />
       </main>
-      <Footer />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 /* app/nft/[mint]/page.tsx (or whatever your route is) */
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
   Connection, PublicKey, clusterApiUrl, SystemProgram,
   SYSVAR_RENT_PUBKEY,            // (already there)
@@ -10,6 +10,7 @@ import {
 
 import { useParams, useRouter } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { useUnifiedWallet } from '@/hooks/useUnifiedWallet';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import type { Idl } from '@project-serum/anchor';
 import { AnchorProvider, Program, BorshCoder, BN } from '@project-serum/anchor';
@@ -164,6 +165,25 @@ export default function NFTDetailPage() {
   const { mint } = useParams<{ mint: string }>();
   const router   = useRouter();
   const wallet   = useWallet();
+  const { publicKey: unifiedPublicKey, connected: unifiedConnected, sendTransaction: unifiedSendTransaction, signTransaction: unifiedSignTransaction } = useUnifiedWallet();
+  const effectivePublicKey = (wallet.connected && wallet.publicKey) ? wallet.publicKey : unifiedPublicKey;
+  const effectiveConnected = wallet.connected || unifiedConnected;
+  const effectiveSendTx = (wallet.connected && wallet.sendTransaction) ? wallet.sendTransaction : unifiedSendTransaction;
+  const effectiveSignTx = (wallet.connected && wallet.signTransaction) ? wallet.signTransaction : unifiedSignTransaction;
+
+  const anchorWallet = useMemo(() => {
+    if (wallet.connected && wallet.publicKey && wallet.signTransaction) return wallet;
+    if (!effectivePublicKey || !effectiveSignTx) return null;
+    return {
+      publicKey: effectivePublicKey,
+      signTransaction: effectiveSignTx,
+      signAllTransactions: async (txs: Transaction[]) => {
+        const signed: Transaction[] = [];
+        for (const tx of txs) signed.push(await effectiveSignTx(tx));
+        return signed;
+      },
+    };
+  }, [wallet, effectivePublicKey, effectiveSignTx]);
 
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -192,7 +212,7 @@ export default function NFTDetailPage() {
 
   /* ------ initial load ------------------------------------------- */
   useEffect(() => {
-    if (!wallet.connected || !mint) return;
+    if (!effectiveConnected || !mint) return;
 
     (async () => {
       try {
@@ -207,23 +227,23 @@ export default function NFTDetailPage() {
         setError(e.message ?? 'Failed to load NFT');
       } finally { setLoading(false); }
     })();
-  }, [wallet.connected, mint]);
+  }, [effectiveConnected, mint]);
 
   /* ------ helpers ------------------------------------------------ */
-  const iAmOwner = order && wallet.publicKey?.equals(order.seller);
+  const iAmOwner = order && effectivePublicKey?.equals(order.seller);
   const priceWdg = order ? order.priceLamports / 1e9 : 0;
 
   /* ------ actions ------------------------------------------------ */
   const listNft = () => router.push(`/list-nft/${mint}`);
 
   const cancelListing = async () => {
-  if (!order || !wallet.publicKey) return;
-  const payer = wallet.publicKey!;            // <-- capture once
+  if (!order || !effectivePublicKey || !anchorWallet) return;
+  const payer = effectivePublicKey!;            // <-- capture once
 
   try {
     setLoading(true);
     const conn     = new Connection(clusterApiUrl('mainnet-beta'));
-    const provider = new AnchorProvider(conn, wallet as any, {});
+    const provider = new AnchorProvider(conn, anchorWallet as any, {});
     const program  = new Program(idl as any, PROGRAM_ID, provider);
 
     await program.methods
@@ -251,14 +271,14 @@ export default function NFTDetailPage() {
 
 
   const buyNft = async () => {
-  if (!order || !wallet.publicKey || !nft) return;
-  const payer = wallet.publicKey!;                 // <-- capture once
+  if (!order || !effectivePublicKey || !nft || !anchorWallet) return;
+  const payer = effectivePublicKey!;                 // <-- capture once
 
   try {
     setLoading(true);
 
     const conn     = new Connection(clusterApiUrl('mainnet-beta'));
-    const provider = new AnchorProvider(conn, wallet as any, {});
+    const provider = new AnchorProvider(conn, anchorWallet as any, {});
     const program  = new Program(idl as any, PROGRAM_ID, provider);
 
     // Helper: ensure ATA exists (payer = buyer)
@@ -334,7 +354,7 @@ await program.methods
   /* -------------------------------------------------- */
   /* render                                             */
   /* -------------------------------------------------- */
-  if (!wallet.connected) {
+  if (!effectiveConnected) {
     return (
       <Centered>
         <p className="text-xl mb-4">Connect your wallet to view the NFT</p>

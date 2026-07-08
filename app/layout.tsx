@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import ClientShell from "./client-shell";
 
 export const metadata = {
-  title: "Woodeng Next 13",
-  description: "dApp Solana with Next.js 13",
+  title: "Woodeng",
+  description: "Meme launchpad for SWL-444 standard ",
 };
 
 export const viewport = {
@@ -17,6 +17,10 @@ export const viewport = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
+      <head>
+        {/* Jupiter Terminal — loaded for graduated pool swap embeds */}
+        <script src="https://terminal.jup.ag/main-v3.js" data-preload async />
+      </head>
       <body className="safe-top" style={{ margin: 0, padding: 0, background: "#000", color: "white" }}>
         <ClientShell>{children}</ClientShell>
       </body>
