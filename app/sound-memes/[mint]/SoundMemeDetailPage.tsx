@@ -1618,7 +1618,11 @@ export default function SoundMemeDetailPage() {
     (async () => {
       try {
         const r = await fetch(`/api/ohlc/${mintParam}?tf=${selectedTf}&limit=1000`, { cache: 'no-store' });
-        const bars = r.ok ? await r.json() : [];
+        const raw = r.ok ? await r.json() : [];
+        const bars = Array.isArray(raw) ? raw.map((b: any) => ({
+          t: Number(b.t), o: Number(b.o) / 1e9, h: Number(b.h) / 1e9,
+          l: Number(b.l) / 1e9, c: Number(b.c) / 1e9, v: Number(b.v) | 0
+        })) : [];
         if (!stop && Array.isArray(bars)) setServerCandles(bars);
       } catch {}
     })();
