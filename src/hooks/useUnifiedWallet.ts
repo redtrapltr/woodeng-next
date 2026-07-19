@@ -17,6 +17,11 @@ export function useUnifiedWallet() {
     ?? solanaCandidates.find(w => (w as any).connectorType === "embedded")
     ?? solanaCandidates[0];
 
+  // Embedded (Privy-created) wallet vs an external wallet the user connected
+  // through Privy's modal (Phantom, Solflare, Glow, Backpack, ...).
+  const isEmbeddedWallet = privyWallet?.walletClientType === "privy";
+  const walletClientType: string | null = privyWallet?.walletClientType ?? null;
+
   // Address chain: embedded wallet → user.wallet fallback → external adapter
   const effectiveAddress: string | null =
     privyWallet?.address
@@ -104,6 +109,8 @@ export function useUnifiedWallet() {
     displayName,
     user,
     walletType: privyWallet ? ("privy" as const) : ("external" as const),
+    isEmbeddedWallet,
+    walletClientType,
     address: publicKey?.toBase58() ?? null,
   };
 }

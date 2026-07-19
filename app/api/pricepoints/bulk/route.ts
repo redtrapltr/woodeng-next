@@ -37,6 +37,8 @@ export async function POST(req: Request) {
     );
   }
 
+  console.log('[PRICE BULK] Inserting', valid.length, 'price points');
+
   // Bulk UPSERT via UNNEST
   // IMPORTANT: the WHERE clause after DO UPDATE ensures we only write if the row actually changes
   await pool.query(

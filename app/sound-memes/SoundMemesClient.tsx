@@ -8003,34 +8003,43 @@ const basePct = (closed && Number.isFinite(closed.o) && Math.abs(closed.o) > EPS
 
         {/* chart */}
         <div className="relative w-full h-56 sm:h-64 md:h-72 bg-[#141419] rounded-xl overflow-hidden">
-          <div className="absolute inset-0">
-            <CandleChart
-  key={selectedTimeRange}
-  data={candles.map(b => ({
-    t: b.t,
-    o: b.o,
-    h: b.h,
-    l: b.l,
-    c: b.c,
-  }))}
-  volume={volume.map(b => ({
-    t:  b.t,
-    v:  b.v,
-    up: b.up,
-  }))}
-  onBarHover={({ pct }) => setHoverDeltaPct(pct)}
-/>
-
-
-
-          </div>
-          <div
-            className={`absolute top-2 right-2 z-10 px-2 py-1 rounded-full text-xs font-semibold ${
-              ((hoverDeltaPct ?? basePct) >= 0) ? 'bg-green-500/15 text-green-300' : 'bg-red-500/15 text-red-300'
-            }`}
-          >
-            {selectedTimeRange.toUpperCase()} {((hoverDeltaPct ?? basePct) >= 0 ? '+' : '')}{((hoverDeltaPct ?? basePct) || 0).toFixed(2)}%
-          </div>
+          {candles.length === 0 ? (
+            <div className="absolute inset-0 flex items-center justify-center text-center px-6">
+              <div className="text-sm text-[#8d92a8] leading-relaxed">
+                Chart data will appear after the first trade.
+                <br />
+                Price: <TinyPrice value={Number(detailPool.price ?? 0)} /> {quoteLabelOf(detailPool)}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="absolute inset-0">
+                <CandleChart
+                  key={selectedTimeRange}
+                  data={candles.map(b => ({
+                    t: b.t,
+                    o: b.o,
+                    h: b.h,
+                    l: b.l,
+                    c: b.c,
+                  }))}
+                  volume={volume.map(b => ({
+                    t:  b.t,
+                    v:  b.v,
+                    up: b.up,
+                  }))}
+                  onBarHover={({ pct }) => setHoverDeltaPct(pct)}
+                />
+              </div>
+              <div
+                className={`absolute top-2 right-2 z-10 px-2 py-1 rounded-full text-xs font-semibold ${
+                  ((hoverDeltaPct ?? basePct) >= 0) ? 'bg-green-500/15 text-green-300' : 'bg-red-500/15 text-red-300'
+                }`}
+              >
+                {selectedTimeRange.toUpperCase()} {((hoverDeltaPct ?? basePct) >= 0 ? '+' : '')}{((hoverDeltaPct ?? basePct) || 0).toFixed(2)}%
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

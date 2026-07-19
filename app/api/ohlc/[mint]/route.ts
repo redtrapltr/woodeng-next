@@ -41,8 +41,15 @@ const table  = TABLE(tf);
     LIMIT $3
   `;
 
-  const { rows } = await pool.query(sql, [mint, ts, limit]);
-
-  rows.reverse(); // ascending by time
-  return NextResponse.json(rows, { status: 200 });
+  try {
+    const { rows } = await pool.query(sql, [mint, ts, limit]);
+    rows.reverse(); // ascending by time
+    return NextResponse.json(rows, { status: 200 });
+  } catch (e: any) {
+    // Rollup tables (price_15m/30m/1h/4h/24h) may not exist yet on this DB —
+    // the frontend already falls back to client-built candles from raw
+    // price_ticks when this returns empty, so degrade instead of 500ing.
+    console.error(`[ohlc/${mint}] query failed (table: ${table}):`, e?.message ?? e);
+    return NextResponse.json([], { status: 200 });
+  }
 }

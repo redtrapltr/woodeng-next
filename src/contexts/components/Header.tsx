@@ -16,6 +16,7 @@ import {
   Search as SearchIcon,
   ChevronRight,
   ChevronDown,
+  Wallet as WalletIcon,
 } from "lucide-react";
 
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
@@ -29,8 +30,8 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 
 
-import { useWoodengBalanceLive } from '@/hooks/useWoodengBalanceLive';
 import { useUnifiedWallet } from '@/hooks/useUnifiedWallet';
+import { useWoodengBalanceLive } from '@/hooks/useWoodengBalanceLive';
 import WalletPanel from "../../../app/components/WalletPanel";
 
 
@@ -493,10 +494,50 @@ function NavMenu({
 
 }
 
+/* ───── wallet button contents: icon + live WOODENG balance ─────────────────
+   Shows a wallet-brand icon (Phantom/Solflare/...) or a generic wallet icon
+   for the embedded wallet, next to the live balance — makes it obvious this
+   is "my Woodeng wallet" without ever showing the raw address in the header. */
+function WalletIdentity({
+  isEmbeddedWallet,
+  walletClientType,
+  unifiedAddress,
+  providerLabel,
+  balance,
+}: {
+  isEmbeddedWallet: boolean;
+  walletClientType: string | null;
+  unifiedAddress: string | null;
+  providerLabel: string;
+  balance: number;
+}) {
+  if (!unifiedAddress) {
+    return (
+      <>
+        <WalletIcon size={16} style={{ color: "#4ECDC4", flexShrink: 0 }} />
+        <span>{providerLabel}</span>
+      </>
+    );
+  }
 
+  const balanceStr = balance.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const brandEmoji =
+    walletClientType === "phantom" ? "👻" :
+    walletClientType === "solflare" ? "🔥" :
+    walletClientType === "glow" ? "🌙" :
+    walletClientType === "backpack" ? "🎒" :
+    null;
 
-function abbr(addr: string) {
-  return addr ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : "";
+  return (
+    <>
+      {isEmbeddedWallet || !brandEmoji ? (
+        <WalletIcon size={16} style={{ color: isEmbeddedWallet ? "#a088fa" : "#4ECDC4", flexShrink: 0 }} />
+      ) : (
+        <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0 }}>{brandEmoji}</span>
+      )}
+      <span>{balanceStr} WOODENG</span>
+    </>
+  );
 }
 
 export default function Header() {
@@ -508,14 +549,14 @@ if (typeof window !== 'undefined') {
 
   const wallet = useWallet();
   const { login, logout, authenticated, user: privyUser } = usePrivy();
-  const { address: unifiedAddress, publicKey: unifiedPublicKey } = useUnifiedWallet();
+  const { address: unifiedAddress, publicKey: unifiedPublicKey, isEmbeddedWallet, walletClientType } = useUnifiedWallet();
   const providerLabel = (privyUser?.linkedAccounts?.[0] as any)?.type?.replace('_oauth', '') ?? 'privy';
   const router = useRouter();
   const pathname = usePathname();
   const isMobile = useIsMobile(860);
   const logoH = isMobile ? LOGO_H_MOBILE : LOGO_H_DESKTOP; // taille responsive du logo
 
-    // 👇 Force Helius just for this balance widget (testing the 403/CORS issue)
+  // 👇 Force Helius just for this balance widget (testing the 403/CORS issue)
   const forced = React.useMemo(() => {
     const url = process.env.NEXT_PUBLIC_SOLANA_RPC!;
     const conn = new Connection(url, { commitment: 'confirmed' });
@@ -525,11 +566,7 @@ if (typeof window !== 'undefined') {
     return conn;
   }, []);
 
-  // ⬇️ Use unified publicKey so Privy embedded wallets also show balance
   const liveWoodengBalance = useWoodengBalanceLive(forced, unifiedPublicKey, WOODENG_MINT_PK);
- 
-
-
 
 
 
@@ -801,18 +838,11 @@ const navStyle: React.CSSProperties = {
       gap: 10px !important;
     }
 
-    /* shrink Create button and balance pill */
+    /* shrink Create button */
     .create-btn {
       padding: 8px 20px !important;
       font-size: 15px !important;
       border-radius: 20px !important;
-    }
-    .balance-pill {
-      padding: 6px 14px !important;
-      min-width: 90px !important;
-      max-width: 160px !important;
-      font-size: 14px !important;
-      border-radius: 14px !important;
     }
 
     /* if space is still tight, hide Airdrop */
@@ -1004,33 +1034,6 @@ const navStyle: React.CSSProperties = {
 ><span style={{ position: 'relative', zIndex: 1 }}>+ Create</span></Link>
 
 
-          <div
-  className="balance-pill"
-  style={{
-    background: "#232332",
-    color: "#a088fa",
-    fontWeight: 700,
-    borderRadius: 16,
-    padding: "7px 18px",
-    fontSize: 15,
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    whiteSpace: "nowrap",
-    letterSpacing: "0.01em",
-    minWidth: 110,
-    maxWidth: 210,
-  }}
->
-
-            <Waves size={18} style={{ color: "#a088fa" }} />
-            {liveWoodengBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} WOODENG
-
-          </div>
-
-         
-
-
           {authenticated ? (
             <button
               onClick={() => setWalletPanelOpen(true)}
@@ -1046,8 +1049,13 @@ const navStyle: React.CSSProperties = {
               onMouseEnter={e => (e.currentTarget.style.background = "rgba(78,205,196,0.15)")}
               onMouseLeave={e => (e.currentTarget.style.background = "rgba(78,205,196,0.08)")}
             >
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#4ECDC4", flexShrink: 0 }} />
-              {unifiedAddress ? abbr(unifiedAddress) : providerLabel}
+              <WalletIdentity
+                isEmbeddedWallet={isEmbeddedWallet}
+                walletClientType={walletClientType}
+                unifiedAddress={unifiedAddress}
+                providerLabel={providerLabel}
+                balance={liveWoodengBalance}
+              />
             </button>
           ) : (
             <button onClick={login} style={{
@@ -1181,8 +1189,13 @@ const navStyle: React.CSSProperties = {
                     cursor: "pointer", lineHeight: 1,
                   }}
                 >
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#4ECDC4", flexShrink: 0 }} />
-                  {unifiedAddress ? abbr(unifiedAddress) : providerLabel}
+                  <WalletIdentity
+                    isEmbeddedWallet={isEmbeddedWallet}
+                    walletClientType={walletClientType}
+                    unifiedAddress={unifiedAddress}
+                    providerLabel={providerLabel}
+                    balance={liveWoodengBalance}
+                  />
                 </button>
               ) : (
                 <button onClick={() => { login(); setMobileOpen(false); }} style={{
@@ -1279,26 +1292,6 @@ const navStyle: React.CSSProperties = {
               >
                 <span style={{ position: 'relative', zIndex: 1 }}>+ Create</span>
               </Link>
-
-              <div
-                style={{
-                  background: "#232332",
-                  color: "#a088fa",
-                  fontWeight: 700,
-                  borderRadius: 14,
-                  padding: "10px 14px",
-                  fontSize: 15,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  whiteSpace: "nowrap",
-                  letterSpacing: "0.01em",
-                }}
-              >
-                <Waves size={18} style={{ color: "#a088fa" }} />
-                {liveWoodengBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} WOODENG
-
-              </div>
             </div>
           </aside>
         </div>

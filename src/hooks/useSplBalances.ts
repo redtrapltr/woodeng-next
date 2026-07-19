@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
 import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
 import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 
 // Hardcode WOODENG mint and decimals
 export const WOODENG_MINT = new PublicKey("83zcTaQRqL1s3PxBRdGVkee9PiGLVP6JXg3oLVF6eAR5");
@@ -13,7 +13,7 @@ export function useSplBalances(mints: PublicKey[]): {
   memeBalances: number[];
   loading: boolean;
 } {
-  const { publicKey } = useWallet();
+  const { publicKey } = useUnifiedWallet();
   const [woodengBalance, setWoodengBalance] = useState(0);
   const [memeBalances, setMemeBalances] = useState<number[]>([]);
   const [loading, setLoading] = useState(false);

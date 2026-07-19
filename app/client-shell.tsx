@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { PrivyProvider } from "@privy-io/react-auth";
+import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 import { NetworkProvider } from "./network-context";
 import ClientProvider from "./client-provider";
 import Header from "../src/contexts/components/Header";
@@ -18,7 +19,13 @@ export default function ClientShell({ children }: { children: ReactNode }) {
           createOnLogin: "all-users",
           solana: { createOnLogin: "all-users" },
         } as any,
-        appearance: { theme: "dark" },
+        // Only offer Solana wallet connectors (Phantom, Solflare, etc.) — without this,
+        // Privy's "wallet" login option defaults to ethereum-and-solana and prompts
+        // Ledger/other external wallets for an Ethereum connection instead of Solana.
+        externalWallets: {
+          solana: { connectors: toSolanaWalletConnectors({ shouldAutoConnect: true }) },
+        },
+        appearance: { theme: "dark", walletChainType: "solana-only" },
       }}
     >
       <NetworkProvider>

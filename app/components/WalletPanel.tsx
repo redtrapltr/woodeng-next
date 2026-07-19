@@ -63,6 +63,15 @@ type View = "main" | "deposit" | "withdraw";
 type DepositTab = "address" | "card";
 type SendToken = "SOL" | "WOODENG";
 
+type UserToken = {
+  mint: string;
+  balance: number;
+  decimals: number;
+  name?: string;
+  symbol?: string;
+  imageUrl?: string;
+};
+
 interface WalletPanelProps {
   open: boolean;
   onClose: () => void;
@@ -83,7 +92,7 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
   const {
     publicKey, connected, authenticated,
     sendTransaction, logout, exportWallet,
-    user, address,
+    user, address, isEmbeddedWallet, walletClientType,
   } = useUnifiedWallet();
 
   const rpcConnection = useMemo(
@@ -103,6 +112,10 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [woodengBalance, setWoodengBalance] = useState(0);
   const [spinning, setSpinning] = useState(false);
+
+  // SWL-444 tokens held by the user (excluding WOODENG, shown separately above)
+  const [userTokens, setUserTokens] = useState<UserToken[]>([]);
+  const [userTokensLoading, setUserTokensLoading] = useState(false);
 
   // deposit
   const [copied, setCopied] = useState(false);
@@ -196,11 +209,76 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
     if (open && address) fetchTxns();
   }, [open, address]);
 
+  // fetch all SWL-444 tokens held by the user, cross-referenced against the
+  // live pools list for name/symbol/image — covers both classic SPL and
+  // Token-2022 mints, since sound meme mints can be either.
+  const fetchUserTokens = useCallback(async () => {
+    if (!address) { setUserTokens([]); return; }
+    setUserTokensLoading(true);
+    try {
+      const owner = new PublicKey(address);
+      const [classic, token2022] = await Promise.all([
+        rpcConnection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
+        rpcConnection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }),
+      ]);
+
+      const held = [...classic.value, ...token2022.value]
+        .map(a => {
+          const info = a.account.data.parsed.info;
+          return {
+            mint: info.mint as string,
+            balance: Number(info.tokenAmount?.uiAmount ?? 0),
+            decimals: Number(info.tokenAmount?.decimals ?? 0),
+          };
+        })
+        .filter(t => t.balance > 0 && t.mint !== WOODENG_MINT_PK.toBase58());
+
+      if (!held.length) { setUserTokens([]); return; }
+
+      let pools: Array<{ memeMint: string; name?: string; symbol?: string; metaUri?: string }> = [];
+      try {
+        const res = await fetch("/api/sound-memes/snapshot");
+        if (res.ok) pools = await res.json();
+      } catch { /* treated as "no known pools" below — see platformTokens filter */ }
+      const poolByMint = new Map(pools.map(p => [p.memeMint, p]));
+
+      // Only ever show tokens minted through Woodeng's pool program — a wallet
+      // can hold arbitrary SPL tokens from other platforms, and those aren't
+      // "your tokens" on Woodeng. Cross-reference against the live pools list
+      // rather than trusting balance alone.
+      const platformTokens = held.filter(t => poolByMint.has(t.mint));
+      if (!platformTokens.length) { setUserTokens([]); return; }
+
+      const withMeta = await Promise.all(platformTokens.map(async (t): Promise<UserToken> => {
+        const pool = poolByMint.get(t.mint);
+        let imageUrl: string | undefined;
+        if (pool?.metaUri) {
+          try {
+            const metaRes = await fetch(pool.metaUri);
+            if (metaRes.ok) imageUrl = (await metaRes.json())?.image || undefined;
+          } catch { /* no image available */ }
+        }
+        return { ...t, name: pool?.name || undefined, symbol: pool?.symbol || undefined, imageUrl };
+      }));
+
+      setUserTokens(withMeta);
+    } catch (e) {
+      console.warn("Failed to fetch token accounts:", e);
+      setUserTokens([]);
+    } finally {
+      setUserTokensLoading(false);
+    }
+  }, [address, rpcConnection]);
+
+  useEffect(() => {
+    if (open && address) fetchUserTokens();
+  }, [open, address]);
+
   const handleRefresh = () => {
     if (spinning) return;
     setSpinning(true);
     // no state reset — just re-fetch
-    Promise.all([fetchBalances(), fetchTxns()])
+    Promise.all([fetchBalances(), fetchTxns(), fetchUserTokens()])
       .finally(() => setTimeout(() => setSpinning(false), 700));
   };
 
@@ -286,6 +364,22 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
     handle = user.email.address;
     providerBadge = "✉";
   }
+
+  // Which wallet is actually holding the funds — the Woodeng embedded wallet
+  // (created on X/Google/email login) or an external wallet connected through
+  // Privy's modal (Phantom, Solflare, ...). Avoids the raw address reading
+  // like an unfamiliar new wallet to Phantom users.
+  const walletProviderName = walletClientType
+    ? walletClientType[0].toUpperCase() + walletClientType.slice(1)
+    : "External";
+  const walletKindLabel = isEmbeddedWallet
+    ? "🔐 Woodeng Wallet"
+    : walletClientType === "phantom"
+    ? "👻 Phantom Wallet"
+    : `🔗 ${walletProviderName} Wallet`;
+  const walletKindNote = isEmbeddedWallet
+    ? "This is your Woodeng embedded wallet. Fund it to start trading."
+    : `This is your ${walletProviderName} wallet. Your existing tokens and balances are shown.`;
 
   // ── shared sub-styles ─────────────────────────────────────────────────────
 
@@ -428,6 +522,21 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
             </button>
           </div>
 
+          {/* 1b · Wallet type banner */}
+          {view === "main" && addr && (
+            <div style={{ ...CARD, padding: "12px 16px", animation: "_wp_fadeUp 0.3s ease 0.02s both" }}>
+              <div style={{ color: "#e6e6ff", fontWeight: 700, fontSize: 13 }}>
+                {walletKindLabel}
+              </div>
+              <div style={{ color: "#6b7084", fontSize: 11, marginTop: 2, wordBreak: "break-all" }}>
+                {addr}
+              </div>
+              <div style={{ color: "#9aa0b6", fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
+                {walletKindNote}
+              </div>
+            </div>
+          )}
+
           {/* 2 · Balance card (main view) */}
           {view === "main" && (
             <div style={{
@@ -487,6 +596,64 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
               ) : (
                 <div style={{ marginTop: 10, fontSize: 12, color: "#3d4155" }}>No wallet connected</div>
               )}
+            </div>
+          )}
+
+          {/* 2b · Your Tokens (main view) */}
+          {view === "main" && !userTokensLoading && userTokens.length > 0 && (
+            <div style={{ animation: "_wp_fadeUp 0.3s ease 0.08s both" }}>
+              <div style={{ color: "#9aa0b6", fontSize: 12, fontWeight: 700, marginBottom: 8, letterSpacing: "0.02em" }}>
+                YOUR TOKENS
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {userTokens.map(t => (
+                  <a
+                    key={t.mint}
+                    href={`/sound-memes/${t.mint}`}
+                    className="_wp_hover_row"
+                    style={{
+                      ...CARD, padding: "10px 12px",
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      textDecoration: "none", color: "#e6e6ff",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                      {t.imageUrl ? (
+                        <img
+                          src={t.imageUrl} alt=""
+                          style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+                        />
+                      ) : (
+                        <div style={{
+                          width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
+                          background: "rgba(160,136,250,0.15)", color: "#a088fa",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 13, fontWeight: 700,
+                        }}>
+                          {(t.symbol || t.name || t.mint).slice(0, 1).toUpperCase()}
+                        </div>
+                      )}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 13, fontWeight: 600,
+                          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        }}>
+                          {t.name || abbr(t.mint)}
+                        </div>
+                        {t.symbol && (
+                          <div style={{ fontSize: 11, color: "#6b7084" }}>{t.symbol}</div>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 10 }}>
+                      <div style={{ color: "#ffc371", fontWeight: 700, fontSize: 13 }}>
+                        {t.balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </div>
+                      <div style={{ color: "#3d4155", fontSize: 11 }}>Trade →</div>
+                    </div>
+                  </a>
+                ))}
+              </div>
             </div>
           )}
 

@@ -489,7 +489,17 @@ export default function ProfileClient() {
                 ) : !myHp ? (
                   <div className="text-center py-8">
                     <p className="text-[#6b7084] text-sm mb-1">No HolderProfile found on {'mainnet'}</p>
-                    <p className="text-[10px]" style={{ color: '#4a4f63' }}>Buy a sound meme token to initialise your profile</p>
+                    <p className="text-[10px] max-w-xs mx-auto" style={{ color: '#4a4f63' }}>
+                      Your HolderProfile is created automatically when you buy any SWL-444 token through the platform.
+                      Simply receiving tokens via transfer doesn't create a profile — you need to make at least one
+                      purchase through the bonding curve or AMM.
+                    </p>
+                    {!balancesLoading && memeBalances.length > 0 && (
+                      <p className="text-[10px] mt-2 max-w-xs mx-auto" style={{ color: '#ffc371' }}>
+                        You hold SWL-444 tokens but haven't purchased through the platform yet. Buy any token
+                        (even a small amount) to create your Diamond Hand profile.
+                      </p>
+                    )}
                     {walletType === 'privy' && !wallet.publicKey && (
                       <p className="text-[10px] mt-2 max-w-xs mx-auto" style={{ color: '#4a4f63' }}>
                         Traded with a different wallet before (e.g. Phantom)? Connect it above to check for its profile.
