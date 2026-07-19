@@ -12,9 +12,9 @@ const TABLE = (tf: string) =>
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { mint: string } }
+  { params }: { params: Promise<{ mint: string }> }
 ) {
-  const mint   = params.mint;
+  const { mint } = await params;
   const url    = new URL(req.url);
   const tf     = url.searchParams.get('tf')    ?? '15m';
 // clamp the requested limit
