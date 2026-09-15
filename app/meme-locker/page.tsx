@@ -2,8 +2,8 @@
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import MemeLockerClient from './MemeLockerClient';
+import CreateGate from '../create/CreateGate';
 
 export default function Page() {
-  return <MemeLockerClient />;
+  return <CreateGate />;
 }

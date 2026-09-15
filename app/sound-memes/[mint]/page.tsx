@@ -1,5 +1,5 @@
-import SoundMemeDetailPage from './SoundMemeDetailPage';
+import DetailGate from './DetailGate';
 
 export default function Page() {
-  return <SoundMemeDetailPage />;
+  return <DetailGate />;
 }

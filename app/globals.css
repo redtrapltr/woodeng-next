@@ -25,6 +25,37 @@
   --accent: #cba6f7;             /* Highlight purple */
 }
 
+/* ---- CHAIN MODE THEME OVERRIDES (Solana / Robinhood Chain) ----
+   NetworkToggle sets data-network on <html>. These blocks override the
+   --primary/--accent vars above (and add a few Robinhood-only vars) so
+   every element already styled with .bg-primary/.text-primary/.border-primary
+   re-skins automatically when the mode is switched. */
+[data-network="robinhood"] {
+  --primary: #00C805;
+  --primary-hover: #00E676;
+  --accent: #00E676;
+  --primary-glow: rgba(0, 200, 5, 0.25);
+  --gradient-start: #00C805;
+  --gradient-end: #00E676;
+  --price-color: #00E676;
+  --button-gradient: linear-gradient(135deg, #00C805 0%, #00E676 100%);
+  --card-border: rgba(0, 200, 5, 0.15);
+  --card-glow: 0 0 20px rgba(0, 200, 5, 0.1);
+}
+
+[data-network="solana"] {
+  --primary: #a088fa;
+  --primary-hover: #b8a3ff;
+  --accent: #ffc371;
+  --primary-glow: rgba(160, 136, 250, 0.25);
+  --gradient-start: #a088fa;
+  --gradient-end: #6b52ff;
+  --price-color: #ffc371;
+  --button-gradient: linear-gradient(135deg, #a088fa 0%, #6b52ff 100%);
+  --card-border: rgba(160, 136, 250, 0.15);
+  --card-glow: 0 0 20px rgba(160, 136, 250, 0.1);
+}
+
 /* --- Always force dark mode for site --- */
 html, body {
   background: var(--background) !important;
@@ -237,8 +268,10 @@ a:hover, .link:hover {
 
 
 :root {
-  /* match your header minHeight (64) */
-  --header-h: 64px;
+  /* Header is fixed with a 68px logo + 10px top/bottom padding + 1px border
+     (see LOGO_H_DESKTOP in src/contexts/components/Header.tsx) — actual
+     rendered height is ~89px, not the old 64px this was pinned to. */
+  --header-h: 90px;
 }
 
 /* body already has className="safe-top" in layout */

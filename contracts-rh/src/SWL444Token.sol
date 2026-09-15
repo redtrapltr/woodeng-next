@@ -9,6 +9,13 @@ contract SWL444Token is ERC20 {
     address public factory;
     uint8 private _decimals;
 
+    // Living Meme — counts how many times the creator has updated metadata,
+    // so the frontend can show an "Updated N times" badge with a single view
+    // call instead of scanning event logs.
+    uint256 public metadataUpdateCount;
+
+    event MetadataUpdated(string newUri, uint256 timestamp);
+
     modifier onlyFactory() {
         require(msg.sender == factory, "Only factory");
         _;
@@ -43,5 +50,7 @@ contract SWL444Token is ERC20 {
     function updateMetadataUri(string memory newUri) external {
         require(msg.sender == creator, "Only creator");
         metadataUri = newUri;
+        metadataUpdateCount++;
+        emit MetadataUpdated(newUri, block.timestamp);
     }
 }

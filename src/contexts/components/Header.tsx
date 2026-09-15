@@ -32,7 +32,11 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { useUnifiedWallet } from '@/hooks/useUnifiedWallet';
 import { useWoodengBalanceLive } from '@/hooks/useWoodengBalanceLive';
+import { useRobinhoodWallet } from '@/hooks/useRobinhoodWallet';
+import { useChainMode } from "../../../app/contexts/NetworkContext";
 import WalletPanel from "../../../app/components/WalletPanel";
+import NetworkToggle from "../../../app/components/NetworkToggle";
+import LoginMenu from "../../../app/components/LoginMenu";
 
 
 
@@ -504,18 +508,31 @@ function WalletIdentity({
   unifiedAddress,
   providerLabel,
   balance,
+  isRobinhood,
+  ethBalance,
 }: {
   isEmbeddedWallet: boolean;
   walletClientType: string | null;
   unifiedAddress: string | null;
   providerLabel: string;
   balance: number;
+  isRobinhood: boolean;
+  ethBalance: number | null;
 }) {
   if (!unifiedAddress) {
     return (
       <>
         <WalletIcon size={16} style={{ color: "#4ECDC4", flexShrink: 0 }} />
         <span>{providerLabel}</span>
+      </>
+    );
+  }
+
+  if (isRobinhood) {
+    return (
+      <>
+        <WalletIcon size={16} style={{ color: "#00E676", flexShrink: 0 }} />
+        <span>{ethBalance !== null ? `${ethBalance.toFixed(4)} ETH` : "…"}</span>
       </>
     );
   }
@@ -550,6 +567,11 @@ if (typeof window !== 'undefined') {
   const wallet = useWallet();
   const { login, logout, authenticated, user: privyUser } = usePrivy();
   const { address: unifiedAddress, publicKey: unifiedPublicKey, isEmbeddedWallet, walletClientType } = useUnifiedWallet();
+  const { isRobinhood } = useChainMode();
+  const rh = useRobinhoodWallet();
+  // Which address/balance the header wallet button reflects — the Solana
+  // unified wallet, or the Robinhood Chain (EVM) wallet when toggled over.
+  const displayAddress = isRobinhood ? rh.address : unifiedAddress;
   const providerLabel = (privyUser?.linkedAccounts?.[0] as any)?.type?.replace('_oauth', '') ?? 'privy';
   const router = useRouter();
   const pathname = usePathname();
@@ -566,7 +588,10 @@ if (typeof window !== 'undefined') {
     return conn;
   }, []);
 
-  const liveWoodengBalance = useWoodengBalanceLive(forced, unifiedPublicKey, WOODENG_MINT_PK);
+  // Skip while in Robinhood mode — this hook polls/subscribes on the (rate-
+  // limited) Solana RPC, which isn't needed when the header isn't showing a
+  // WOODENG balance anyway.
+  const liveWoodengBalance = useWoodengBalanceLive(forced, isRobinhood ? null : unifiedPublicKey, WOODENG_MINT_PK);
 
 
 
@@ -982,7 +1007,6 @@ const navStyle: React.CSSProperties = {
 
   <NavItem href="/" label="Home" icon={<Home size={17} />} />
   <NavItem href="/profile" label="Profile" icon={<UserIcon size={17} />} />
-  <NavItem href="/sound-memes" label="Sound Memes" icon={<AnimatedSoundWaveIcon />} />
   <NavItem href="/staking" label="Staking" icon={<ShieldCheck size={17} />} />
 
   {/* Start here dropdown */}
@@ -1033,6 +1057,7 @@ const navStyle: React.CSSProperties = {
   onMouseLeave={() => { createHoveredRef.current = false; }}
 ><span style={{ position: 'relative', zIndex: 1 }}>+ Create</span></Link>
 
+          <NetworkToggle />
 
           {authenticated ? (
             <button
@@ -1052,20 +1077,26 @@ const navStyle: React.CSSProperties = {
               <WalletIdentity
                 isEmbeddedWallet={isEmbeddedWallet}
                 walletClientType={walletClientType}
-                unifiedAddress={unifiedAddress}
+                unifiedAddress={displayAddress}
                 providerLabel={providerLabel}
                 balance={liveWoodengBalance}
+                isRobinhood={isRobinhood}
+                ethBalance={rh.ethBalance}
               />
             </button>
           ) : (
-            <button onClick={login} style={{
-              borderRadius: 16, background: "#a088fa", color: "#fff",
-              padding: "9px 30px", fontWeight: 700, fontSize: "16px",
-              border: "none", cursor: "pointer", whiteSpace: "nowrap",
-              letterSpacing: "0.01em",
-            }}>
-              Login
-            </button>
+            <LoginMenu
+              trigger={(toggle) => (
+                <button onClick={toggle} style={{
+                  borderRadius: 16, background: "#a088fa", color: "#fff",
+                  padding: "9px 30px", fontWeight: 700, fontSize: "16px",
+                  border: "none", cursor: "pointer", whiteSpace: "nowrap",
+                  letterSpacing: "0.01em",
+                }}>
+                  Login
+                </button>
+              )}
+            />
           )}
         </div>
       </div>
@@ -1152,6 +1183,11 @@ const navStyle: React.CSSProperties = {
               </div>
             </div>
 
+            {/* network toggle (mobile) */}
+            <div style={{ display: "flex", justifyContent: "center", margin: "2px 0 6px" }}>
+              <NetworkToggle />
+            </div>
+
             {/* actions row */}
             <div style={{ display: "flex", gap: 10, margin: "8px 0 6px" }}>
               <Link
@@ -1192,19 +1228,27 @@ const navStyle: React.CSSProperties = {
                   <WalletIdentity
                     isEmbeddedWallet={isEmbeddedWallet}
                     walletClientType={walletClientType}
-                    unifiedAddress={unifiedAddress}
+                    unifiedAddress={displayAddress}
                     providerLabel={providerLabel}
                     balance={liveWoodengBalance}
+                    isRobinhood={isRobinhood}
+                    ethBalance={rh.ethBalance}
                   />
                 </button>
               ) : (
-                <button onClick={() => { login(); setMobileOpen(false); }} style={{
-                  flex: 1, borderRadius: 12, background: "#a088fa", color: "#fff",
-                  padding: "10px 16px", fontWeight: 700, fontSize: "15px",
-                  border: "none", cursor: "pointer", lineHeight: 1,
-                }}>
-                  Login
-                </button>
+                <LoginMenu
+                  align="left"
+                  style={{ flex: 1 }}
+                  trigger={(toggle) => (
+                    <button onClick={toggle} style={{
+                      borderRadius: 12, background: "#a088fa", color: "#fff",
+                      padding: "10px 16px", fontWeight: 700, fontSize: "15px",
+                      border: "none", cursor: "pointer", lineHeight: 1, width: "100%",
+                    }}>
+                      Login
+                    </button>
+                  )}
+                />
               )}
             </div>
 
@@ -1228,13 +1272,6 @@ const navStyle: React.CSSProperties = {
   <MobileNavItem href="/" label="Home" icon={<Home size={17} />} onClick={() => setMobileOpen(false)} />
 
   <MobileNavItem href="/profile" label="Profile" icon={<UserIcon size={17} />} onClick={() => setMobileOpen(false)} />
-
-  <MobileNavItem
-    href="/sound-memes"
-    label="Tokens"
-    icon={<AnimatedSoundWaveIcon />}
-    onClick={() => setMobileOpen(false)}
-  />
 
   <MobileNavItem
     href="/staking"

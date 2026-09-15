@@ -1,0 +1,51 @@
+[
+  { "type": "function", "name": "LOCK_AMOUNT", "inputs": [], "outputs": [{ "name": "", "type": "uint256" }], "stateMutability": "view" },
+  {
+    "type": "function", "name": "mintNFT",
+    "inputs": [{ "name": "memeToken", "type": "address" }, { "name": "nftMetadataUri", "type": "string" }],
+    "outputs": [{ "name": "", "type": "uint256" }], "stateMutability": "nonpayable"
+  },
+  { "type": "function", "name": "burnNFT", "inputs": [{ "name": "tokenId", "type": "uint256" }], "outputs": [], "stateMutability": "nonpayable" },
+  { "type": "function", "name": "tokenURI", "inputs": [{ "name": "tokenId", "type": "uint256" }], "outputs": [{ "name": "", "type": "string" }], "stateMutability": "view" },
+  { "type": "function", "name": "ownerOf", "inputs": [{ "name": "tokenId", "type": "uint256" }], "outputs": [{ "name": "", "type": "address" }], "stateMutability": "view" },
+  {
+    "type": "function", "name": "lockedNfts", "inputs": [{ "name": "tokenId", "type": "uint256" }],
+    "outputs": [
+      { "name": "memeToken", "type": "address" },
+      { "name": "lockedAmount", "type": "uint256" },
+      { "name": "mintTimestamp", "type": "uint256" },
+      { "name": "metadataUri", "type": "string" },
+      { "name": "owner", "type": "address" }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function", "name": "userNftCount",
+    "inputs": [{ "name": "", "type": "address" }, { "name": "", "type": "address" }],
+    "outputs": [{ "name": "", "type": "uint256" }], "stateMutability": "view"
+  },
+  {
+    "type": "function", "name": "getNFTsForToken",
+    "inputs": [{ "name": "owner", "type": "address" }, { "name": "memeToken", "type": "address" }],
+    "outputs": [{ "name": "", "type": "uint256" }], "stateMutability": "view"
+  },
+  {
+    "type": "event", "name": "NFTMinted", "anonymous": false,
+    "inputs": [
+      { "name": "tokenId", "type": "uint256", "indexed": true },
+      { "name": "memeToken", "type": "address", "indexed": true },
+      { "name": "minter", "type": "address", "indexed": true },
+      { "name": "metadataUri", "type": "string", "indexed": false },
+      { "name": "timestamp", "type": "uint256", "indexed": false }
+    ]
+  },
+  {
+    "type": "event", "name": "NFTBurned", "anonymous": false,
+    "inputs": [
+      { "name": "tokenId", "type": "uint256", "indexed": true },
+      { "name": "memeToken", "type": "address", "indexed": true },
+      { "name": "burner", "type": "address", "indexed": true },
+      { "name": "tokensReturned", "type": "uint256", "indexed": false }
+    ]
+  }
+]

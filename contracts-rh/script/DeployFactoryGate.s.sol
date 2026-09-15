@@ -2,33 +2,27 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import "../src/SWL444Token.sol";
 import "../src/SWL444Factory.sol";
 import "../src/DiamondHandGate.sol";
-import "../src/SWL444NFTMinter.sol";
 
-// *** TESTNET deploy script (chain ID 46630 — see app/lib/robinhoodChain.ts). ***
-// SWL444Factory.INIT_VIRTUAL_ETH is currently set to the MAINNET value
-// (0.23958 ether, chain 4663) — revert it to 0.001089 ether in
-// src/SWL444Factory.sol before rerunning this script, or a "testnet" redeploy
-// will silently ship mainnet's 2.2 ETH bonding curve instead of testnet's
-// usual ~0.01 ETH one.
-contract DeployScript is Script {
-    // Confirmed Robinhood Chain (chain ID 4663) addresses
+/// @notice Redeploys just Gate + Factory (e.g. after a Factory-only bytecode
+/// change) without touching SWL444NFTMinter, which is independent of the
+/// factory/gate pair and doesn't need to move. Kept as a separate script from
+/// Deploy.s.sol rather than adding a flag to it, since a from-scratch deploy
+/// and a Factory-only redeploy are different enough operations to want
+/// distinct, unambiguous entry points.
+contract DeployFactoryGateScript is Script {
     address constant UNISWAP_V2_ROUTER = 0x89e5DB8B5aA49aA85AC63f691524311AEB649eba;
     address constant UNISWAP_V2_FACTORY = 0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f;
     address constant WETH = 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73;
 
-    // Staker fee collector — receives the staker-side cut of every buy/sell
-    // fee instantly (see SWL444Factory._buyBonding/_sellBonding). Not the
-    // deployer wallet; set to the actual staker-payout wallet.
+    // See Deploy.s.sol's STAKER_FEE_WALLET comment.
     address constant STAKER_FEE_WALLET = 0xC9606B03123E2b4BF5F799a3A89105B792C1D0df;
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
 
-        // Deploy Diamond Hand Gate first
         DiamondHandGate gate = new DiamondHandGate();
 
         SWL444Factory factory = new SWL444Factory(
@@ -38,18 +32,12 @@ contract DeployScript is Script {
             address(gate)
         );
 
-        // Set factory as authorized caller on DiamondHandGate
         gate.setFactory(address(factory));
-
-        // Deploy NFT Minter (444K-lock Living NFT) — standalone, not wired
-        // into the factory; holders interact with it directly per meme token.
-        SWL444NFTMinter nftMinter = new SWL444NFTMinter();
 
         vm.stopBroadcast();
 
         console.log("DiamondHandGate:", address(gate));
         console.log("SWL444Factory:", address(factory));
-        console.log("SWL444NFTMinter:", address(nftMinter));
         console.log("Uniswap V2 Router:", UNISWAP_V2_ROUTER);
         console.log("Uniswap V2 Factory:", UNISWAP_V2_FACTORY);
         console.log("WETH:", WETH);

@@ -2,12 +2,12 @@
 export const dynamic = 'force-dynamic';
 
 import { Suspense } from 'react';
-import SoundMemesClient from './SoundMemesClient';
+import SoundMemesGate from './SoundMemesGate';
 
 export default function SoundMemesPage() {
   return (
     <Suspense fallback={null}>
-      <SoundMemesClient />
+      <SoundMemesGate />
     </Suspense>
   );
 }

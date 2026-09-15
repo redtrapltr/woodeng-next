@@ -22,12 +22,12 @@ contract SWL444FactoryTest is Test {
     address stranger = makeAddr("stranger");
 
     uint256 constant TOTAL_SUPPLY = 444_000_000 * 1e18;
-    uint256 constant BONDING_SUPPLY = 44_000_000 * 1e18;
+    uint256 constant BONDING_SUPPLY = 400_000_000 * 1e18;
 
-    // The bonding curve starts with a tiny virtual ETH reserve (0.001 ether)
-    // against the full 444M token supply, so even fractions of an ether move
-    // the price a huge amount. Keep "ordinary" test buys small so they don't
-    // blow through BONDING_SUPPLY in a single trade.
+    // The bonding curve starts with a small virtual ETH reserve (0.23958
+    // ether) against the full 444M token supply, so even fractions of an
+    // ether move the price a large amount. Keep "ordinary" test buys small
+    // so they don't blow through BONDING_SUPPLY in a single trade.
     uint256 constant SMALL_BUY = 1e12; // 0.000001 ether
 
     function setUp() public {
@@ -58,15 +58,21 @@ contract SWL444FactoryTest is Test {
         uint256 minAvgHoldDays
     ) internal returns (address) {
         vm.prank(by);
-        return factory.createToken(name, symbol, "ipfs://meta", minAvgHoldDays, 0);
+        address token = factory.createToken(name, symbol, "ipfs://meta", minAvgHoldDays, 0, address(0));
+        // Foundry doesn't auto-advance block.number between statements, so
+        // every buy in a test would otherwise land in the creation block and
+        // eat the block-0 snipe tax. Tests that specifically exercise the
+        // snipe tax roll blocks themselves instead of using this helper.
+        vm.roll(block.number + 3);
+        return token;
     }
 
     /// @dev Buys past the remaining bonding supply in a single trade. The
     /// factory clamps any buy that would overshoot BONDING_SUPPLY down to
     /// exactly the remaining amount and refunds the unused ETH, so one
     /// oversized buy is always enough to land exactly on BONDING_SUPPLY and
-    /// trigger the AMM flip — regardless of how much bonding was already
-    /// sold beforehand.
+    /// trigger auto-graduation to Uniswap — regardless of how much bonding
+    /// was already sold beforehand.
     function _fillBondingSupply(address token, address by) internal {
         SWL444Factory.Pool memory p = factory.getPool(token);
         if (p.bondingSold >= BONDING_SUPPLY) return;
@@ -79,16 +85,20 @@ contract SWL444FactoryTest is Test {
     // ─── Token Creation ────────────────────────────────────────
 
     function test_createToken_deploysPoolInBondingPhase() public {
-        address token = _createToken(creator, "Meme", "MEME", 0);
+        // Not the _createToken helper here — it rolls 3 blocks forward as a
+        // side effect (see its comment), which would make a "before" block
+        // number captured beforehand ambiguous to compare against.
+        address token = _createTokenNoRoll(creator);
 
         SWL444Factory.Pool memory pool = factory.getPool(token);
         assertEq(pool.token, token);
         assertEq(pool.creator, creator);
         assertEq(uint8(pool.phase), uint8(SWL444Factory.PoolPhase.Bonding));
         assertEq(pool.virtualTokens, TOTAL_SUPPLY);
-        assertEq(pool.virtualEth, 0.001 ether);
+        assertEq(pool.virtualEth, factory.INIT_VIRTUAL_ETH());
         assertEq(pool.bondingSold, 0);
         assertEq(pool.metadataUri, "ipfs://meta");
+        assertEq(pool.creationBlock, block.number);
         assertEq(factory.getPoolCount(), 1);
 
         SWL444Token tok = SWL444Token(token);
@@ -108,7 +118,7 @@ contract SWL444FactoryTest is Test {
     function test_createToken_revertsOnEmptyName() public {
         vm.prank(creator);
         vm.expectRevert("Name 1-32 chars");
-        factory.createToken("", "MEME", "ipfs://meta", 0, 0);
+        factory.createToken("", "MEME", "ipfs://meta", 0, 0, address(0));
     }
 
     function test_createToken_revertsOnLongName() public {
@@ -119,39 +129,50 @@ contract SWL444FactoryTest is Test {
             "MEME",
             "ipfs://meta",
             0,
-            0
+            0,
+            address(0)
         );
     }
 
     function test_createToken_revertsOnLongSymbol() public {
         vm.prank(creator);
         vm.expectRevert("Symbol 1-10 chars");
-        factory.createToken("Meme", "WAYTOOLONGX", "ipfs://meta", 0, 0);
+        factory.createToken("Meme", "WAYTOOLONGX", "ipfs://meta", 0, 0, address(0));
     }
 
     function test_createToken_withInitialBuy_respectsFirstBuyCap() public {
         vm.prank(creator);
-        // Small enough to stay under the 1% first-buy cap for the creator.
-        factory.createToken{value: 0.00001 ether}("Meme", "MEME", "ipfs://meta", 0, 0.00001 ether);
+        // Buying the 1% cap (4.44M tokens) is hit at ethIn ~= 0.00244 ETH
+        // gross given INIT_VIRTUAL_ETH=0.23958 ether (see the cap-revert test
+        // below for the derivation) — 0.0007 ether stays comfortably under.
+        factory.createToken{value: 0.0007 ether}("Meme", "MEME", "ipfs://meta", 0, 0.0007 ether, address(0));
     }
 
     function test_createToken_creatorFirstBuyRevertsAboveCap() public {
         vm.prank(creator);
         vm.expectRevert("First buy max 1%");
-        factory.createToken{value: 0.0001 ether}("Meme", "MEME", "ipfs://meta", 0, 0.0001 ether);
+        // With INIT_VIRTUAL_ETH = 0.23958 ether (mainnet), solving
+        // tokensOut = maxFirst (4.44M) for netEth via the constant-product
+        // formula gives netEth = maxFirst*V/(T-maxFirst) ~= 0.00242 ETH, so
+        // ethIn gross ~= 0.00244 ETH — 0.25 ether clears it with huge margin.
+        factory.createToken{value: 0.25 ether}("Meme", "MEME", "ipfs://meta", 0, 0.25 ether, address(0));
     }
 
     function test_createToken_refundsExcessOnInitialBuy() public {
         uint256 before = creator.balance;
         vm.prank(creator);
-        factory.createToken{value: 1 ether}("Meme", "MEME", "ipfs://meta", 0, 0.00001 ether);
-        // Only 0.00001 ether should have been spent, rest refunded.
-        assertEq(creator.balance, before - 0.00001 ether);
+        factory.createToken{value: 1 ether}("Meme", "MEME", "ipfs://meta", 0, 0.00001 ether, address(0));
+        // Only 0.00001 ether should have been spent net of refund — but with
+        // feeRecipient defaulting to the creator, the creator-side cut of the
+        // buy fee is sent straight back to them in the same transaction, so
+        // their net spend is less than the raw initialBuyEth amount.
+        uint256 creatorFee = (0.00001 ether * 70) / 10000;
+        assertEq(creator.balance, before - 0.00001 ether + creatorFee);
     }
 
     // ─── Buy (Bonding) ─────────────────────────────────────────
 
-    function test_buy_bonding_mintsTokensAndAccruesFees() public {
+    function test_buy_bonding_mintsTokens() public {
         address token = _createToken(creator, "Meme", "MEME", 0);
 
         vm.prank(buyer);
@@ -161,8 +182,6 @@ contract SWL444FactoryTest is Test {
         assertGt(tok.balanceOf(buyer), 0);
 
         SWL444Factory.Pool memory pool = factory.getPool(token);
-        assertEq(pool.creatorFeesAccrued, (SMALL_BUY * 50) / 10000);
-        assertEq(pool.stakerFeesAccrued, (SMALL_BUY * 100) / 10000);
         assertEq(pool.bondingSold, tok.balanceOf(buyer));
     }
 
@@ -170,12 +189,13 @@ contract SWL444FactoryTest is Test {
         address token = _createToken(creator, "Meme", "MEME", 0);
 
         // A buy from a non-creator on the very first purchase is not subject
-        // to the 1% cap (only the creator's first buy is capped). Pick an
-        // amount that clears the 1% cap but stays under the bonding supply.
+        // to the first-buy cap (only the creator's first buy is capped). Pick
+        // an amount that clears the cap (~1.515 ETH) but stays under the
+        // bonding supply.
         vm.prank(whale);
-        factory.buy{value: 0.00002 ether}(token);
+        factory.buy{value: 2 ether}(token);
 
-        assertGt(SWL444Token(token).balanceOf(whale), (TOTAL_SUPPLY * 100) / 10000);
+        assertGt(SWL444Token(token).balanceOf(whale), (TOTAL_SUPPLY * factory.MAX_FIRST_BUY_BPS()) / 10000);
     }
 
     function test_buy_revertsOnZeroEth() public {
@@ -189,6 +209,79 @@ contract SWL444FactoryTest is Test {
         vm.prank(buyer);
         vm.expectRevert("Pool not found");
         factory.buy{value: 1 ether}(makeAddr("notAPool"));
+    }
+
+    // ─── Snipe Tax ─────────────────────────────────────────────
+    // Decaying tax on non-creator buys in the first 3 blocks after creation
+    // (50% / 25% / 10% / none from block 3 onward) — discourages bots
+    // front-running the launch block. The creator's own qualifying first buy
+    // (bondingSold still 0) is exempt regardless of block.
+
+    function _createTokenNoRoll(address by) internal returns (address) {
+        vm.prank(by);
+        return factory.createToken("Meme", "MEME", "ipfs://meta", 0, 0, address(0));
+    }
+
+    function test_snipeTax_block0_taxes50Percent() public {
+        address token = _createTokenNoRoll(creator);
+
+        uint256 collectorBefore = feeCollector.balance;
+        vm.prank(buyer);
+        factory.buy{value: SMALL_BUY}(token);
+
+        uint256 expectedSnipeTax = (SMALL_BUY * 5000) / 10000;
+        uint256 expectedStakerFee = ((SMALL_BUY - expectedSnipeTax) * 30) / 10000;
+        assertEq(feeCollector.balance, collectorBefore + expectedSnipeTax + expectedStakerFee);
+    }
+
+    function test_snipeTax_block1_taxes25Percent() public {
+        address token = _createTokenNoRoll(creator);
+        vm.roll(block.number + 1);
+
+        uint256 collectorBefore = feeCollector.balance;
+        vm.prank(buyer);
+        factory.buy{value: SMALL_BUY}(token);
+
+        uint256 expectedSnipeTax = (SMALL_BUY * 2500) / 10000;
+        uint256 expectedStakerFee = ((SMALL_BUY - expectedSnipeTax) * 30) / 10000;
+        assertEq(feeCollector.balance, collectorBefore + expectedSnipeTax + expectedStakerFee);
+    }
+
+    function test_snipeTax_block2_taxes10Percent() public {
+        address token = _createTokenNoRoll(creator);
+        vm.roll(block.number + 2);
+
+        uint256 collectorBefore = feeCollector.balance;
+        vm.prank(buyer);
+        factory.buy{value: SMALL_BUY}(token);
+
+        uint256 expectedSnipeTax = (SMALL_BUY * 1000) / 10000;
+        uint256 expectedStakerFee = ((SMALL_BUY - expectedSnipeTax) * 30) / 10000;
+        assertEq(feeCollector.balance, collectorBefore + expectedSnipeTax + expectedStakerFee);
+    }
+
+    function test_snipeTax_block3Plus_noTax() public {
+        address token = _createTokenNoRoll(creator);
+        vm.roll(block.number + 3);
+
+        uint256 collectorBefore = feeCollector.balance;
+        vm.prank(buyer);
+        factory.buy{value: SMALL_BUY}(token);
+
+        // No snipe tax past block 2 — only the normal 0.3% staker fee.
+        uint256 expectedStakerFee = (SMALL_BUY * 30) / 10000;
+        assertEq(feeCollector.balance, collectorBefore + expectedStakerFee);
+    }
+
+    function test_snipeTax_exemptForCreatorFirstBuy() public {
+        // Creator's own first buy, same block as creation — must NOT be
+        // taxed, even though block 0 would otherwise carry the 50% tax.
+        uint256 creatorBefore = creator.balance;
+        vm.prank(creator);
+        factory.createToken{value: 0.0007 ether}("Meme", "MEME", "ipfs://meta", 0, 0.0007 ether, address(0));
+
+        uint256 creatorFee = (0.0007 ether * 70) / 10000;
+        assertEq(creator.balance, creatorBefore - 0.0007 ether + creatorFee);
     }
 
     // ─── Sell (Bonding) ────────────────────────────────────────
@@ -262,163 +355,112 @@ contract SWL444FactoryTest is Test {
         assertGt(SWL444Token(ungated).balanceOf(stranger), 0);
     }
 
-    // ─── AMM Flip + Trading ────────────────────────────────────
+    // ─── Auto-Graduation ────────────────────────────────────────
+    // Graduation is automatic: filling the bonding curve migrates liquidity
+    // straight to Uniswap in the same transaction, with no intermediate
+    // internal-AMM phase and no separate graduate() call.
 
-    function test_flipToAmm_onBondingSupplyExhausted() public {
+    function test_graduatesAutomatically_onBondingSupplyExhausted() public {
         address token = _createToken(creator, "Meme", "MEME", 0);
+
+        uint256 expectedLiquidityTokens = TOTAL_SUPPLY - BONDING_SUPPLY;
+        // Mainnet value: bonding graduates after ~2.2 ETH raised gross
+        // (~2.178 ETH net of the 1% buy fee) — see INIT_VIRTUAL_ETH comment
+        // in SWL444Factory.sol for the derivation.
+        uint256 expectedRealEth = 2.178 ether;
+
         _fillBondingSupply(token, whale);
 
         SWL444Factory.Pool memory pool = factory.getPool(token);
-        assertEq(uint8(pool.phase), uint8(SWL444Factory.PoolPhase.AMM));
+        assertEq(uint8(pool.phase), uint8(SWL444Factory.PoolPhase.Graduated));
         assertEq(pool.bondingSold, BONDING_SUPPLY);
-        assertEq(pool.ammTokenReserve, TOTAL_SUPPLY - BONDING_SUPPLY);
-        // ammEthReserve excludes the phantom initial virtual-ETH seed —
-        // it only reflects real ETH actually raised during bonding.
-        assertEq(pool.ammEthReserve, pool.virtualEth - factory.INIT_VIRTUAL_ETH());
-        assertEq(SWL444Token(token).balanceOf(address(factory)), TOTAL_SUPPLY - BONDING_SUPPLY);
-    }
+        assertTrue(pool.liquidityLocked);
+        assertTrue(pool.uniswapPair != address(0));
 
-    function test_buy_amm_afterFlip() public {
-        address token = _createToken(creator, "Meme", "MEME", 0);
-        _fillBondingSupply(token, whale);
-
-        uint256 before = SWL444Token(token).balanceOf(buyer);
-        vm.prank(buyer);
-        factory.buy{value: 1 ether}(token);
-
-        assertGt(SWL444Token(token).balanceOf(buyer), before);
-    }
-
-    function test_sell_amm_afterFlip() public {
-        address token = _createToken(creator, "Meme", "MEME", 0);
-        _fillBondingSupply(token, whale);
-
-        vm.prank(buyer);
-        factory.buy{value: 1 ether}(token);
-        uint256 tokenBal = SWL444Token(token).balanceOf(buyer);
-
-        vm.prank(buyer);
-        SWL444Token(token).approve(address(factory), tokenBal);
-
-        uint256 ethBefore = buyer.balance;
-        vm.prank(buyer);
-        factory.sell(token, tokenBal);
-
-        assertEq(SWL444Token(token).balanceOf(buyer), 0);
-        assertGt(buyer.balance, ethBefore);
+        // The full remaining supply was minted and handed straight to the
+        // Uniswap router as liquidity — the factory itself holds none of it.
+        assertEq(SWL444Token(token).balanceOf(address(uniRouter)), expectedLiquidityTokens);
+        assertEq(SWL444Token(token).balanceOf(address(factory)), 0);
+        assertApproxEqAbs(address(uniRouter).balance, expectedRealEth, 0.0001 ether);
     }
 
     function test_buyAndSell_revertAfterGraduation() public {
         address token = _createToken(creator, "Meme", "MEME", 0);
         _fillBondingSupply(token, whale);
 
-        vm.prank(creator);
-        factory.graduate(token);
-
         vm.prank(buyer);
-        vm.expectRevert("Pool graduated - trade on Uniswap");
+        vm.expectRevert("Graduated - trade on Uniswap");
         factory.buy{value: 1 ether}(token);
 
         vm.prank(buyer);
-        vm.expectRevert("Pool graduated - trade on Uniswap");
+        vm.expectRevert("Graduated - trade on Uniswap");
         factory.sell(token, 1);
     }
 
-    // ─── Graduation ────────────────────────────────────────────
+    // ─── Auto-Sent Fees ────────────────────────────────────────
+    // Fees are sent instantly on every trade — no accrue-then-claim step, so
+    // these assert balance deltas directly rather than a Pool.xxxAccrued field.
 
-    function test_graduate_revertsIfNotInAmmPhase() public {
+    function test_buy_bonding_sendsFeesInstantly() public {
         address token = _createToken(creator, "Meme", "MEME", 0);
-        vm.prank(creator);
-        vm.expectRevert("Not in AMM phase");
-        factory.graduate(token);
-    }
 
-    function test_graduate_revertsIfUnauthorized() public {
-        address token = _createToken(creator, "Meme", "MEME", 0);
-        _fillBondingSupply(token, whale);
+        uint256 creatorBefore = creator.balance;
+        uint256 collectorBefore = feeCollector.balance;
 
-        vm.prank(stranger);
-        vm.expectRevert("Not authorized");
-        factory.graduate(token);
-    }
-
-    function test_graduate_addsLiquidityAndLocksIt() public {
-        address token = _createToken(creator, "Meme", "MEME", 0);
-        _fillBondingSupply(token, whale);
-
-        SWL444Factory.Pool memory beforePool = factory.getPool(token);
-        uint256 ammTokens = beforePool.ammTokenReserve;
-        uint256 ammEth = beforePool.ammEthReserve;
-
-        vm.prank(creator);
-        factory.graduate(token);
-
-        SWL444Factory.Pool memory pool = factory.getPool(token);
-        assertEq(uint8(pool.phase), uint8(SWL444Factory.PoolPhase.Graduated));
-        assertTrue(pool.liquidityLocked);
-        assertTrue(pool.uniswapPair != address(0));
-
-        // Router pulled the full AMM reserves.
-        assertEq(SWL444Token(token).balanceOf(address(uniRouter)), ammTokens);
-        assertEq(address(uniRouter).balance, ammEth);
-    }
-
-    // ─── Fee Claiming ──────────────────────────────────────────
-
-    function test_claimCreatorFees() public {
-        address token = _createToken(creator, "Meme", "MEME", 0);
         vm.prank(buyer);
         factory.buy{value: SMALL_BUY}(token);
 
-        SWL444Factory.Pool memory pool = factory.getPool(token);
-        uint256 accrued = pool.creatorFeesAccrued;
-        assertGt(accrued, 0);
+        uint256 expectedCreatorFee = (SMALL_BUY * 70) / 10000;
+        uint256 expectedStakerFee = (SMALL_BUY * 30) / 10000;
 
-        uint256 before = creator.balance;
-        vm.prank(creator);
-        factory.claimCreatorFees(token);
-
-        assertEq(creator.balance, before + accrued);
-        pool = factory.getPool(token);
-        assertEq(pool.creatorFeesAccrued, 0);
+        assertEq(creator.balance, creatorBefore + expectedCreatorFee);
+        assertEq(feeCollector.balance, collectorBefore + expectedStakerFee);
     }
 
-    function test_claimCreatorFees_revertsForNonCreator() public {
-        address token = _createToken(creator, "Meme", "MEME", 0);
+    function test_buy_bonding_sendsFeesToCustomFeeRecipient() public {
+        address customWallet = makeAddr("customFeeWallet");
+        vm.prank(creator);
+        address token = factory.createToken("Meme", "MEME", "ipfs://meta", 0, 0, customWallet);
+        vm.roll(block.number + 3); // past the snipe-tax window — not what this test covers
+
+        uint256 customBefore = customWallet.balance;
+        uint256 creatorBefore = creator.balance;
+
         vm.prank(buyer);
         factory.buy{value: SMALL_BUY}(token);
 
-        vm.prank(stranger);
-        vm.expectRevert("Not creator");
-        factory.claimCreatorFees(token);
+        uint256 expectedCreatorFee = (SMALL_BUY * 70) / 10000;
+        assertEq(customWallet.balance, customBefore + expectedCreatorFee);
+        // Creator's own wallet is untouched when a distinct feeRecipient is set.
+        assertEq(creator.balance, creatorBefore);
     }
 
-    function test_claimCreatorFees_revertsWhenNoFees() public {
-        address token = _createToken(creator, "Meme", "MEME", 0);
-        vm.prank(creator);
-        vm.expectRevert("No fees");
-        factory.claimCreatorFees(token);
-    }
-
-    function test_flushStakerFees() public {
+    function test_sell_bonding_sendsFeesInstantly() public {
         address token = _createToken(creator, "Meme", "MEME", 0);
         vm.prank(buyer);
         factory.buy{value: SMALL_BUY}(token);
+        uint256 tokenBal = SWL444Token(token).balanceOf(buyer);
 
-        SWL444Factory.Pool memory pool = factory.getPool(token);
-        uint256 accrued = pool.stakerFeesAccrued;
-        assertGt(accrued, 0);
+        uint256 creatorBefore = creator.balance;
+        uint256 collectorBefore = feeCollector.balance;
 
-        uint256 before = feeCollector.balance;
-        factory.flushStakerFees(token);
+        vm.prank(buyer);
+        factory.sell(token, tokenBal);
 
-        assertEq(feeCollector.balance, before + accrued);
+        assertGt(creator.balance, creatorBefore);
+        assertGt(feeCollector.balance, collectorBefore);
     }
 
-    function test_flushStakerFees_revertsWhenNoFees() public {
-        address token = _createToken(creator, "Meme", "MEME", 0);
-        vm.expectRevert("No fees");
-        factory.flushStakerFees(token);
+    function test_RevertWhen_FeeRecipientRejectsEth() public {
+        // A contract with no receive/fallback can't accept the .call{value:}
+        // fee send — the buy must revert instead of silently losing the fee.
+        RejectsEth rejecter = new RejectsEth();
+        vm.prank(creator);
+        address token = factory.createToken("Meme", "MEME", "ipfs://meta", 0, 0, address(rejecter));
+
+        vm.prank(buyer);
+        vm.expectRevert("Creator fee transfer failed");
+        factory.buy{value: SMALL_BUY}(token);
     }
 
     // ─── Views ─────────────────────────────────────────────────
@@ -433,16 +475,12 @@ contract SWL444FactoryTest is Test {
         assertEq(factory.getCurrentPrice(token), expectedPrice);
     }
 
-    function test_getCurrentPrice_amm() public {
-        // Uses a fresh token filled straight from bondingSold == 0 — see
-        // _fillBondingSupply's docs on why this can't be composed with a
-        // preceding partial buy.
+    function test_getCurrentPrice_returnsZeroAfterGraduation() public {
         address token = _createToken(creator, "Meme", "MEME", 0);
         _fillBondingSupply(token, whale);
 
-        SWL444Factory.Pool memory pool = factory.getPool(token);
-        uint256 expectedPrice = (pool.ammEthReserve * 1e18) / pool.ammTokenReserve;
-        assertEq(factory.getCurrentPrice(token), expectedPrice);
+        assertEq(uint8(factory.getPool(token).phase), uint8(SWL444Factory.PoolPhase.Graduated));
+        assertEq(factory.getCurrentPrice(token), 0);
     }
 
     function test_getAllPools_and_getPoolCount() public {
@@ -500,3 +538,8 @@ contract SWL444FactoryTest is Test {
         assertEq(SWL444Token(token).metadataUri(), "ipfs://new");
     }
 }
+
+/// @dev No receive/fallback — any plain ETH send to this contract reverts.
+/// Used to prove a fee send failure aborts the whole trade instead of
+/// silently dropping the fee.
+contract RejectsEth {}

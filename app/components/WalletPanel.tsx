@@ -9,6 +9,10 @@ import {
   Connection,
 } from "@solana/web3.js";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { useRobinhoodWallet } from "@/hooks/useRobinhoodWallet";
+import { useChainMode } from "../contexts/NetworkContext";
+import { parseEther, formatEther, isAddress } from "viem";
+import { ERC20_MINIMAL_ABI, RH_CONFIG } from "../lib/robinhoodChain";
 import { getCachedBalance, getCachedTokenBalance } from "@/lib/balanceCache";
 import {
   getAssociatedTokenAddressSync,
@@ -94,6 +98,16 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
     sendTransaction, logout, exportWallet,
     user, address, isEmbeddedWallet, walletClientType,
   } = useUnifiedWallet();
+
+  const { isRobinhood } = useChainMode();
+  const rh = useRobinhoodWallet();
+
+  // EVM withdraw state (Robinhood mode only)
+  const [evmSendMode, setEvmSendMode] = useState<"eth" | "token">("eth");
+  const [evmTokenAddress, setEvmTokenAddress] = useState("");
+  const [evmSending, setEvmSending] = useState(false);
+  const [evmSendError, setEvmSendError] = useState("");
+  const [evmSendHash, setEvmSendHash] = useState("");
 
   const rpcConnection = useMemo(
     () => new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC!, { commitment: "confirmed" }),
@@ -184,13 +198,15 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
     }
   }, [address, rpcConnection]);
 
-  // poll every 15s — single effect, no competing subscriptions
+  // poll every 15s — single effect, no competing subscriptions. Skipped in
+  // Robinhood mode: this hits the (rate-limited) Solana RPC and isn't needed
+  // while the user isn't looking at Solana balances.
   useEffect(() => {
-    if (!address) return;
+    if (!address || isRobinhood) return;
     fetchBalances();
     const interval = setInterval(fetchBalances, 15000);
     return () => clearInterval(interval);
-  }, [address, fetchBalances]);
+  }, [address, isRobinhood, fetchBalances]);
 
   // fetch recent txns
   const fetchTxns = useCallback(async () => {
@@ -204,10 +220,10 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
     finally { setTxnsLoading(false); }
   }, [address, rpcConnection]);
 
-  // fetch txns when panel opens
+  // fetch txns when panel opens — Solana only, skip in Robinhood mode
   useEffect(() => {
-    if (open && address) fetchTxns();
-  }, [open, address]);
+    if (open && address && !isRobinhood) fetchTxns();
+  }, [open, address, isRobinhood]);
 
   // fetch all SWL-444 tokens held by the user, cross-referenced against the
   // live pools list for name/symbol/image — covers both classic SPL and
@@ -270,15 +286,18 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
     }
   }, [address, rpcConnection]);
 
+  // Solana only — skip in Robinhood mode
   useEffect(() => {
-    if (open && address) fetchUserTokens();
-  }, [open, address]);
+    if (open && address && !isRobinhood) fetchUserTokens();
+  }, [open, address, isRobinhood]);
 
   const handleRefresh = () => {
     if (spinning) return;
     setSpinning(true);
-    // no state reset — just re-fetch
-    Promise.all([fetchBalances(), fetchTxns(), fetchUserTokens()])
+    // Solana-only fetches — nothing to refresh here in Robinhood mode (its
+    // balance comes from useRobinhoodWallet, refreshed separately).
+    const refreshes = isRobinhood ? [rh.refreshBalance()] : [fetchBalances(), fetchTxns(), fetchUserTokens()];
+    Promise.all(refreshes)
       .finally(() => setTimeout(() => setSpinning(false), 700));
   };
 
@@ -340,9 +359,50 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
     }
   };
 
+  const handleEvmSend = async () => {
+    if (!rh.address) return;
+    setEvmSendError(""); setEvmSendHash("");
+    setEvmSending(true);
+    try {
+      if (!isAddress(sendTo.trim())) throw new Error("Invalid destination address");
+      const amt = parseFloat(sendAmount);
+      if (isNaN(amt) || amt <= 0) throw new Error("Enter a valid amount");
+
+      const client = await rh.getWalletClient();
+      let hash: `0x${string}`;
+
+      if (evmSendMode === "eth") {
+        hash = await client.sendTransaction({
+          account: client.account!,
+          chain: client.chain,
+          to: sendTo.trim() as `0x${string}`,
+          value: parseEther(sendAmount),
+        });
+      } else {
+        if (!isAddress(evmTokenAddress.trim())) throw new Error("Invalid token contract address");
+        hash = await client.writeContract({
+          account: client.account!,
+          chain: client.chain,
+          address: evmTokenAddress.trim() as `0x${string}`,
+          abi: ERC20_MINIMAL_ABI,
+          functionName: "transfer",
+          args: [sendTo.trim() as `0x${string}`, parseEther(sendAmount)],
+        });
+      }
+
+      setEvmSendHash(hash);
+      setSendTo(""); setSendAmount("");
+      await rh.refreshBalance();
+    } catch (e: any) {
+      setEvmSendError(e?.shortMessage || e?.message || "Transaction failed");
+    } finally {
+      setEvmSending(false);
+    }
+  };
+
   if (!visible) return null;
 
-  const addr = address ?? "";
+  const addr = isRobinhood ? (rh.address ?? "") : (address ?? "");
 
   // derive user identity
   let displayName = "Wallet User";
@@ -562,30 +622,53 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
                 ↻
               </button>
 
-              {/* SOL big number */}
-              <div style={{ animation: "_wp_pop 0.35s cubic-bezier(0.175,0.885,0.32,1.1) 0.1s both" }}>
-                {solBalance !== null ? (
-                  <div style={{ fontSize: 38, fontWeight: 800, color: "#fff", letterSpacing: "-0.5px", lineHeight: 1.1 }}>
-                    {solBalance.toFixed(4)}{" "}
-                    <span style={{ fontSize: 20, color: "#a088fa", fontWeight: 600 }}>SOL</span>
+              {isRobinhood ? (
+                <>
+                  {/* ETH big number */}
+                  <div style={{ animation: "_wp_pop 0.35s cubic-bezier(0.175,0.885,0.32,1.1) 0.1s both" }}>
+                    {rh.ethBalance !== null ? (
+                      <div style={{ fontSize: 38, fontWeight: 800, color: "#fff", letterSpacing: "-0.5px", lineHeight: 1.1 }}>
+                        {rh.ethBalance.toFixed(4)}{" "}
+                        <span style={{ fontSize: 20, color: "#00E676", fontWeight: 600 }}>ETH</span>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 38, fontWeight: 800, color: "#2a2b3d", animation: "_wp_pulse 1.5s ease infinite" }}>
+                        —
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div style={{ fontSize: 38, fontWeight: 800, color: "#2a2b3d", animation: "_wp_pulse 1.5s ease infinite" }}>
-                    —
+                  <div style={{ fontSize: 12, color: "#7a80a0", marginTop: 8 }}>Robinhood Chain (Testnet)</div>
+                </>
+              ) : (
+                <>
+                  {/* SOL big number */}
+                  <div style={{ animation: "_wp_pop 0.35s cubic-bezier(0.175,0.885,0.32,1.1) 0.1s both" }}>
+                    {solBalance !== null ? (
+                      <div style={{ fontSize: 38, fontWeight: 800, color: "#fff", letterSpacing: "-0.5px", lineHeight: 1.1 }}>
+                        {solBalance.toFixed(4)}{" "}
+                        <span style={{ fontSize: 20, color: "#a088fa", fontWeight: 600 }}>SOL</span>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 38, fontWeight: 800, color: "#2a2b3d", animation: "_wp_pulse 1.5s ease infinite" }}>
+                        —
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
 
-              {/* WOODENG */}
-              <div style={{ fontSize: 15, color: "#7a80a0", marginTop: 8 }}>
-                {woodengBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
-                <span style={{ color: "#a088fa" }}>WOODENG</span>
-              </div>
+                  {/* WOODENG */}
+                  <div style={{ fontSize: 15, color: "#7a80a0", marginTop: 8 }}>
+                    {woodengBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
+                    <span style={{ color: "#a088fa" }}>WOODENG</span>
+                  </div>
+                </>
+              )}
 
               {/* Address link */}
               {addr ? (
                 <a
-                  href={`https://solscan.io/account/${addr}`}
+                  href={isRobinhood
+                    ? `${RH_CONFIG.explorer}/address/${addr}`
+                    : `https://solscan.io/account/${addr}`}
                   target="_blank" rel="noreferrer"
                   style={{ display: "inline-block", marginTop: 10, fontSize: 11, color: "#3d4155", textDecoration: "none" }}
                   onMouseEnter={e => (e.currentTarget.style.color = "#9aa0b6")}
@@ -599,8 +682,8 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
             </div>
           )}
 
-          {/* 2b · Your Tokens (main view) */}
-          {view === "main" && !userTokensLoading && userTokens.length > 0 && (
+          {/* 2b · Your Tokens (main view, Solana only) */}
+          {view === "main" && !isRobinhood && !userTokensLoading && userTokens.length > 0 && (
             <div style={{ animation: "_wp_fadeUp 0.3s ease 0.08s both" }}>
               <div style={{ color: "#9aa0b6", fontSize: 12, fontWeight: 700, marginBottom: 8, letterSpacing: "0.02em" }}>
                 YOUR TOKENS
@@ -696,20 +779,22 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
           {/* 4 · Deposit view */}
           {view === "deposit" && (
             <div style={{ animation: "_wp_fadeUp 0.28s ease both" }}>
-              {/* Tabs */}
-              <div style={{
-                display: "flex", gap: 4, marginBottom: 16,
-                background: "rgba(255,255,255,0.03)", borderRadius: 11, padding: 4,
-              }}>
-                <button style={tabBtn(depositTab === "address")} onClick={() => setDepositTab("address")}>
-                  From Wallet
-                </button>
-                <button style={tabBtn(depositTab === "card")} onClick={() => setDepositTab("card")}>
-                  Buy with Card
-                </button>
-              </div>
+              {/* Tabs (card funding is Solana/MoonPay only) */}
+              {!isRobinhood && (
+                <div style={{
+                  display: "flex", gap: 4, marginBottom: 16,
+                  background: "rgba(255,255,255,0.03)", borderRadius: 11, padding: 4,
+                }}>
+                  <button style={tabBtn(depositTab === "address")} onClick={() => setDepositTab("address")}>
+                    From Wallet
+                  </button>
+                  <button style={tabBtn(depositTab === "card")} onClick={() => setDepositTab("card")}>
+                    Buy with Card
+                  </button>
+                </div>
+              )}
 
-              {depositTab === "address" ? (
+              {(isRobinhood || depositTab === "address") ? (
                 addr ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
                     {/* Address + copy */}
@@ -746,8 +831,11 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
                         <QRCodeSVG value={addr} size={164} level="M" />
                       </div>
                       <div style={{ fontSize: 12, color: "#6b7084", textAlign: "center", lineHeight: 1.6 }}>
-                        Send SOL or tokens to this address from<br />
-                        Phantom, an exchange, or any Solana wallet
+                        {isRobinhood ? (
+                          <>Send ETH or ERC-20 tokens to this address on<br />Robinhood Chain (Testnet)</>
+                        ) : (
+                          <>Send SOL or tokens to this address from<br />Phantom, an exchange, or any Solana wallet</>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -786,8 +874,133 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
             </div>
           )}
 
-          {/* 5 · Withdraw view */}
-          {view === "withdraw" && (
+          {/* 5 · Withdraw view (Robinhood / EVM) */}
+          {view === "withdraw" && isRobinhood && (
+            <div style={{ animation: "_wp_fadeUp 0.28s ease both", display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.03)", borderRadius: 11, padding: 4 }}>
+                {(["eth", "token"] as const).map(m => (
+                  <button key={m} style={tabBtn(evmSendMode === m)} onClick={() => setEvmSendMode(m)}>
+                    {m === "eth" ? "ETH" : "ERC-20 Token"}
+                  </button>
+                ))}
+              </div>
+
+              {evmSendMode === "token" && (
+                <div>
+                  <label style={{ display: "block", color: "#6b7084", fontSize: 12, marginBottom: 6, fontWeight: 600 }}>
+                    Token contract address
+                  </label>
+                  <input
+                    value={evmTokenAddress}
+                    onChange={e => setEvmTokenAddress(e.target.value)}
+                    placeholder="0x…"
+                    style={{ ...inputStyle, fontFamily: "monospace" }}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label style={{ display: "block", color: "#6b7084", fontSize: 12, marginBottom: 6, fontWeight: 600 }}>
+                  Destination address
+                </label>
+                <input
+                  value={sendTo}
+                  onChange={e => setSendTo(e.target.value)}
+                  placeholder="0x… (Robinhood Chain address)"
+                  style={{ ...inputStyle, fontFamily: "monospace" }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: "block", color: "#6b7084", fontSize: 12, marginBottom: 6, fontWeight: 600 }}>
+                  Amount
+                </label>
+                <div style={{ position: "relative" }}>
+                  <input
+                    value={sendAmount}
+                    onChange={e => setSendAmount(e.target.value)}
+                    placeholder="0.00"
+                    type="number"
+                    min="0"
+                    step="any"
+                    style={{ ...inputStyle, paddingRight: 66 }}
+                  />
+                  {evmSendMode === "eth" && (
+                    <button
+                      onClick={() => setSendAmount(Math.max(0, (rh.ethBalance ?? 0) - 0.0005).toFixed(6))}
+                      style={{
+                        position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                        padding: "4px 10px", borderRadius: 8,
+                        background: "rgba(0,200,5,0.08)", border: "1px solid rgba(0,200,5,0.18)",
+                        color: "#00E676", fontSize: 12, fontWeight: 700,
+                        cursor: "pointer", fontFamily: "inherit",
+                      }}
+                    >
+                      MAX
+                    </button>
+                  )}
+                </div>
+                {evmSendMode === "eth" && (
+                  <div style={{ color: "#3d4155", fontSize: 11, marginTop: 5 }}>
+                    Available: {(rh.ethBalance ?? 0).toFixed(4)} ETH
+                  </div>
+                )}
+              </div>
+
+              {evmSendError && (
+                <div style={{
+                  padding: "10px 14px", borderRadius: 10,
+                  background: "rgba(255,107,107,0.07)", border: "1px solid rgba(255,107,107,0.18)",
+                  color: "#ff6b6b", fontSize: 13, lineHeight: 1.5,
+                }}>
+                  {evmSendError}
+                </div>
+              )}
+              {evmSendHash && (
+                <div style={{
+                  padding: "10px 14px", borderRadius: 10,
+                  background: "rgba(0,200,5,0.07)", border: "1px solid rgba(0,200,5,0.18)",
+                  color: "#00E676", fontSize: 12,
+                }}>
+                  ✓ Sent!{" "}
+                  <a href={`${RH_CONFIG.explorer}/tx/${evmSendHash}`} target="_blank" rel="noreferrer" style={{ color: "#00E676" }}>
+                    View on Explorer ↗
+                  </a>
+                </div>
+              )}
+
+              <button
+                onClick={handleEvmSend}
+                disabled={evmSending || !sendTo.trim() || !sendAmount || !rh.address}
+                style={{
+                  width: "100%", padding: "15px", borderRadius: 14, border: "none",
+                  background: (evmSending || !sendTo.trim() || !sendAmount || !rh.address)
+                    ? "rgba(255,255,255,0.05)"
+                    : "linear-gradient(135deg, #00C805 0%, #00E676 100%)",
+                  color: (evmSending || !sendTo.trim() || !sendAmount || !rh.address) ? "#3d4155" : "#000",
+                  fontWeight: 700, fontSize: 15,
+                  cursor: (evmSending || !rh.address) ? "not-allowed" : "pointer",
+                  fontFamily: "inherit",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                }}
+              >
+                {evmSending ? (
+                  <><span style={{ display: "inline-block", animation: "_wp_spin 0.7s linear infinite" }}>⟳</span> Sending…</>
+                ) : (
+                  `Send ${evmSendMode === "eth" ? "ETH" : "Token"}`
+                )}
+              </button>
+
+              {!rh.address && (
+                <div style={{ textAlign: "center", color: "#4a4d5e", fontSize: 12 }}>
+                  Connect a wallet to send funds
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 5b · Withdraw view (Solana) */}
+          {view === "withdraw" && !isRobinhood && (
             <div style={{ animation: "_wp_fadeUp 0.28s ease both", display: "flex", flexDirection: "column", gap: 12 }}>
               {/* Token toggle */}
               <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.03)", borderRadius: 11, padding: 4 }}>
@@ -919,8 +1132,28 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
             </div>
           )}
 
-          {/* 6 · Recent Activity (main view) */}
-          {view === "main" && (
+          {/* 6 · Recent Activity (main view, Robinhood — no indexer, link out instead) */}
+          {view === "main" && isRobinhood && (
+            <div style={{ animation: "_wp_fadeUp 0.3s ease 0.15s both" }}>
+              <div style={{ color: "#9aa0b6", fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Recent Activity</div>
+              <div style={{ ...CARD, textAlign: "center", padding: "20px" }}>
+                {addr ? (
+                  <a
+                    href={`${RH_CONFIG.explorer}/address/${addr}`}
+                    target="_blank" rel="noreferrer"
+                    style={{ color: "#00E676", fontSize: 13, textDecoration: "none" }}
+                  >
+                    View activity on Explorer ↗
+                  </a>
+                ) : (
+                  <span style={{ color: "#3d4155", fontSize: 13 }}>Connect a wallet to see activity</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 6b · Recent Activity (main view, Solana) */}
+          {view === "main" && !isRobinhood && (
             <div style={{ animation: "_wp_fadeUp 0.3s ease 0.15s both" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                 <span style={{ color: "#9aa0b6", fontSize: 13, fontWeight: 700 }}>Recent Activity</span>
@@ -997,10 +1230,10 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
               display: "flex", justifyContent: "center", gap: 24, paddingTop: 4,
               animation: "_wp_fadeUp 0.3s ease 0.2s both",
             }}>
-              {!!address && (exportWallet as any) && (
+              {!!addr && (exportWallet as any) && (
                 <button
                   onClick={() => {
-                    try { (exportWallet as any)({ address: addr, chainType: "solana" }); }
+                    try { (exportWallet as any)({ address: addr, chainType: isRobinhood ? "ethereum" : "solana" }); }
                     catch { (exportWallet as any)(); }
                   }}
                   style={{
@@ -1016,13 +1249,15 @@ export default function WalletPanel({ open, onClose }: WalletPanelProps) {
               )}
               {addr && (
                 <a
-                  href={`https://solscan.io/account/${addr}`}
+                  href={isRobinhood
+                    ? `${RH_CONFIG.explorer}/address/${addr}`
+                    : `https://solscan.io/account/${addr}`}
                   target="_blank" rel="noreferrer"
                   style={{ color: "#3d4155", fontSize: 12, textDecoration: "underline" }}
                   onMouseEnter={e => (e.currentTarget.style.color = "#9aa0b6")}
                   onMouseLeave={e => (e.currentTarget.style.color = "#3d4155")}
                 >
-                  View on Solscan
+                  {isRobinhood ? "View on Explorer" : "View on Solscan"}
                 </a>
               )}
             </div>

@@ -1,5 +1,7 @@
-import { redirect } from "next/navigation";
+"use client";
+
+import CreateGate from "./CreateGate";
 
 export default function CreatePage() {
-  redirect("/meme-locker");
+  return <CreateGate />;
 }
