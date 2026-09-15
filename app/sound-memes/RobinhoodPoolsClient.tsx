@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Feather, RefreshCw, ExternalLink } from "lucide-react";
+import { RefreshCw, ExternalLink } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useRobinhoodWallet } from "@/hooks/useRobinhoodWallet";
 import {
@@ -320,26 +320,6 @@ export default function RobinhoodPoolsClient() {
 
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto", padding: "calc(var(--header-h, 64px) + 24px) 16px 60px" }}>
-      {/* Testnet banner */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-          padding: "8px 14px",
-          borderRadius: 10,
-          background: "rgba(0,200,5,0.08)",
-          border: "1px solid rgba(0,200,5,0.2)",
-          color: "#00E676",
-          fontSize: 12,
-          fontWeight: 700,
-          marginBottom: 22,
-        }}
-      >
-        <Feather size={13} /> Trading on Robinhood Chain (Testnet)
-      </div>
-
       {/* Hero */}
       <div style={{ textAlign: "center", marginBottom: 30 }}>
         <h1

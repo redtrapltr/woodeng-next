@@ -28,10 +28,10 @@ interface ChainModeContextValue {
 const ChainModeContext = createContext<ChainModeContextValue>(null!);
 
 export function ChainModeProvider({ children }: { children: ReactNode }) {
-  const [network, setNetwork] = useState<ChainMode>("solana");
+  const [network, setNetwork] = useState<ChainMode>("robinhood");
 
   // Read persisted choice after mount only — keeps SSR and first client render
-  // in sync (both "solana") so hydration never mismatches.
+  // in sync (both "robinhood") so hydration never mismatches.
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored === "solana" || stored === "robinhood") setNetwork(stored);
